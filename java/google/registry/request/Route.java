@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 package google.registry.request;
 
 import com.google.auto.value.AutoValue;
-import com.google.common.base.Function;
+import java.util.function.Function;
 
 /**
  * Mapping of an {@link Action} to a {@link Runnable} instantiator for request handling.
@@ -25,12 +25,14 @@ import com.google.common.base.Function;
 @AutoValue
 abstract class Route {
 
-  static Route create(Action action, Function<Object, Runnable> instantiator) {
-    return new AutoValue_Route(action, instantiator);
+  static Route create(
+      Action action, Function<Object, Runnable> instantiator, Class<?> actionClass) {
+    return new AutoValue_Route(action, instantiator, actionClass);
   }
 
   abstract Action action();
   abstract Function<Object, Runnable> instantiator();
+  abstract Class<?> actionClass();
 
   boolean isMethodAllowed(Action.Method requestMethod) {
     for (Action.Method method : action().method()) {
@@ -39,9 +41,5 @@ abstract class Route {
       }
     }
     return false;
-  }
-
-  boolean shouldXsrfProtect(Action.Method requestMethod) {
-    return action().xsrfProtection() && requestMethod != Action.Method.GET;
   }
 }

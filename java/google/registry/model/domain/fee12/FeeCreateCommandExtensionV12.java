@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,20 +14,32 @@
 
 package google.registry.model.domain.fee12;
 
-import google.registry.model.domain.fee.FeeTransformCommandExtension;
-import google.registry.model.domain.fee.FeeTransformCommandExtensionImpl;
+import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
+
+import com.google.common.collect.ImmutableList;
+import google.registry.model.domain.fee.Credit;
+import google.registry.model.domain.fee.FeeCreateCommandExtension;
 import google.registry.model.domain.fee.FeeTransformResponseExtension;
+import java.util.List;
+import javax.xml.bind.annotation.XmlElement;
 import javax.xml.bind.annotation.XmlRootElement;
 import javax.xml.bind.annotation.XmlType;
 
 /** A fee extension that may be present on domain create commands. */
 @XmlRootElement(name = "create")
 @XmlType(propOrder = {"currency", "fees", "credits"})
-public class FeeCreateCommandExtensionV12
-    extends FeeTransformCommandExtensionImpl implements FeeTransformCommandExtension {
+public class FeeCreateCommandExtensionV12 extends FeeCreateCommandExtension {
+
+  @XmlElement(name = "credit")
+  List<Credit> credits;
+
+  @Override
+  public ImmutableList<Credit> getCredits() {
+    return nullToEmptyImmutableCopy(credits);
+  }
 
   @Override
   public FeeTransformResponseExtension.Builder createResponseBuilder() {
-    return new FeeCreateResponseExtensionV12.Builder();
+    return new FeeTransformResponseExtension.Builder(new FeeCreateResponseExtensionV12());
   }
 }

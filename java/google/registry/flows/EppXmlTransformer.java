@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Throwables;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import google.registry.flows.EppException.ParameterValueRangeErrorException;
 import google.registry.flows.EppException.ParameterValueSyntaxErrorException;
@@ -40,6 +39,7 @@ import google.registry.xml.XmlException;
 import google.registry.xml.XmlTransformer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.List;
 
 /** {@link XmlTransformer} for marshalling to and from the Epp model classes.  */
 public class EppXmlTransformer  {
@@ -64,7 +64,8 @@ public class EppXmlTransformer  {
       "smd.xsd",
       "launch.xsd",
       "allocate.xsd",
-      "flags.xsd");
+      "superuser.xsd",
+      "allocationToken-1.0.xsd");
 
   private static final XmlTransformer INPUT_TRANSFORMER =
       new XmlTransformer(SCHEMAS, EppInput.class);
@@ -80,24 +81,24 @@ public class EppXmlTransformer  {
    * Unmarshal bytes into Epp classes.
    *
    * @param clazz type to return, specified as a param to enforce typesafe generics
-   * @see "http://errorprone.info/bugpattern/TypeParameterUnusedInFormals"
+   * @see <a href="http://errorprone.info/bugpattern/TypeParameterUnusedInFormals">TypeParameterUnusedInFormals</a>
    */
   public static <T> T unmarshal(Class<T> clazz, byte[] bytes) throws EppException {
     try {
       return INPUT_TRANSFORMER.unmarshal(clazz, new ByteArrayInputStream(bytes));
     } catch (XmlException e) {
       // If this XmlException is wrapping a known type find it. If not, it's a syntax error.
-      FluentIterable<Throwable> causalChain = FluentIterable.from(Throwables.getCausalChain(e));
-      if (!(causalChain.filter(IpVersionMismatchException.class).isEmpty())) {
+      List<Throwable> causalChain = Throwables.getCausalChain(e);
+      if (causalChain.stream().anyMatch(IpVersionMismatchException.class::isInstance)) {
         throw new IpAddressVersionMismatchException();
       }
-      if (!(causalChain.filter(WrongProtocolVersionException.class).isEmpty())) {
+      if (causalChain.stream().anyMatch(WrongProtocolVersionException.class::isInstance)) {
         throw new UnimplementedProtocolVersionException();
       }
-      if (!(causalChain.filter(InvalidRepoIdException.class).isEmpty())) {
+      if (causalChain.stream().anyMatch(InvalidRepoIdException.class::isInstance)) {
         throw new InvalidRepoIdEppException();
       }
-      if (!(causalChain.filter(UnknownCurrencyException.class).isEmpty())) {
+      if (causalChain.stream().anyMatch(UnknownCurrencyException.class::isInstance)) {
         throw new UnknownCurrencyEppException();
       }
       throw new GenericSyntaxErrorException(e.getMessage());
@@ -129,7 +130,8 @@ public class EppXmlTransformer  {
       try {
         byte[] lenient = EppXmlTransformer.marshal(eppOutput, LENIENT);
         // Marshaling worked even though the results didn't validate against the schema.
-        logger.severe(e, "Result marshaled but did not validate: " + new String(lenient, UTF_8));
+        logger.severefmt(
+            e, "Result marshaled but did not validate: %s", new String(lenient, UTF_8));
         return lenient;
       } catch (XmlException e2) {
         throw new RuntimeException(e2);  // Failing to marshal at all is not recoverable.

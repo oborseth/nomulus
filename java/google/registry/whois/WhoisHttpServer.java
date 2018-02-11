@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,18 +23,21 @@ import static com.google.common.net.HttpHeaders.LAST_MODIFIED;
 import static com.google.common.net.HttpHeaders.X_CONTENT_TYPE_OPTIONS;
 import static com.google.common.net.MediaType.PLAIN_TEXT_UTF_8;
 import static javax.servlet.http.HttpServletResponse.SC_BAD_REQUEST;
+import static javax.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
 import static javax.servlet.http.HttpServletResponse.SC_OK;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.request.Action;
 import google.registry.request.RequestPath;
 import google.registry.request.Response;
+import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
 import google.registry.util.FormattingLogger;
+import google.registry.whois.WhoisMetrics.WhoisMetric;
+import google.registry.whois.WhoisResponse.WhoisResponseResults;
 import java.io.IOException;
-import java.io.Reader;
 import java.io.StringReader;
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
@@ -45,11 +48,10 @@ import org.joda.time.Duration;
 /**
  * Human-Friendly HTTP WHOIS API
  *
- * <p>This API uses easy to understand paths rather than {@link WhoisServer} which
- * requires a POST request containing a WHOIS command. Because the typical WHOIS command is
- * along the lines of {@code "domain google.lol"} or the equivalent {@code "google.lol}, this
- * servlet is just going to replace the slashes with spaces and let {@link WhoisReader}
- * figure out what to do.
+ * <p>This API uses easy to understand paths rather than {@link WhoisServer} which requires a POST
+ * request containing a WHOIS command. Because the typical WHOIS command is along the lines of
+ * {@code "domain google.lol"} or the equivalent {@code "google.lol}, this servlet is just going to
+ * replace the slashes with spaces and let {@link WhoisReader} figure out what to do.
  *
  * <p>This servlet accepts requests from any origin.
  *
@@ -93,7 +95,11 @@ import org.joda.time.Duration;
  *
  * @see WhoisServer
  */
-@Action(path = WhoisHttpServer.PATH, isPrefix = true)
+@Action(
+  path = WhoisHttpServer.PATH,
+  isPrefix = true,
+  auth = Auth.AUTH_PUBLIC_ANONYMOUS
+)
 public final class WhoisHttpServer implements Runnable {
 
   public static final String PATH = "/whois/";
@@ -132,7 +138,10 @@ public final class WhoisHttpServer implements Runnable {
   @Inject Response response;
   @Inject @Config("whoisDisclaimer") String disclaimer;
   @Inject @Config("whoisHttpExpires") Duration expires;
+  @Inject WhoisReader whoisReader;
   @Inject @RequestPath String requestPath;
+  @Inject WhoisMetric.Builder metricBuilder;
+  @Inject WhoisMetrics whoisMetrics;
   @Inject WhoisHttpServer() {}
 
   @Override
@@ -141,26 +150,37 @@ public final class WhoisHttpServer implements Runnable {
     String path = nullToEmpty(requestPath);
     try {
       // Extremely permissive parsing that turns stuff like "/hello/world/" into "hello world".
-      String command = decode(JOINER.join(SLASHER.split(path.substring(PATH.length())))) + "\r\n";
-      Reader reader = new StringReader(command);
+      String commandText =
+          decode(JOINER.join(SLASHER.split(path.substring(PATH.length())))) + "\r\n";
       DateTime now = clock.nowUtc();
-      sendResponse(SC_OK, new WhoisReader(reader, now).readCommand().executeQuery(now));
+      WhoisCommand command = whoisReader.readCommand(new StringReader(commandText), now);
+      metricBuilder.setCommand(command);
+      sendResponse(SC_OK, command.executeQuery(now));
     } catch (WhoisException e) {
+      metricBuilder.setStatus(e.getStatus());
+      metricBuilder.setNumResults(0);
       sendResponse(e.getStatus(), e);
     } catch (IOException e) {
+      metricBuilder.setStatus(SC_INTERNAL_SERVER_ERROR);
+      metricBuilder.setNumResults(0);
       throw new RuntimeException(e);
+    } finally {
+      whoisMetrics.recordWhoisMetric(metricBuilder.build());
     }
   }
 
   private void sendResponse(int status, WhoisResponse whoisResponse) {
     response.setStatus(status);
+    metricBuilder.setStatus(status);
     response.setDateHeader(LAST_MODIFIED, whoisResponse.getTimestamp());
     response.setDateHeader(EXPIRES, whoisResponse.getTimestamp().plus(expires));
     response.setHeader(CACHE_CONTROL, CACHE_CONTROL_VALUE);
     response.setHeader(ACCESS_CONTROL_ALLOW_ORIGIN, CORS_ALLOW_ORIGIN);
     response.setHeader(X_CONTENT_TYPE_OPTIONS, X_CONTENT_NO_SNIFF);
     response.setContentType(PLAIN_TEXT_UTF_8);
-    response.setPayload(whoisResponse.getPlainTextOutput(true, disclaimer));
+    WhoisResponseResults results = whoisResponse.getResponse(true, disclaimer);
+    metricBuilder.setNumResults(results.numResults());
+    response.setPayload(results.plainTextOutput());
   }
 
   /** Removes {@code %xx} escape codes from request path components. */

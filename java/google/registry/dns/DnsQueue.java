@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 package google.registry.dns;
 
+import static com.google.appengine.api.taskqueue.QueueFactory.getQueue;
 import static com.google.common.base.Preconditions.checkArgument;
 import static google.registry.dns.DnsConstants.DNS_PULL_QUEUE_NAME;
 import static google.registry.dns.DnsConstants.DNS_TARGET_NAME_PARAM;
@@ -25,20 +26,22 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import com.google.appengine.api.taskqueue.Queue;
 import com.google.appengine.api.taskqueue.QueueConstants;
-import com.google.appengine.api.taskqueue.QueueFactory;
 import com.google.appengine.api.taskqueue.TaskHandle;
 import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.taskqueue.TaskOptions.Method;
 import com.google.appengine.api.taskqueue.TransientFailureException;
 import com.google.apphosting.api.DeadlineExceededException;
-import com.google.common.base.Optional;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.net.InternetDomainName;
 import google.registry.dns.DnsConstants.TargetType;
 import google.registry.model.registry.Registries;
 import google.registry.util.FormattingLogger;
+import google.registry.util.NonFinalForTesting;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
 import javax.inject.Inject;
 import javax.inject.Named;
 import org.joda.time.Duration;
@@ -48,15 +51,35 @@ public class DnsQueue {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
 
-  @Inject @Named(DNS_PULL_QUEUE_NAME) Queue queue;
-  @Inject DnsQueue() {}
+  private final Queue queue;
 
-  long writeBatchSize = QueueConstants.maxLeaseCount();
+  @Inject
+  public DnsQueue(@Named(DNS_PULL_QUEUE_NAME) Queue queue) {
+    this.queue = queue;
+  }
+
+  /**
+   * Constructs a new instance.
+   *
+   * <p><b>Note:</b> Prefer <code>@Inject</code>ing DnsQueue instances instead. You should only use
+   * this helper method in situations for which injection does not work, e.g. inside mapper or
+   * reducer classes in mapreduces that need to be Serializable.
+   */
+  public static DnsQueue create() {
+    return new DnsQueue(getQueue(DNS_PULL_QUEUE_NAME));
+  }
+
+  @NonFinalForTesting
+  @VisibleForTesting
+  long leaseTasksBatchSize = QueueConstants.maxLeaseCount();
 
   /**
    * Enqueues the given task type with the given target name to the DNS queue.
    */
   private TaskHandle addToQueue(TargetType targetType, String targetName, String tld) {
+    logger.infofmt(
+        "Adding task type=%s, target=%s, tld=%s to pull queue %s (%d tasks currently on queue)",
+        targetType, targetName, tld, DNS_PULL_QUEUE_NAME, queue.fetchStatistics().getNumTasks());
     return queue.add(TaskOptions.Builder
         .withDefaults()
         .method(Method.PULL)
@@ -92,7 +115,13 @@ public class DnsQueue {
   /** Returns handles for a batch of tasks, leased for the specified duration. */
   public List<TaskHandle> leaseTasks(Duration leaseDuration) {
     try {
-      return queue.leaseTasks(leaseDuration.getMillis(), MILLISECONDS, writeBatchSize);
+      int numTasks = queue.fetchStatistics().getNumTasks();
+      logger.logfmt(
+          (numTasks >= leaseTasksBatchSize) ? Level.WARNING : Level.INFO,
+          "There are %d tasks in the DNS queue '%s'.",
+          numTasks,
+          DNS_PULL_QUEUE_NAME);
+      return queue.leaseTasks(leaseDuration.getMillis(), MILLISECONDS, leaseTasksBatchSize);
     } catch (TransientFailureException | DeadlineExceededException e) {
       logger.severe(e, "Failed leasing tasks too fast");
       return ImmutableList.of();
@@ -126,18 +155,5 @@ public class DnsQueue {
     } catch (TransientFailureException | DeadlineExceededException e) {
       logger.severe(e, "Failed deleting tasks too fast");
     }
-  }
-
-  /**
-   * Creates a new instance.
-   *
-   * <p><b>Note:</b> Prefer <code>@Inject</code>ing DnsQueue instances instead. You should only use
-   * this helper method in situations for which injection does not work, e.g. inside mapper or
-   * reducer classes in mapreduces that need to be Serializable.
-   */
-  public static DnsQueue create() {
-    DnsQueue result = new DnsQueue();
-    result.queue = QueueFactory.getQueue(DNS_PULL_QUEUE_NAME);
-    return result;
   }
 }

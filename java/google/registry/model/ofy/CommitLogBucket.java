@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,20 +16,20 @@ package google.registry.model.ofy;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.DiscreteDomain.integers;
-import static com.googlecode.objectify.ObjectifyService.ofy;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
+import static google.registry.config.RegistryConfig.getCommitLogBucketCount;
+import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 
-import com.google.common.base.Function;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ContiguousSet;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Range;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.annotation.Entity;
 import com.googlecode.objectify.annotation.Id;
-import google.registry.config.RegistryEnvironment;
+import google.registry.config.RegistryConfig;
 import google.registry.model.Buildable;
 import google.registry.model.ImmutableObject;
 import google.registry.model.annotations.NotBackedUp;
@@ -42,21 +42,22 @@ import org.joda.time.DateTime;
  * Root for a random commit log bucket.
  *
  * <p>This is used to shard {@link CommitLogManifest} objects into
- * {@link google.registry.config.RegistryConfig#getCommitLogBucketCount() N} entity
- * groups. This increases transaction throughput, while maintaining the ability to perform
- * strongly-consistent ancestor queries.
+ * {@link RegistryConfig#getCommitLogBucketCount() N} entity groups. This increases
+ * transaction throughput, while maintaining the ability to perform strongly-consistent ancestor
+ * queries.
  *
- * @see "https://cloud.google.com/appengine/articles/scaling/contention"
+ * @see <a href="https://cloud.google.com/appengine/articles/scaling/contention">Avoiding Datastore
+ *     contention</a>
  */
 @Entity
 @NotBackedUp(reason = Reason.COMMIT_LOGS)
 public class CommitLogBucket extends ImmutableObject implements Buildable {
 
-  private static final RegistryEnvironment ENVIRONMENT = RegistryEnvironment.get();
-
-  /** Ranges from 1 to {@link #getNumBuckets()}, inclusive; starts at 1 since IDs can't be 0. */
-  @Id
-  long bucketNum;
+  /**
+   * Ranges from 1 to {@link RegistryConfig#getCommitLogBucketCount()}, inclusive; starts at 1 since
+   * IDs can't be 0.
+   */
+  @Id long bucketNum;
 
   /** The timestamp of the last {@link CommitLogManifest} written to this bucket. */
   DateTime lastWrittenTime = START_OF_TIME;
@@ -89,12 +90,8 @@ public class CommitLogBucket extends ImmutableObject implements Buildable {
     return ContiguousSet.create(getBucketIdRange(), integers());
   }
 
-  private static int getNumBuckets() {
-    return ENVIRONMENT.config().getCommitLogBucketCount();
-  }
-
   private static Range<Integer> getBucketIdRange() {
-    return Range.closed(1, getNumBuckets());
+    return Range.closed(1, getCommitLogBucketCount());
   }
 
   /** Returns an arbitrary numeric bucket ID.  Default behavior is randomly chosen IDs. */
@@ -115,7 +112,7 @@ public class CommitLogBucket extends ImmutableObject implements Buildable {
 
         @Override
         public Integer get() {
-          return random.nextInt(getNumBuckets()) + 1;  // Add 1 since IDs can't be 0.
+          return random.nextInt(getCommitLogBucketCount()) + 1;  // Add 1 since IDs can't be 0.
         }
       };
 
@@ -139,13 +136,10 @@ public class CommitLogBucket extends ImmutableObject implements Buildable {
 
   /** Returns all commit log bucket keys, in ascending order by bucket ID. */
   public static ImmutableSet<Key<CommitLogBucket>> getAllBucketKeys() {
-    return FluentIterable.from(getBucketIds())
-        .transform(new Function<Integer, Key<CommitLogBucket>>() {
-            @Override
-            public Key<CommitLogBucket> apply(Integer bucketId) {
-              return getBucketKeyUnsafe(bucketId);
-            }})
-        .toSet();
+    return getBucketIds()
+        .stream()
+        .map(CommitLogBucket::getBucketKeyUnsafe)
+        .collect(toImmutableSet());
   }
 
   @Override

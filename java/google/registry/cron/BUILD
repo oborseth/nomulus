@@ -1,27 +1,23 @@
 package(
-    default_visibility = ["//java/google/registry:registry_project"],
+    default_visibility = ["//visibility:public"],
 )
 
 licenses(["notice"])  # Apache 2.0
-
 
 java_library(
     name = "cron",
     srcs = glob(["*.java"]),
     deps = [
-        "//java/com/google/common/annotations",
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//java/com/google/common/net",
-        "//third_party/java/appengine:appengine-api",
-        "//third_party/java/dagger",
-        "//third_party/java/joda_time",
-        "//third_party/java/jsr305_annotations",
-        "//third_party/java/jsr330_inject",
-        "//third_party/java/objectify:objectify-v4_1",
-        "//third_party/java/servlet/servlet_api",
         "//java/google/registry/model",
         "//java/google/registry/request",
+        "//java/google/registry/request/auth",
         "//java/google/registry/util",
+        "//third_party/objectify:objectify-v4_1",
+        "@com_google_appengine_api_1_0_sdk",
+        "@com_google_code_findbugs_jsr305",
+        "@com_google_dagger",
+        "@com_google_guava",
+        "@javax_servlet_api",
+        "@joda_time",
     ],
 )

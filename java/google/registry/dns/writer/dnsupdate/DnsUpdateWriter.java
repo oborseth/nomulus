@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,12 +20,12 @@ import static com.google.common.collect.Sets.union;
 import static google.registry.model.EppResourceUtils.loadByForeignKey;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.net.InternetDomainName;
-import google.registry.config.ConfigModule.Config;
-import google.registry.dns.writer.DnsWriter;
+import google.registry.config.RegistryConfig.Config;
+import google.registry.dns.writer.BaseDnsWriter;
+import google.registry.dns.writer.DnsWriterZone;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.secdns.DelegationSignerData;
 import google.registry.model.host.HostResource;
@@ -35,6 +35,7 @@ import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
+import java.util.Optional;
 import javax.inject.Inject;
 import org.joda.time.Duration;
 import org.xbill.DNS.AAAARecord;
@@ -54,9 +55,11 @@ import org.xbill.DNS.Update;
  * A DnsWriter that implements the DNS UPDATE protocol as specified in
  * <a href="https://tools.ietf.org/html/rfc2136">RFC 2136</a>. Publishes changes in the
  * domain-registry to a (capable) external DNS server, sometimes called a "hidden master". DNS
- * UPDATE messages are sent via a supplied "transport" class. For each publish call, a single
- * UPDATE message is created containing the records required to "synchronize" the DNS with the
- * current (at the time of processing) state of the registry, for the supplied domain/host.
+ * UPDATE messages are sent via a supplied "transport" class.
+ *
+ * On call to {@link #commit()}, a single UPDATE message is created containing the records required
+ * to "synchronize" the DNS with the current (at the time of processing) state of the registry, for
+ * the supplied domain/host.
  *
  * <p>The general strategy of the publish methods is to delete <em>all</em> resource records of any
  * <em>type</em> that match the exact domain/host name supplied. And then for create/update cases,
@@ -67,13 +70,12 @@ import org.xbill.DNS.Update;
  * <p>Only NS, DS, A, and AAAA records are published, and in particular no DNSSEC signing is done
  * assuming that this will be done by a third party DNS provider.
  *
- * <p>Each publish call is treated as an atomic update to the DNS. If an update fails an exception
- * is thrown, expecting the caller to retry the update later. The SOA record serial number is
- * implicitly incremented by the server on each UPDATE message, as required by RFC 2136. Care must
- * be taken to make sure the SOA serial number does not go backwards if the entire TLD (zone) is
- * "reset" to empty and republished.
+ * <p>Each commit call is treated as an atomic update to the DNS. If a commit fails an exception
+ * is thrown. The SOA record serial number is implicitly incremented by the server on each UPDATE
+ * message, as required by RFC 2136. Care must be taken to make sure the SOA serial number does not
+ * go backwards if the entire TLD (zone) is "reset" to empty and republished.
  */
-public class DnsUpdateWriter implements DnsWriter {
+public class DnsUpdateWriter extends BaseDnsWriter {
 
   /**
    * The name of the pricing engine, as used in {@code Registry.dnsWriter}. Remember to change
@@ -81,23 +83,36 @@ public class DnsUpdateWriter implements DnsWriter {
    */
   public static final String NAME = "DnsUpdateWriter";
 
-  private final Duration dnsTimeToLive;
+  private final Duration dnsDefaultATtl;
+  private final Duration dnsDefaultNsTtl;
+  private final Duration dnsDefaultDsTtl;
   private final DnsMessageTransport transport;
   private final Clock clock;
+  private final Update update;
+  private final String zoneName;
 
   /**
    * Class constructor.
    *
-   * @param dnsTimeToLive TTL used for any created resource records
+   * @param dnsDefaultATtl TTL used for any created resource records
+   * @param dnsDefaultNsTtl TTL used for any created nameserver records
+   * @param dnsDefaultDsTtl TTL used for any created DS records
    * @param transport the transport used to send/receive the UPDATE messages
    * @param clock a source of time
    */
   @Inject
   public DnsUpdateWriter(
-      @Config("dnsUpdateTimeToLive") Duration dnsTimeToLive,
+      @DnsWriterZone String zoneName,
+      @Config("dnsDefaultATtl") Duration dnsDefaultATtl,
+      @Config("dnsDefaultNsTtl") Duration dnsDefaultNsTtl,
+      @Config("dnsDefaultDsTtl") Duration dnsDefaultDsTtl,
       DnsMessageTransport transport,
       Clock clock) {
-    this.dnsTimeToLive = dnsTimeToLive;
+    this.zoneName = zoneName;
+    this.update = new Update(toAbsoluteName(zoneName));
+    this.dnsDefaultATtl = dnsDefaultATtl;
+    this.dnsDefaultNsTtl = dnsDefaultNsTtl;
+    this.dnsDefaultDsTtl = dnsDefaultDsTtl;
     this.transport = transport;
     this.clock = clock;
   }
@@ -112,26 +127,15 @@ public class DnsUpdateWriter implements DnsWriter {
    */
   private void publishDomain(String domainName, String requestingHostName) {
     DomainResource domain = loadByForeignKey(DomainResource.class, domainName, clock.nowUtc());
-    try {
-      Update update = new Update(toAbsoluteName(findTldFromName(domainName)));
-      update.delete(toAbsoluteName(domainName), Type.ANY);
-      if (domain != null) {
-        // As long as the domain exists, orphan glues should be cleaned.
-        deleteSubordinateHostAddressSet(domain, requestingHostName, update);
-        if (domain.shouldPublishToDns()) {
-          addInBailiwickNameServerSet(domain, update);
-          update.add(makeNameServerSet(domain));
-          update.add(makeDelegationSignerSet(domain));
-        }
+    update.delete(toAbsoluteName(domainName), Type.ANY);
+    if (domain != null) {
+      // As long as the domain exists, orphan glues should be cleaned.
+      deleteSubordinateHostAddressSet(domain, requestingHostName, update);
+      if (domain.shouldPublishToDns()) {
+        addInBailiwickNameServerSet(domain, update);
+        update.add(makeNameServerSet(domain));
+        update.add(makeDelegationSignerSet(domain));
       }
-      Message response = transport.send(update);
-      verify(
-          response.getRcode() == Rcode.NOERROR,
-          "DNS server failed domain update for '%s' rcode: %s",
-          domainName,
-          Rcode.string(response.getRcode()));
-    } catch (IOException e) {
-      throw new RuntimeException("publishDomain failed: " + domainName, e);
     }
   }
 
@@ -162,20 +166,28 @@ public class DnsUpdateWriter implements DnsWriter {
     publishDomain(domain, hostName);
   }
 
-  /**
-   * Does nothing. Publish calls are synchronous and atomic.
-   */
   @Override
-  public void close() {}
+  protected void commitUnchecked() {
+    try {
+      Message response = transport.send(update);
+      verify(
+          response.getRcode() == Rcode.NOERROR,
+          "DNS server failed domain update for '%s' rcode: %s",
+          zoneName,
+          Rcode.string(response.getRcode()));
+    } catch (IOException e) {
+      throw new RuntimeException("publishDomain failed for zone: " + zoneName, e);
+    }
+  }
 
-  private RRset makeDelegationSignerSet(DomainResource domain) throws TextParseException {
+  private RRset makeDelegationSignerSet(DomainResource domain) {
     RRset signerSet = new RRset();
     for (DelegationSignerData signerData : domain.getDsData()) {
       DSRecord dsRecord =
           new DSRecord(
               toAbsoluteName(domain.getFullyQualifiedDomainName()),
               DClass.IN,
-              dnsTimeToLive.getStandardSeconds(),
+              dnsDefaultDsTtl.getStandardSeconds(),
               signerData.getKeyTag(),
               signerData.getAlgorithm(),
               signerData.getDigestType(),
@@ -186,19 +198,18 @@ public class DnsUpdateWriter implements DnsWriter {
   }
 
   private void deleteSubordinateHostAddressSet(
-      DomainResource domain, String additionalHost, Update update) throws TextParseException {
+      DomainResource domain, String additionalHost, Update update) {
     for (String hostName :
         union(
             domain.getSubordinateHosts(),
             (additionalHost == null
-                ? ImmutableSet.<String>of()
+                ? ImmutableSet.of()
                 : ImmutableSet.of(additionalHost)))) {
       update.delete(toAbsoluteName(hostName), Type.ANY);
     }
   }
 
-  private void addInBailiwickNameServerSet(DomainResource domain, Update update)
-      throws TextParseException {
+  private void addInBailiwickNameServerSet(DomainResource domain, Update update) {
     for (String hostName :
         intersection(
             domain.loadNameserverFullyQualifiedHostNames(), domain.getSubordinateHosts())) {
@@ -208,21 +219,21 @@ public class DnsUpdateWriter implements DnsWriter {
     }
   }
 
-  private RRset makeNameServerSet(DomainResource domain) throws TextParseException {
+  private RRset makeNameServerSet(DomainResource domain) {
     RRset nameServerSet = new RRset();
     for (String hostName : domain.loadNameserverFullyQualifiedHostNames()) {
       NSRecord record =
           new NSRecord(
               toAbsoluteName(domain.getFullyQualifiedDomainName()),
               DClass.IN,
-              dnsTimeToLive.getStandardSeconds(),
+              dnsDefaultNsTtl.getStandardSeconds(),
               toAbsoluteName(hostName));
       nameServerSet.addRR(record);
     }
     return nameServerSet;
   }
 
-  private RRset makeAddressSet(HostResource host) throws TextParseException {
+  private RRset makeAddressSet(HostResource host) {
     RRset addressSet = new RRset();
     for (InetAddress address : host.getInetAddresses()) {
       if (address instanceof Inet4Address) {
@@ -230,7 +241,7 @@ public class DnsUpdateWriter implements DnsWriter {
             new ARecord(
                 toAbsoluteName(host.getFullyQualifiedHostName()),
                 DClass.IN,
-                dnsTimeToLive.getStandardSeconds(),
+                dnsDefaultATtl.getStandardSeconds(),
                 address);
         addressSet.addRR(record);
       }
@@ -238,7 +249,7 @@ public class DnsUpdateWriter implements DnsWriter {
     return addressSet;
   }
 
-  private RRset makeV6AddressSet(HostResource host) throws TextParseException {
+  private RRset makeV6AddressSet(HostResource host) {
     RRset addressSet = new RRset();
     for (InetAddress address : host.getInetAddresses()) {
       if (address instanceof Inet6Address) {
@@ -246,7 +257,7 @@ public class DnsUpdateWriter implements DnsWriter {
             new AAAARecord(
                 toAbsoluteName(host.getFullyQualifiedHostName()),
                 DClass.IN,
-                dnsTimeToLive.getStandardSeconds(),
+                dnsDefaultATtl.getStandardSeconds(),
                 address);
         addressSet.addRR(record);
       }
@@ -254,11 +265,12 @@ public class DnsUpdateWriter implements DnsWriter {
     return addressSet;
   }
 
-  private String findTldFromName(String name) {
-    return Registries.findTldForNameOrThrow(InternetDomainName.from(name)).toString();
-  }
-
-  private Name toAbsoluteName(String name) throws TextParseException {
-    return Name.fromString(name, Name.root);
+  private Name toAbsoluteName(String name) {
+    try {
+      return Name.fromString(name, Name.root);
+    } catch (TextParseException e) {
+      throw new RuntimeException(
+          String.format("toAbsoluteName failed for name: %s in zone: %s", name, zoneName), e);
+    }
   }
 }

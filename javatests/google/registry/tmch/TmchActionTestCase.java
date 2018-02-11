@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,10 +23,8 @@ import com.google.appengine.api.urlfetch.HTTPResponse;
 import com.google.appengine.api.urlfetch.URLFetchService;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.BouncyCastleProviderRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.InjectRule;
-import google.registry.testing.RegistryConfigRule;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.runner.RunWith;
@@ -50,12 +48,6 @@ public class TmchActionTestCase {
 
   @Rule
   public final BouncyCastleProviderRule bouncy = new BouncyCastleProviderRule();
-
-  @Rule
-  public final RegistryConfigRule configRule = new RegistryConfigRule();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   @Rule
   public final InjectRule inject = new InjectRule();

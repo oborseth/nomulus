@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,9 +24,8 @@ import static javax.servlet.http.HttpServletResponse.SC_OK;
 import com.google.appengine.api.urlfetch.HTTPRequest;
 import com.google.appengine.api.urlfetch.HTTPResponse;
 import com.google.appengine.api.urlfetch.URLFetchService;
-import com.google.common.base.Optional;
 import com.google.common.io.ByteSource;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.keyring.api.KeyModule.Key;
 import google.registry.util.UrlFetchException;
 import java.io.ByteArrayInputStream;
@@ -35,6 +34,7 @@ import java.net.URL;
 import java.security.Security;
 import java.security.SignatureException;
 import java.util.List;
+import java.util.Optional;
 import javax.annotation.Tainted;
 import javax.inject.Inject;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;

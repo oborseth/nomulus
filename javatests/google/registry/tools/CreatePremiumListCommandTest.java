@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,9 @@
 
 package google.registry.tools;
 
+import static com.google.common.truth.Truth.assertThat;
 import static google.registry.request.JsonResponse.JSON_SAFETY_PREFIX;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.ResourceUtils.readResourceUtf8;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyMapOf;
@@ -92,14 +94,16 @@ public class CreatePremiumListCommandTest<C extends CreatePremiumListCommand>
         any(byte[].class)))
             .thenReturn(
                 JSON_SAFETY_PREFIX + "{\"status\":\"error\",\"error\":\"foo already exists\"}");
-    thrown.expect(VerifyException.class, "Server error:");
-    runCommandForced("-i=" + premiumTermsPath, "-n=foo");
+    VerifyException thrown =
+        expectThrows(
+            VerifyException.class, () -> runCommandForced("-i=" + premiumTermsPath, "-n=foo"));
+    assertThat(thrown).hasMessageThat().contains("Server error:");
   }
 
   @Test
   public void testRun_noInputFileSpecified_throwsException() throws Exception  {
-    thrown.expect(ParameterException.class, "The following option is required");
-    runCommand();
+    ParameterException thrown = expectThrows(ParameterException.class, this::runCommand);
+    assertThat(thrown).hasMessageThat().contains("The following option is required");
   }
 
   @Test
@@ -108,7 +112,10 @@ public class CreatePremiumListCommandTest<C extends CreatePremiumListCommand>
         "tmp_file2",
         readResourceUtf8(
             CreatePremiumListCommandTest.class, "testdata/example_invalid_premium_terms.csv"));
-    thrown.expect(IllegalArgumentException.class, "Could not parse line in premium list");
-    runCommandForced("-i=" + premiumTermsPath, "-n=foo");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("-i=" + premiumTermsPath, "-n=foo"));
+    assertThat(thrown).hasMessageThat().contains("Could not parse line in premium list");
   }
 }

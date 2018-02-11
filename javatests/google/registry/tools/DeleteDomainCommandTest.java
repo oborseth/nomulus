@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,8 @@
 
 package google.registry.tools;
 
+import static google.registry.testing.JUnitBackports.assertThrows;
+
 import com.beust.jcommander.ParameterException;
 import org.junit.Test;
 
@@ -22,61 +24,83 @@ public class DeleteDomainCommandTest extends EppToolCommandTestCase<DeleteDomain
 
   @Test
   public void testSuccess() throws Exception {
-    runCommand("--client=NewRegistrar", "--domain_name=example.tld", "--force",
-        "--reason=Test");
-    eppVerifier().verifySent("domain_delete.xml");
+    runCommand("--client=NewRegistrar", "--domain_name=example.tld", "--force", "--reason=Test");
+    eppVerifier.verifySent("domain_delete.xml");
   }
 
   @Test
   public void testSuccess_multipleWordReason() throws Exception {
-    runCommand("--client=NewRegistrar", "--domain_name=example.tld", "--force",
-        "--reason=\"Test test\"");
-    eppVerifier().verifySent("domain_delete_multiple_word_reason.xml");
+    runCommand(
+        "--client=NewRegistrar", "--domain_name=example.tld", "--force", "--reason=\"Test test\"");
+    eppVerifier.verifySent("domain_delete_multiple_word_reason.xml");
   }
 
   @Test
   public void testSuccess_requestedByRegistrarFalse() throws Exception {
-    runCommand("--client=NewRegistrar", "--domain_name=example.tld", "--force",
-        "--reason=Test", "--registrar_request=false");
-    eppVerifier().verifySent("domain_delete.xml");
+    runCommand(
+        "--client=NewRegistrar",
+        "--domain_name=example.tld",
+        "--force",
+        "--reason=Test",
+        "--registrar_request=false");
+    eppVerifier.verifySent("domain_delete.xml");
   }
 
   @Test
   public void testSuccess_requestedByRegistrarTrue() throws Exception {
-    runCommand("--client=NewRegistrar", "--domain_name=example.tld", "--force",
-        "--reason=Test", "--registrar_request=true");
-    eppVerifier().verifySent("domain_delete_by_registrar.xml");
+    runCommand(
+        "--client=NewRegistrar",
+        "--domain_name=example.tld",
+        "--force",
+        "--reason=Test",
+        "--registrar_request=true");
+    eppVerifier.verifySent("domain_delete_by_registrar.xml");
   }
 
   @Test
   public void testFailure_noReason() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand("--client=NewRegistrar", "--domain_name=example.tld", "--force");
+    assertThrows(
+        ParameterException.class,
+        () -> runCommand("--client=NewRegistrar", "--domain_name=example.tld", "--force"));
   }
 
   @Test
   public void testFailure_missingClientId() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand("--domain_name=example.tld", "--force", "--reason=Test");
+    assertThrows(
+        ParameterException.class,
+        () -> runCommand("--domain_name=example.tld", "--force", "--reason=Test"));
   }
 
   @Test
   public void testFailure_missingDomainName() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand("--client=NewRegistrar", "--force", "--reason=Test");
+    assertThrows(
+        ParameterException.class,
+        () -> runCommand("--client=NewRegistrar", "--force", "--reason=Test"));
   }
 
   @Test
   public void testFailure_unknownFlag() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand("--client=NewRegistrar", "--domain_name=example.tld",
-        "--force", "--reason=Test", "--foo");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommand(
+                "--client=NewRegistrar",
+                "--domain_name=example.tld",
+                "--force",
+                "--reason=Test",
+                "--foo"));
   }
 
   @Test
   public void testFailure_mainParameter() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand("--client=NewRegistrar", "--domain_name=example.tld",
-        "--force", "--reason=Test", "foo");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommand(
+                "--client=NewRegistrar",
+                "--domain_name=example.tld",
+                "--force",
+                "--reason=Test",
+                "foo"));
   }
 }

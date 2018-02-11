@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,23 +14,25 @@
 
 package google.registry.ui.server.registrar;
 
-import static com.google.common.base.Functions.toStringFunction;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static google.registry.security.JsonResponseHelper.Status.ERROR;
 import static google.registry.security.JsonResponseHelper.Status.SUCCESS;
 import static java.util.Arrays.asList;
 
 import com.braintreegateway.BraintreeGateway;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableMap;
 import google.registry.braintree.BraintreeRegistrarSyncer;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.model.registrar.Registrar;
 import google.registry.request.Action;
 import google.registry.request.JsonActionRunner;
 import google.registry.request.JsonActionRunner.JsonAction;
+import google.registry.request.auth.Auth;
+import google.registry.request.auth.AuthResult;
 import google.registry.security.JsonResponseHelper;
 import java.util.Map;
 import javax.inject.Inject;
+import javax.servlet.http.HttpServletRequest;
 import org.joda.money.CurrencyUnit;
 
 /**
@@ -46,35 +48,38 @@ import org.joda.money.CurrencyUnit;
  * containing a single result object with the following fields:
  *
  * <dl>
- * <dt>brainframe
- * <dd>URL for iframe that loads Braintree payment method selector.
- * <dt>token
- * <dd>Nonce string obtained from the Braintree API which is needed by the Braintree JS SDK.
- * <dt>currencies
- * <dd>Array of strings, each containing a three letter currency code, which should be displayed to
- *     the customer in a drop-down field. This will be all currencies for which a Braintree merchant
- *     account exists. A currency will even be displayed if no TLD is enabled on the customer
- *     account that bills in that currency.
+ *   <dt>brainframe
+ *   <dd>URL for iframe that loads Braintree payment method selector.
+ *   <dt>token
+ *   <dd>Nonce string obtained from the Braintree API which is needed by the Braintree JS SDK.
+ *   <dt>currencies
+ *   <dd>Array of strings, each containing a three letter currency code, which should be displayed
+ *       to the customer in a drop-down field. This will be all currencies for which a Braintree
+ *       merchant account exists. A currency will even be displayed if no TLD is enabled on the
+ *       customer account that bills in that currency.
  * </dl>
  *
- * <p><b>Note:</b> These definitions corresponds to Closure Compiler extern
- * {@code registry.rpc.PaymentSetup} which must be updated should these definitions change.
+ * <p><b>Note:</b> These definitions corresponds to Closure Compiler extern {@code
+ * registry.rpc.PaymentSetup} which must be updated should these definitions change.
  *
  * @see RegistrarPaymentAction
- * @see "https://developers.braintreepayments.com/start/hello-server/java#generate-a-client-token"
+ * @see <a
+ *     href="https://developers.braintreepayments.com/start/hello-server/java#generate-a-client-token">Generate
+ *     a client token</a>
  */
 @Action(
-    path = "/registrar-payment-setup",
-    method = Action.Method.POST,
-    xsrfProtection = true,
-    xsrfScope = "console",
-    requireLogin = true)
+  path = "/registrar-payment-setup",
+  method = Action.Method.POST,
+  auth = Auth.AUTH_PUBLIC_LOGGED_IN
+)
 public final class RegistrarPaymentSetupAction implements Runnable, JsonAction {
 
+  @Inject HttpServletRequest request;
   @Inject BraintreeGateway braintreeGateway;
   @Inject BraintreeRegistrarSyncer customerSyncer;
   @Inject JsonActionRunner jsonActionRunner;
-  @Inject Registrar registrar;
+  @Inject AuthResult authResult;
+  @Inject SessionUtils sessionUtils;
   @Inject @Config("brainframe") String brainframe;
   @Inject @Config("braintreeMerchantAccountIds") ImmutableMap<CurrencyUnit, String> accountIds;
   @Inject RegistrarPaymentSetupAction() {}
@@ -86,6 +91,8 @@ public final class RegistrarPaymentSetupAction implements Runnable, JsonAction {
 
   @Override
   public Map<String, Object> handleJsonRequest(Map<String, ?> json) {
+    Registrar registrar = sessionUtils.getRegistrarForAuthResult(request, authResult);
+
     if (!json.isEmpty()) {
       return JsonResponseHelper.create(ERROR, "JSON request object must be empty");
     }
@@ -99,14 +106,18 @@ public final class RegistrarPaymentSetupAction implements Runnable, JsonAction {
     // In order to set the customerId field on the payment, the customer must exist.
     customerSyncer.sync(registrar);
 
-    return JsonResponseHelper
-        .create(SUCCESS, "Success", asList(
+    return JsonResponseHelper.create(
+        SUCCESS,
+        "Success",
+        asList(
             ImmutableMap.of(
                 "brainframe", brainframe,
                 "token", braintreeGateway.clientToken().generate(),
                 "currencies",
-                    FluentIterable.from(accountIds.keySet())
-                        .transform(toStringFunction())
-                        .toList())));
+                    accountIds
+                        .keySet()
+                        .stream()
+                        .map(Object::toString)
+                        .collect(toImmutableList()))));
   }
 }

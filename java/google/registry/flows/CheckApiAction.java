@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,7 +35,7 @@ import com.google.template.soy.SoyFileSet;
 import com.google.template.soy.tofu.SoyTofu;
 import dagger.Module;
 import dagger.Provides;
-import google.registry.config.RegistryConfig;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.flows.soy.DomainCheckFeeEppSoyInfo;
 import google.registry.model.domain.fee.FeeCheckResponseExtension;
 import google.registry.model.eppoutput.CheckData.DomainCheck;
@@ -45,6 +45,7 @@ import google.registry.request.Action;
 import google.registry.request.Parameter;
 import google.registry.request.RequestParameters;
 import google.registry.request.Response;
+import google.registry.request.auth.Auth;
 import google.registry.util.FormattingLogger;
 import java.util.Map;
 import javax.inject.Inject;
@@ -57,7 +58,10 @@ import javax.servlet.http.HttpServletRequest;
  * user controlled, lest it open an XSS vector. Do not modify this to return the domain name in the
  * response.
  */
-@Action(path = "/check")
+@Action(
+  path = "/check",
+  auth = Auth.AUTH_PUBLIC_ANONYMOUS
+)
 public class CheckApiAction implements Runnable {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
@@ -69,7 +73,7 @@ public class CheckApiAction implements Runnable {
   @Inject @Parameter("domain") String domain;
   @Inject Response response;
   @Inject EppController eppController;
-  @Inject RegistryConfig config;
+  @Inject @Config("checkApiServletRegistrarClientId") String checkApiServletRegistrarClientId;
   @Inject CheckApiAction() {}
 
   @Override
@@ -96,9 +100,8 @@ public class CheckApiAction implements Runnable {
           .setData(ImmutableMap.of("domainName", domainString))
           .render()
           .getBytes(UTF_8);
-      SessionMetadata sessionMetadata = new StatelessRequestSessionMetadata(
-          config.getCheckApiServletRegistrarClientId(),
-          FEE_EXTENSION_URIS);
+      SessionMetadata sessionMetadata =
+          new StatelessRequestSessionMetadata(checkApiServletRegistrarClientId, FEE_EXTENSION_URIS);
       EppResponse response = eppController
           .handleEppCommand(
               sessionMetadata,
@@ -141,9 +144,7 @@ public class CheckApiAction implements Runnable {
   }
 
   private Map<String, Object> fail(String reason) {
-    return ImmutableMap.<String, Object>of(
-        "status", "error",
-        "reason", reason);
+    return ImmutableMap.of("status", "error", "reason", reason);
   }
 
   /** Dagger module for the check api endpoint. */

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,14 +27,15 @@ import com.braintreegateway.Transaction;
 import com.braintreegateway.TransactionRequest;
 import com.braintreegateway.ValidationError;
 import com.braintreegateway.ValidationErrors;
-import com.google.common.base.Function;
 import com.google.common.collect.ImmutableMap;
 import com.google.re2j.Pattern;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.model.registrar.Registrar;
 import google.registry.request.Action;
 import google.registry.request.JsonActionRunner;
 import google.registry.request.JsonActionRunner.JsonAction;
+import google.registry.request.auth.Auth;
+import google.registry.request.auth.AuthResult;
 import google.registry.security.JsonResponseHelper;
 import google.registry.ui.forms.FormField;
 import google.registry.ui.forms.FormFieldException;
@@ -44,6 +45,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import javax.inject.Inject;
+import javax.servlet.http.HttpServletRequest;
 import org.joda.money.CurrencyUnit;
 import org.joda.money.IllegalCurrencyException;
 import org.joda.money.Money;
@@ -56,15 +58,16 @@ import org.joda.money.Money;
  * <p>The request payload is a JSON object with the following fields:
  *
  * <dl>
- * <dt>amount
- * <dd>String containing a fixed point value representing the amount of money the registrar
- *     customer wishes to send the registry. This amount is arbitrary and entered manually by the
- *     customer in the payment form, as there is currently no integration with the billing system.
- * <dt>currency
- * <dd>String containing a three letter ISO currency code, which is used to look up the Braintree
- *     merchant account ID to which payment should be posted.
- * <dt>paymentMethodNonce
- * <dd>UUID nonce string supplied by the Braintree JS SDK representing the selected payment method.
+ *   <dt>amount
+ *   <dd>String containing a fixed point value representing the amount of money the registrar
+ *       customer wishes to send the registry. This amount is arbitrary and entered manually by the
+ *       customer in the payment form, as there is currently no integration with the billing system.
+ *   <dt>currency
+ *   <dd>String containing a three letter ISO currency code, which is used to look up the Braintree
+ *       merchant account ID to which payment should be posted.
+ *   <dt>paymentMethodNonce
+ *   <dd>UUID nonce string supplied by the Braintree JS SDK representing the selected payment
+ *       method.
  * </dl>
  *
  * <h3>Response Object</h3>
@@ -73,28 +76,27 @@ import org.joda.money.Money;
  * which, if successful, will contain a single result object with the following fields:
  *
  * <dl>
- * <dt>id
- * <dd>String containing transaction ID returned by Braintree gateway.
- * <dt>formattedAmount
- * <dd>String containing amount paid, which can be displayed to the customer on a success page.
+ *   <dt>id
+ *   <dd>String containing transaction ID returned by Braintree gateway.
+ *   <dt>formattedAmount
+ *   <dd>String containing amount paid, which can be displayed to the customer on a success page.
  * </dl>
  *
- * <p><b>Note:</b> These definitions corresponds to Closure Compiler extern
- * {@code registry.rpc.Payment} which must be updated should these definitions change.
+ * <p><b>Note:</b> These definitions corresponds to Closure Compiler extern {@code
+ * registry.rpc.Payment} which must be updated should these definitions change.
  *
  * <h3>PCI Compliance</h3>
  *
- * <p>The request object will not contain credit card information, but rather a
- * {@code payment_method_nonce} field that's populated by the Braintree JS SDK iframe.
+ * <p>The request object will not contain credit card information, but rather a {@code
+ * payment_method_nonce} field that's populated by the Braintree JS SDK iframe.
  *
  * @see RegistrarPaymentSetupAction
  */
 @Action(
-    path = "/registrar-payment",
-    method = Action.Method.POST,
-    xsrfProtection = true,
-    xsrfScope = "console",
-    requireLogin = true)
+  path = "/registrar-payment",
+  method = Action.Method.POST,
+  auth = Auth.AUTH_PUBLIC_LOGGED_IN
+)
 public final class RegistrarPaymentAction implements Runnable, JsonAction {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
@@ -105,15 +107,15 @@ public final class RegistrarPaymentAction implements Runnable, JsonAction {
           .emptyToNull()
           .required()
           .matches(Pattern.compile("-?\\d+(?:\\.\\d+)?"), "Invalid number.")
-          .transform(BigDecimal.class, new Function<String, BigDecimal>() {
-            @Override
-            public BigDecimal apply(String value) {
-              BigDecimal result = new BigDecimal(value);
-              if (result.signum() != 1) {
-                throw new FormFieldException("Must be a positive number.");
-              }
-              return result;
-            }})
+          .transform(
+              BigDecimal.class,
+              value -> {
+                BigDecimal result = new BigDecimal(value);
+                if (result.signum() != 1) {
+                  throw new FormFieldException("Must be a positive number.");
+                }
+                return result;
+              })
           .build();
 
   private static final FormField<String, CurrencyUnit> CURRENCY_FIELD =
@@ -122,15 +124,15 @@ public final class RegistrarPaymentAction implements Runnable, JsonAction {
           .emptyToNull()
           .required()
           .matches(Pattern.compile("[A-Z]{3}"), "Invalid currency code.")
-          .transform(CurrencyUnit.class, new Function<String, CurrencyUnit>() {
-            @Override
-            public CurrencyUnit apply(String value) {
-              try {
-                return CurrencyUnit.of(value);
-              } catch (IllegalCurrencyException ignored) {
-                throw new FormFieldException("Unknown ISO currency code.");
-              }
-            }})
+          .transform(
+              CurrencyUnit.class,
+              value -> {
+                try {
+                  return CurrencyUnit.of(value);
+                } catch (IllegalCurrencyException ignored) {
+                  throw new FormFieldException("Unknown ISO currency code.");
+                }
+              })
           .build();
 
   private static final FormField<String, String> PAYMENT_METHOD_NONCE_FIELD =
@@ -140,9 +142,11 @@ public final class RegistrarPaymentAction implements Runnable, JsonAction {
           .required()
           .build();
 
+  @Inject HttpServletRequest request;
   @Inject BraintreeGateway braintreeGateway;
   @Inject JsonActionRunner jsonActionRunner;
-  @Inject Registrar registrar;
+  @Inject AuthResult authResult;
+  @Inject SessionUtils sessionUtils;
   @Inject @Config("braintreeMerchantAccountIds") ImmutableMap<CurrencyUnit, String> accountIds;
   @Inject RegistrarPaymentAction() {}
 
@@ -153,6 +157,7 @@ public final class RegistrarPaymentAction implements Runnable, JsonAction {
 
   @Override
   public Map<String, Object> handleJsonRequest(Map<String, ?> json) {
+    Registrar registrar = sessionUtils.getRegistrarForAuthResult(request, authResult);
     logger.infofmt("Processing payment: %s", json);
     String paymentMethodNonce;
     Money amount;
@@ -172,7 +177,7 @@ public final class RegistrarPaymentAction implements Runnable, JsonAction {
         throw new FormFieldException(CURRENCY_FIELD.name(), "Unsupported currency.");
       }
     } catch (FormFieldException e) {
-      logger.warning(e.toString());
+      logger.warning(e, "Form field error in RegistrarPaymentAction.");
       return JsonResponseHelper.createFormFieldError(e.getMessage(), e.getFieldName());
     }
     Result<Transaction> result =
@@ -207,8 +212,10 @@ public final class RegistrarPaymentAction implements Runnable, JsonAction {
   /**
    * Handles a transaction success response.
    *
-   * @see "https://developers.braintreepayments.com/reference/response/transaction/java#success"
-   * @see "https://developers.braintreepayments.com/reference/general/statuses#transaction"
+   * @see <a href="https://developers.braintreepayments.com/reference/response/transaction/java#success">
+   *     Braintree - Transaction - Success</a>
+   * @see <a href="https://developers.braintreepayments.com/reference/general/statuses#transaction">
+   *     Braintree - Statuses - Transaction</a>
    */
   private Map<String, Object> handleSuccessResponse(Transaction transaction) {
     // XXX: Currency scaling: https://github.com/braintree/braintree_java/issues/33
@@ -232,8 +239,10 @@ public final class RegistrarPaymentAction implements Runnable, JsonAction {
    *
    * <p>This happens when the customer's bank blocks the transaction.
    *
-   * @see "https://developers.braintreepayments.com/reference/response/transaction/java#processor-declined"
-   * @see "https://articles.braintreepayments.com/control-panel/transactions/declines"
+   * @see <a href="https://developers.braintreepayments.com/reference/response/transaction/java#processor-declined">
+   *     Braintree - Transaction - Processor declined</a>
+   * @see <a href="https://articles.braintreepayments.com/control-panel/transactions/declines">
+   *     Braintree - Transactions/Declines</a>
    */
   private Map<String, Object> handleProcessorDeclined(Transaction transaction) {
     logger.warningfmt("Processor declined: %s %s",
@@ -248,8 +257,10 @@ public final class RegistrarPaymentAction implements Runnable, JsonAction {
    * <p>This is a very rare condition that, for all intents and purposes, means the same thing as a
    * processor declined response.
    *
-   * @see "https://developers.braintreepayments.com/reference/response/transaction/java#processor-settlement-declined"
-   * @see "https://articles.braintreepayments.com/control-panel/transactions/declines"
+   * @see <a href="https://developers.braintreepayments.com/reference/response/transaction/java#processor-settlement-declined">
+   *     Braintree - Transaction - Processor settlement declined</a>
+   * @see <a href="https://articles.braintreepayments.com/control-panel/transactions/declines">
+   *     Braintree - Transactions/Declines</a>
    */
   private Map<String, Object> handleSettlementDecline(Transaction transaction) {
     logger.warningfmt("Settlement declined: %s %s",
@@ -265,10 +276,14 @@ public final class RegistrarPaymentAction implements Runnable, JsonAction {
    * <p>This happens when a transaction is blocked due to settings we configured ourselves in the
    * Braintree control panel.
    *
-   * @see "https://developers.braintreepayments.com/reference/response/transaction/java#gateway-rejection"
-   * @see "https://articles.braintreepayments.com/control-panel/transactions/gateway-rejections"
-   * @see "https://articles.braintreepayments.com/guides/fraud-tools/avs-cvv"
-   * @see "https://articles.braintreepayments.com/guides/fraud-tools/overview"
+   * @see <a href="https://developers.braintreepayments.com/reference/response/transaction/java#gateway-rejection">
+   *     Braintree - Transaction - Gateway rejection</a>
+   * @see <a href="https://articles.braintreepayments.com/control-panel/transactions/gateway-rejections">
+   *     Braintree - Transactions/Gateway Rejections</a>
+   * @see <a href="https://articles.braintreepayments.com/guides/fraud-tools/avs-cvv">
+   *     Braintree - Fruad Tools/Basic Fraud Tools - AVS and CVV rules</a>
+   * @see <a href="https://articles.braintreepayments.com/guides/fraud-tools/overview">
+   *     Braintree - Fraud Tools/Overview</a>
    */
   private Map<String, Object> handleRejection(Transaction transaction) {
     logger.warningfmt("Gateway rejection: %s", transaction.getGatewayRejectionReason());
@@ -306,8 +321,10 @@ public final class RegistrarPaymentAction implements Runnable, JsonAction {
   /**
    * Handles a validation error response from Braintree.
    *
-   * @see "https://developers.braintreepayments.com/reference/response/transaction/java#validation-errors"
-   * @see "https://developers.braintreepayments.com/reference/general/validation-errors/all/java"
+   * @see <a href="https://developers.braintreepayments.com/reference/response/transaction/java#validation-errors">
+   *     Braintree - Transaction - Validation errors</a>
+   * @see <a href="https://developers.braintreepayments.com/reference/general/validation-errors/all/java">
+   *     Braintree - Validation Errors/All</a>
    */
   private Map<String, Object> handleValidationErrorResponse(ValidationErrors validationErrors) {
     List<ValidationError> errors = validationErrors.getAllDeepValidationErrors();

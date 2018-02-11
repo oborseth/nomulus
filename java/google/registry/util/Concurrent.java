@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,23 +16,22 @@ package google.registry.util;
 
 import static com.google.appengine.api.ThreadManager.currentRequestThreadFactory;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 import static java.util.concurrent.Executors.newFixedThreadPool;
 
-import com.google.common.base.Function;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import com.google.common.util.concurrent.Uninterruptibles;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
+import java.util.function.Function;
 
 /** Utilities for multithreaded operations in App Engine requests. */
 public final class Concurrent {
@@ -46,11 +45,14 @@ public final class Concurrent {
    * @see #transform(Collection, int, Function)
    */
   public static <A, B> ImmutableList<B> transform(Collection<A> items, final Function<A, B> funk) {
-    return transform(items, max(1, min(items.size(), MAX_THREADS)), funk);
+    return transform(items, MAX_THREADS, funk);
   }
 
   /**
    * Processes {@code items} in parallel using {@code funk}, with the specified number of threads.
+   *
+   * <p>If the maxThreadCount or the number of items is less than 2, will use a non-concurrent
+   * transform.
    *
    * <p><b>Note:</b> Spawned threads will inherit the same namespace.
    *
@@ -60,28 +62,25 @@ public final class Concurrent {
    */
   public static <A, B> ImmutableList<B> transform(
       Collection<A> items,
-      int threadCount,
+      int maxThreadCount,
       final Function<A, B> funk) {
     checkNotNull(funk);
     checkNotNull(items);
-    ThreadFactory threadFactory = currentRequestThreadFactory();
+    int threadCount = max(1, min(items.size(), maxThreadCount));
+    ThreadFactory threadFactory = threadCount > 1 ? currentRequestThreadFactory() : null;
     if (threadFactory == null) {
-      // Fall back to non-concurrent transform if we can't get an App Engine thread factory (most
-      // likely caused by hitting this code from a command-line tool). Default Java system threads
-      // are not compatible with code that needs to interact with App Engine (such as Objectify),
-      // which we often have in funk when calling Concurrent.transform().
-      // For more info see: http://stackoverflow.com/questions/15976406
-      return FluentIterable.from(items).transform(funk).toList();
+      // Fall back to non-concurrent transform if we only want 1 thread, or if we can't get an App
+      // Engine thread factory (most likely caused by hitting this code from a command-line tool).
+      // Default Java system threads are not compatible with code that needs to interact with App
+      // Engine (such as Objectify), which we often have in funk when calling
+      // Concurrent.transform(). For more info see: http://stackoverflow.com/questions/15976406
+      return items.stream().map(funk).collect(toImmutableList());
     }
     ExecutorService executor = newFixedThreadPool(threadCount, threadFactory);
     try {
       List<Future<B>> futures = new ArrayList<>();
       for (final A item : items) {
-        futures.add(executor.submit(new Callable<B>() {
-          @Override
-          public B call() {
-            return funk.apply(item);
-          }}));
+        futures.add(executor.submit(() -> funk.apply(item)));
       }
       ImmutableList.Builder<B> results = new ImmutableList.Builder<>();
       for (Future<B> future : futures) {

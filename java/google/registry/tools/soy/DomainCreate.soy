@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-{namespace domain.registry.tools autoescape="strict"}
+{namespace domain.registry.tools}
 /**
  * Create domain
  */
-{template .domaincreate}
+{template .domaincreate stricthtml="false"}
   {@param domain: string}
   {@param? period: string}
-  {@param? ns: list<string>}
+  {@param nameservers: list<string>}
   {@param registrant: string}
-  {@param admin: string}
-  {@param tech: string}
+  {@param admins: list<string>}
+  {@param techs: list<string>}
   {@param password: string}
+  {@param dsRecords: list<[keyTag:int, alg:int, digestType:int, digest:string]>}
 
   <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
@@ -34,21 +35,39 @@
           {if $period}
             <domain:period unit="y">{$period}</domain:period>
           {/if}
-          {if $ns}
+          {if length($nameservers) > 0}
             <domain:ns>
-              {foreach $s in $ns}
+              {for $s in $nameservers}
                 <domain:hostObj>{$s}</domain:hostObj>
-              {/foreach}
+              {/for}
             </domain:ns>
           {/if}
           <domain:registrant>{$registrant}</domain:registrant>
-          <domain:contact type="admin">{$admin}</domain:contact>
-          <domain:contact type="tech">{$tech}</domain:contact>
+          {for $admin in $admins}
+            <domain:contact type="admin">{$admin}</domain:contact>
+          {/for}
+          {for $tech in $techs}
+            <domain:contact type="tech">{$tech}</domain:contact>
+          {/for}
           <domain:authInfo>
             <domain:pw>{$password}</domain:pw>
           </domain:authInfo>
         </domain:create>
       </create>
+      {if length($dsRecords) > 0}
+        <extension>
+          <secDNS:create xmlns:secDNS="urn:ietf:params:xml:ns:secDNS-1.1">
+            {for $dsRecord in $dsRecords}
+              <secDNS:dsData>
+                <secDNS:keyTag>{$dsRecord.keyTag}</secDNS:keyTag>
+                <secDNS:alg>{$dsRecord.alg}</secDNS:alg>
+                <secDNS:digestType>{$dsRecord.digestType}</secDNS:digestType>
+                <secDNS:digest>{$dsRecord.digest}</secDNS:digest>
+              </secDNS:dsData>
+            {/for}
+          </secDNS:create>
+        </extension>
+      {/if}
       <clTRID>RegistryTool</clTRID>
     </command>
   </epp>

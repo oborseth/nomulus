@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,11 +20,11 @@ import static google.registry.model.EppResourceUtils.loadDomainApplication;
 import static google.registry.model.domain.launch.ApplicationStatus.ALLOCATED;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
+import static google.registry.util.PreconditionsUtils.checkArgumentPresent;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.google.common.collect.ImmutableList;
-import com.googlecode.objectify.VoidWork;
 import google.registry.model.domain.DomainApplication;
 import google.registry.model.domain.launch.ApplicationStatus;
 import google.registry.model.domain.launch.LaunchInfoResponseExtension;
@@ -66,15 +66,10 @@ final class UpdateApplicationStatusCommand extends MutatingCommand {
 
   @Override
   protected void init() throws Exception {
-    checkArgumentNotNull(
+    checkArgumentPresent(
         Registrar.loadByClientId(clientId), "Registrar with client ID %s not found", clientId);
     for (final String applicationId : ids) {
-      ofy().transact(new VoidWork() {
-        @Override
-        public void vrun() {
-          updateApplicationStatus(applicationId);
-        }
-      });
+      ofy().transact(() -> updateApplicationStatus(applicationId));
     }
   }
 
@@ -153,7 +148,7 @@ final class UpdateApplicationStatusCommand extends MutatingCommand {
       applicationBuilder.addStatusValue(StatusValue.PENDING_CREATE);
     }
 
-    // Stage changes for all entities that need to be saved to datastore.
+    // Stage changes for all entities that need to be saved to Datastore.
     stageEntityChange(domainApplication, applicationBuilder.build());
     stageEntityChange(null, pollMessageBuilder.build());
     stageEntityChange(null, newHistoryEntry);

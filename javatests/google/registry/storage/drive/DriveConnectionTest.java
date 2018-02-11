@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,9 +16,11 @@ package google.registry.storage.drive;
 
 import static com.google.common.io.ByteStreams.toByteArray;
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.argThat;
 import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -33,41 +35,23 @@ import com.google.api.services.drive.model.File;
 import com.google.api.services.drive.model.ParentReference;
 import com.google.common.collect.ImmutableList;
 import com.google.common.net.MediaType;
-import google.registry.testing.ExceptionRule;
 import java.util.Arrays;
 import java.util.List;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 import org.mockito.ArgumentMatcher;
-import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
 
 /** Tests for {@link DriveConnection}.*/
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class DriveConnectionTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Mock
-  Drive drive;
-
-  @Mock
-  Files files;
-
-  @Mock
-  Children children;
-
-  @Mock
-  Files.Insert insert;
-
-  @Mock
-  Files.Update update;
-
-  @Mock
-  Children.List childrenList;
+  private final Drive drive = mock(Drive.class);
+  private final Files files = mock(Files.class);
+  private final Children children = mock(Children.class);
+  private final Files.Insert insert = mock(Files.Insert.class);
+  private final Files.Update update = mock(Files.Update.class);
+  private final Children.List childrenList = mock(Children.List.class);
 
   private static final byte[] DATA = {1, 2, 3};
   ChildList childList;
@@ -186,9 +170,7 @@ public class DriveConnectionTest {
             .setParents(ImmutableList.of(new ParentReference().setId("driveFolderId")))),
         argThat(hasByteArrayContent(DATA))))
             .thenReturn(insert);
-    ChildList emptyChildList = new ChildList()
-        .setItems(ImmutableList.<ChildReference> of())
-        .setNextPageToken(null);
+    ChildList emptyChildList = new ChildList().setItems(ImmutableList.of()).setNextPageToken(null);
     when(childrenList.execute()).thenReturn(emptyChildList);
     assertThat(driveConnection.createOrUpdateFile(
             "title",
@@ -226,10 +208,17 @@ public class DriveConnectionTest {
           new ChildReference().setId("id2")))
       .setNextPageToken(null);
     when(childrenList.execute()).thenReturn(childList);
-    thrown.expect(IllegalStateException.class,
-        "Could not update file 'title' in Drive folder id 'driveFolderId' "
-            + "because multiple files with that name already exist.");
-    driveConnection.createOrUpdateFile("title", MediaType.WEBM_VIDEO, "driveFolderId", DATA);
+    IllegalStateException thrown =
+        expectThrows(
+            IllegalStateException.class,
+            () ->
+                driveConnection.createOrUpdateFile(
+                    "title", MediaType.WEBM_VIDEO, "driveFolderId", DATA));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains(
+            "Could not update file 'title' in Drive folder id 'driveFolderId' "
+                + "because multiple files with that name already exist.");
   }
 
   @Test

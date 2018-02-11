@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,65 +14,66 @@
 
 package google.registry.flows.domain;
 
-import static com.google.common.collect.Iterables.filter;
-import static com.google.common.collect.Iterables.getOnlyElement;
+import static google.registry.flows.FlowUtils.validateClientIsLoggedIn;
 import static google.registry.flows.ResourceFlowUtils.loadAndVerifyExistence;
+import static google.registry.flows.ResourceFlowUtils.verifyAuthInfo;
+import static google.registry.flows.ResourceFlowUtils.verifyAuthInfoPresentForResourceTransfer;
 import static google.registry.flows.ResourceFlowUtils.verifyNoDisallowedStatuses;
-import static google.registry.flows.ResourceFlowUtils.verifyRequiredAuthInfoForResourceTransfer;
 import static google.registry.flows.domain.DomainFlowUtils.checkAllowedAccessToTld;
-import static google.registry.flows.domain.DomainFlowUtils.createGainingTransferPollMessage;
-import static google.registry.flows.domain.DomainFlowUtils.createLosingTransferPollMessage;
-import static google.registry.flows.domain.DomainFlowUtils.createTransferResponse;
 import static google.registry.flows.domain.DomainFlowUtils.updateAutorenewRecurrenceEndTime;
 import static google.registry.flows.domain.DomainFlowUtils.validateFeeChallenge;
 import static google.registry.flows.domain.DomainFlowUtils.verifyPremiumNameIsNotBlocked;
 import static google.registry.flows.domain.DomainFlowUtils.verifyUnitIsYears;
+import static google.registry.flows.domain.DomainTransferUtils.createLosingTransferPollMessage;
+import static google.registry.flows.domain.DomainTransferUtils.createPendingTransferData;
+import static google.registry.flows.domain.DomainTransferUtils.createTransferResponse;
+import static google.registry.flows.domain.DomainTransferUtils.createTransferServerApproveEntities;
 import static google.registry.model.domain.DomainResource.extendRegistrationWithCap;
-import static google.registry.model.domain.fee.Fee.FEE_TRANSFER_COMMAND_EXTENSIONS_IN_PREFERENCE_ORDER;
 import static google.registry.model.eppoutput.Result.Code.SUCCESS_WITH_ACTION_PENDING;
 import static google.registry.model.ofy.ObjectifyService.ofy;
-import static google.registry.pricing.PricingEngineProxy.getDomainRenewCost;
-import static google.registry.util.DateTimeUtils.END_OF_TIME;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
 import google.registry.flows.EppException;
+import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.ClientId;
+import google.registry.flows.FlowModule.Superuser;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.LoggedInFlow;
 import google.registry.flows.TransactionalFlow;
+import google.registry.flows.annotations.ReportingSpec;
 import google.registry.flows.exceptions.AlreadyPendingTransferException;
+import google.registry.flows.exceptions.InvalidTransferPeriodValueException;
 import google.registry.flows.exceptions.ObjectAlreadySponsoredException;
-import google.registry.model.billing.BillingEvent;
-import google.registry.model.billing.BillingEvent.Flag;
-import google.registry.model.billing.BillingEvent.Reason;
+import google.registry.flows.exceptions.TransferPeriodMustBeOneYearException;
+import google.registry.flows.exceptions.TransferPeriodZeroAndFeeTransferExtensionException;
 import google.registry.model.domain.DomainCommand.Transfer;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.Period;
-import google.registry.model.domain.fee.BaseFee.FeeType;
-import google.registry.model.domain.fee.Fee;
-import google.registry.model.domain.fee.FeeTransformCommandExtension;
+import google.registry.model.domain.fee.FeeTransferCommandExtension;
 import google.registry.model.domain.fee.FeeTransformResponseExtension;
-import google.registry.model.domain.flags.FlagsTransferCommandExtension;
 import google.registry.model.domain.metadata.MetadataExtension;
+import google.registry.model.domain.rgp.GracePeriodStatus;
+import google.registry.model.domain.superuser.DomainTransferRequestSuperuserExtension;
 import google.registry.model.eppcommon.AuthInfo;
 import google.registry.model.eppcommon.StatusValue;
+import google.registry.model.eppcommon.Trid;
+import google.registry.model.eppinput.EppInput;
 import google.registry.model.eppinput.ResourceCommand;
-import google.registry.model.eppoutput.EppOutput;
+import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.poll.PollMessage;
 import google.registry.model.registry.Registry;
+import google.registry.model.reporting.DomainTransactionRecord;
+import google.registry.model.reporting.DomainTransactionRecord.TransactionReportField;
 import google.registry.model.reporting.HistoryEntry;
+import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
 import google.registry.model.transfer.TransferData;
-import google.registry.model.transfer.TransferData.Builder;
 import google.registry.model.transfer.TransferData.TransferServerApproveEntity;
 import google.registry.model.transfer.TransferResponse.DomainTransferResponse;
 import google.registry.model.transfer.TransferStatus;
+import java.util.Optional;
 import javax.inject.Inject;
-import org.joda.money.Money;
 import org.joda.time.DateTime;
-import org.joda.time.Duration;
 
 /**
  * An EPP flow that requests a transfer on a domain.
@@ -95,6 +96,9 @@ import org.joda.time.Duration;
  * @error {@link google.registry.flows.exceptions.MissingTransferRequestAuthInfoException}
  * @error {@link google.registry.flows.exceptions.ObjectAlreadySponsoredException}
  * @error {@link google.registry.flows.exceptions.ResourceStatusProhibitsOperationException}
+ * @error {@link google.registry.flows.exceptions.TransferPeriodMustBeOneYearException}
+ * @error {@link InvalidTransferPeriodValueException}
+ * @error {@link google.registry.flows.exceptions.TransferPeriodZeroAndFeeTransferExtensionException}
  * @error {@link DomainFlowUtils.BadPeriodUnitException}
  * @error {@link DomainFlowUtils.CurrencyUnitMismatchException}
  * @error {@link DomainFlowUtils.CurrencyValueScaleException}
@@ -104,7 +108,8 @@ import org.joda.time.Duration;
  * @error {@link DomainFlowUtils.PremiumNameBlockedException}
  * @error {@link DomainFlowUtils.UnsupportedFeeAttributeException}
  */
-public final class DomainTransferRequestFlow extends LoggedInFlow implements TransactionalFlow {
+@ReportingSpec(ActivityReportField.DOMAIN_TRANSFER_REQUEST)
+public final class DomainTransferRequestFlow implements TransactionalFlow {
 
   private static final ImmutableSet<StatusValue> DISALLOWED_STATUSES = ImmutableSet.of(
       StatusValue.CLIENT_TRANSFER_PROHIBITED,
@@ -112,37 +117,77 @@ public final class DomainTransferRequestFlow extends LoggedInFlow implements Tra
       StatusValue.SERVER_TRANSFER_PROHIBITED);
 
   @Inject ResourceCommand resourceCommand;
+  @Inject ExtensionManager extensionManager;
+  @Inject EppInput eppInput;
   @Inject Optional<AuthInfo> authInfo;
   @Inject @ClientId String gainingClientId;
   @Inject @TargetId String targetId;
+  @Inject @Superuser boolean isSuperuser;
   @Inject HistoryEntry.Builder historyBuilder;
+  @Inject Trid trid;
+  @Inject EppResponse.Builder responseBuilder;
+  @Inject DomainPricingLogic pricingLogic;
   @Inject DomainTransferRequestFlow() {}
 
   @Override
-  protected final void initLoggedInFlow() throws EppException {
-    registerExtensions(MetadataExtension.class, FlagsTransferCommandExtension.class);
-    registerExtensions(FEE_TRANSFER_COMMAND_EXTENSIONS_IN_PREFERENCE_ORDER);
-  }
-
-  @Override
-  public final EppOutput run() throws EppException {
-    Period period = ((Transfer) resourceCommand).getPeriod();
-    int years = period.getValue();
+  public final EppResponse run() throws EppException {
+    extensionManager.register(
+        DomainTransferRequestSuperuserExtension.class,
+        FeeTransferCommandExtension.class,
+        MetadataExtension.class);
+    extensionManager.validate();
+    validateClientIsLoggedIn(gainingClientId);
+    DateTime now = ofy().getTransactionTime();
     DomainResource existingDomain = loadAndVerifyExistence(DomainResource.class, targetId, now);
-    verifyTransferAllowed(existingDomain, period);
+    Optional<DomainTransferRequestSuperuserExtension> superuserExtension =
+        eppInput.getSingleExtension(DomainTransferRequestSuperuserExtension.class);
+    Period period =
+        superuserExtension.isPresent()
+            ? superuserExtension.get().getRenewalPeriod()
+            : ((Transfer) resourceCommand).getPeriod();
+    verifyTransferAllowed(existingDomain, period, now, superuserExtension);
     String tld = existingDomain.getTld();
     Registry registry = Registry.get(tld);
-    // The cost of the renewal implied by a transfer.
-    Money renewCost = getDomainRenewCost(targetId, now, years);
     // An optional extension from the client specifying what they think the transfer should cost.
-    FeeTransformCommandExtension feeTransfer = eppInput.getFirstExtensionOfClasses(
-        FEE_TRANSFER_COMMAND_EXTENSIONS_IN_PREFERENCE_ORDER);
-    validateFeeChallenge(targetId, tld, now, feeTransfer, renewCost);
-    HistoryEntry historyEntry = buildHistory(period, existingDomain);
-    DateTime automaticTransferTime = now.plus(registry.getAutomaticTransferLength());
+    Optional<FeeTransferCommandExtension> feeTransfer =
+        eppInput.getSingleExtension(FeeTransferCommandExtension.class);
+    if (period.getValue() == 0 && feeTransfer.isPresent()) {
+      // If the period is zero, then there is no transfer billing event, so using the fee transfer
+      // extension does not make sense.
+      throw new TransferPeriodZeroAndFeeTransferExtensionException();
+    }
+    // If the period is zero, then there is no fee for the transfer.
+    Optional<FeesAndCredits> feesAndCredits =
+        (period.getValue() == 0)
+            ? Optional.empty()
+            : Optional.of(pricingLogic.getTransferPrice(registry, targetId, now));
+    if (feesAndCredits.isPresent()) {
+      validateFeeChallenge(targetId, tld, gainingClientId, now, feeTransfer, feesAndCredits.get());
+    }
+    HistoryEntry historyEntry = buildHistoryEntry(existingDomain, registry, now, period);
+    DateTime automaticTransferTime =
+        superuserExtension.isPresent()
+            ? now.plusDays(superuserExtension.get().getAutomaticTransferLength())
+            : now.plus(registry.getAutomaticTransferLength());
+    // If the domain will be in the auto-renew grace period at the moment of transfer, the transfer
+    // will subsume the autorenew, so we don't add the normal extra year from the transfer.
+    // The gaining registrar is still billed for the extra year; the losing registrar will get a
+    // cancellation for the autorenew written out within createTransferServerApproveEntities().
+    //
+    // See b/19430703#comment17 and https://www.icann.org/news/advisory-2002-06-06-en for the
+    // policy documentation for transfers subsuming autorenews within the autorenew grace period.
+    int extraYears = period.getValue();
+    DomainResource domainAtTransferTime =
+        existingDomain.cloneProjectedAtTime(automaticTransferTime);
+    if (!domainAtTransferTime.getGracePeriodsOfType(GracePeriodStatus.AUTO_RENEW).isEmpty()) {
+      extraYears = 0;
+    }
     // The new expiration time if there is a server approval.
-    DateTime serverApproveNewExpirationTime = extendRegistrationWithCap(
-        automaticTransferTime, existingDomain.getRegistrationExpirationTime(), years);
+    DateTime serverApproveNewExpirationTime =
+        extendRegistrationWithCap(
+            automaticTransferTime,
+            domainAtTransferTime.getRegistrationExpirationTime(),
+            extraYears);
     // Create speculative entities in anticipation of an automatic server approval.
     ImmutableSet<TransferServerApproveEntity> serverApproveEntities =
         createTransferServerApproveEntities(
@@ -150,12 +195,22 @@ public final class DomainTransferRequestFlow extends LoggedInFlow implements Tra
             serverApproveNewExpirationTime,
             historyEntry,
             existingDomain,
-            renewCost,
-            years);
+            trid,
+            gainingClientId,
+            feesAndCredits.map(FeesAndCredits::getTotalCost),
+            now);
     // Create the transfer data that represents the pending transfer.
-    TransferData pendingTransferData = createPendingTransferData(
-        createTransferDataBuilder(existingDomain, automaticTransferTime, years),
-        serverApproveEntities);
+    TransferData pendingTransferData =
+        createPendingTransferData(
+            new TransferData.Builder()
+                .setTransferRequestTrid(trid)
+                .setTransferRequestTime(now)
+                .setGainingClientId(gainingClientId)
+                .setLosingClientId(existingDomain.getCurrentSponsorClientId())
+                .setPendingTransferExpirationTime(automaticTransferTime)
+                .setTransferredRegistrationExpirationTime(serverApproveNewExpirationTime),
+            serverApproveEntities,
+            period);
     // Create a poll message to notify the losing registrar that a transfer was requested.
     PollMessage requestPollMessage = createLosingTransferPollMessage(
         targetId, pendingTransferData, serverApproveNewExpirationTime, historyEntry)
@@ -165,7 +220,6 @@ public final class DomainTransferRequestFlow extends LoggedInFlow implements Tra
     // cloneProjectedAtTime() will replace these old autorenew entities with the server approve ones
     // that we've created in this flow and stored in pendingTransferData.
     updateAutorenewRecurrenceEndTime(existingDomain, automaticTransferTime);
-    handleExtraFlowLogic(years, existingDomain, historyEntry);
     DomainResource newDomain = existingDomain.asBuilder()
         .setTransferData(pendingTransferData)
         .addStatusValue(StatusValue.PENDING_TRANSFER)
@@ -176,16 +230,22 @@ public final class DomainTransferRequestFlow extends LoggedInFlow implements Tra
             .addAll(serverApproveEntities)
             .build())
         .now();
-    return createOutput(
-        SUCCESS_WITH_ACTION_PENDING,
-        createResponse(period, existingDomain, newDomain),
-        createResponseExtensions(renewCost, feeTransfer));
+    return responseBuilder
+        .setResultFromCode(SUCCESS_WITH_ACTION_PENDING)
+        .setResData(createResponse(period, existingDomain, newDomain, now))
+        .setExtensions(createResponseExtensions(feesAndCredits, feeTransfer))
+        .build();
   }
 
-  private void verifyTransferAllowed(DomainResource existingDomain, Period period)
+  private void verifyTransferAllowed(
+      DomainResource existingDomain,
+      Period period,
+      DateTime now,
+      Optional<DomainTransferRequestSuperuserExtension> superuserExtension)
       throws EppException {
     verifyNoDisallowedStatuses(existingDomain, DISALLOWED_STATUSES);
-    verifyRequiredAuthInfoForResourceTransfer(authInfo, existingDomain);
+    verifyAuthInfoPresentForResourceTransfer(authInfo);
+    verifyAuthInfo(authInfo.get(), existingDomain);
     // Verify that the resource does not already have a pending transfer.
     if (TransferStatus.PENDING.equals(existingDomain.getTransferData().getTransferStatus())) {
       throw new AlreadyPendingTransferException(targetId);
@@ -194,189 +254,72 @@ public final class DomainTransferRequestFlow extends LoggedInFlow implements Tra
     if (gainingClientId.equals(existingDomain.getCurrentSponsorClientId())) {
       throw new ObjectAlreadySponsoredException();
     }
-    checkAllowedAccessToTld(getAllowedTlds(), existingDomain.getTld());
-    verifyUnitIsYears(period);
+    verifyTransferPeriod(period, superuserExtension);
     if (!isSuperuser) {
+      checkAllowedAccessToTld(gainingClientId, existingDomain.getTld());
       verifyPremiumNameIsNotBlocked(targetId, now, gainingClientId);
     }
   }
 
-  private HistoryEntry buildHistory(Period period, DomainResource existingResource) {
+  /**
+   * Verify that the transfer period is one year. If the superuser extension is being used, then it
+   * can be zero.
+   *
+   * <p>Restricting transfers to one year is seemingly required by ICANN's <a
+   * href="https://www.icann.org/resources/pages/policy-2012-03-07-en">Policy on Transfer of
+   * Registrations between Registrars</a>, section A.8. It states that "the completion by Registry
+   * Operator of a holder-authorized transfer under this Part A shall result in a one-year extension
+   * of the existing registration, provided that in no event shall the total unexpired term of a
+   * registration exceed ten (10) years."
+   *
+   * <p>Even if not required, this policy is desirable because it dramatically simplifies the logic
+   * in transfer flows. Registrars appear to never request 2+ year transfers in practice, and they
+   * can always decompose an multi-year transfer into a 1-year transfer followed by a manual renewal
+   * afterwards. The <a href="https://tools.ietf.org/html/rfc5731#section-3.2.4">EPP Domain RFC,
+   * section 3.2.4</a> says about EPP transfer periods that "the number of units available MAY be
+   * subject to limits imposed by the server" so we're just limiting the units to one.
+   *
+   * <p>Note that clients can omit the period element from the transfer EPP entirely, but then it
+   * will simply default to one year.
+   */
+  private static void verifyTransferPeriod(
+      Period period, Optional<DomainTransferRequestSuperuserExtension> superuserExtension)
+      throws EppException {
+    verifyUnitIsYears(period);
+    if (superuserExtension.isPresent()) {
+      // If the superuser extension is being used, then the period can be one or zero.
+      if (period.getValue() != 1 && period.getValue() != 0) {
+        throw new InvalidTransferPeriodValueException();
+      }
+    } else {
+      // If the superuser extension is not being used, then the period can only be one.
+      if (period.getValue() != 1) {
+        throw new TransferPeriodMustBeOneYearException();
+      }
+    }
+  }
+
+  private HistoryEntry buildHistoryEntry(
+      DomainResource existingDomain, Registry registry, DateTime now, Period period) {
     return historyBuilder
         .setType(HistoryEntry.Type.DOMAIN_TRANSFER_REQUEST)
+        .setOtherClientId(existingDomain.getCurrentSponsorClientId())
         .setPeriod(period)
         .setModificationTime(now)
-        .setParent(Key.create(existingResource))
+        .setParent(Key.create(existingDomain))
+        .setDomainTransactionRecords(
+            ImmutableSet.of(
+                DomainTransactionRecord.create(
+                    registry.getTldStr(),
+                    now.plus(registry.getAutomaticTransferLength())
+                        .plus(registry.getTransferGracePeriodLength()),
+                    TransactionReportField.TRANSFER_SUCCESSFUL,
+                    1)))
         .build();
-  }
-
-  /**
-   * Returns a set of entities created speculatively in anticipation of a server approval.
-   *
-   * <p>This set consists of:
-   * <ul>
-   *    <li>The one-time billing event charging the gaining registrar for the transfer
-   *    <li>A cancellation of an autorenew charge for the losing registrar, if the autorenew grace
-   *        period will apply at transfer time
-   *    <li>A new post-transfer autorenew billing event for the domain (and gaining registrar)
-   *    <li>A new post-transfer autorenew poll message for the domain (and gaining registrar)
-   *    <li>A poll message for the gaining registrar
-   *    <li>A poll message for the losing registrar
-   * </ul>
-   */
-  private ImmutableSet<TransferServerApproveEntity> createTransferServerApproveEntities(
-      DateTime automaticTransferTime,
-      DateTime serverApproveNewExpirationTime,
-      HistoryEntry historyEntry,
-      DomainResource existingDomain,
-      Money renewCost,
-      int years) {
-    // Create a TransferData for the server-approve case to use for the speculative poll messages.
-    TransferData serverApproveTransferData =
-        createTransferDataBuilder(existingDomain, automaticTransferTime, years)
-            .setTransferStatus(TransferStatus.SERVER_APPROVED)
-            .build();
-    Registry registry = Registry.get(existingDomain.getTld());
-    return new ImmutableSet.Builder<TransferServerApproveEntity>()
-        .add(createTransferBillingEvent(
-            automaticTransferTime, historyEntry, registry, renewCost, years))
-        .addAll(createOptionalAutorenewCancellation(
-            automaticTransferTime, historyEntry, existingDomain)
-                .asSet())
-        .add(createGainingClientAutorenewEvent(
-            serverApproveNewExpirationTime, historyEntry))
-        .add(createGainingClientAutorenewPollMessage(
-            serverApproveNewExpirationTime, historyEntry))
-        .add(createGainingTransferPollMessage(
-            targetId, serverApproveTransferData, serverApproveNewExpirationTime, historyEntry))
-        .add(createLosingTransferPollMessage(
-            targetId, serverApproveTransferData, serverApproveNewExpirationTime, historyEntry))
-        .build();
-  }
-
-  private BillingEvent.OneTime createTransferBillingEvent(
-      DateTime automaticTransferTime,
-      HistoryEntry historyEntry,
-      Registry registry,
-      Money renewCost,
-      int years) {
-    return new BillingEvent.OneTime.Builder()
-        .setReason(Reason.TRANSFER)
-        .setTargetId(targetId)
-        .setClientId(gainingClientId)
-        .setCost(renewCost)
-        .setPeriodYears(years)
-        .setEventTime(automaticTransferTime)
-        .setBillingTime(automaticTransferTime.plus(registry.getTransferGracePeriodLength()))
-        .setParent(historyEntry)
-        .build();
-  }
-
-  /**
-   * Creates an optional autorenew cancellation if one would apply to the server-approved transfer.
-   *
-   * <p>If there will be an autorenew between now and the automatic transfer time, and if the
-   * autorenew grace period length is long enough that the domain will still be within it at the
-   * automatic transfer time, then the transfer will subsume the autorenew and we need to write out
-   * a cancellation for it.
-   */
-  // TODO(b/19430703): the above logic is incomplete; it doesn't handle a grace period that started
-  //   before the transfer was requested and continues through the automatic transfer time.
-  private Optional<BillingEvent.Cancellation> createOptionalAutorenewCancellation(
-      DateTime automaticTransferTime,
-      HistoryEntry historyEntry,
-      DomainResource existingDomain) {
-    Registry registry = Registry.get(existingDomain.getTld());
-    DateTime oldExpirationTime = existingDomain.getRegistrationExpirationTime();
-    Duration autoRenewGracePeriodLength = registry.getAutoRenewGracePeriodLength();
-    if (automaticTransferTime.isAfter(oldExpirationTime)
-        && automaticTransferTime.isBefore(oldExpirationTime.plus(autoRenewGracePeriodLength))) {
-      return Optional.of(new BillingEvent.Cancellation.Builder()
-          .setReason(Reason.RENEW)
-          .setFlags(ImmutableSet.of(Flag.AUTO_RENEW))
-          .setTargetId(targetId)
-          .setClientId(existingDomain.getCurrentSponsorClientId())
-          .setEventTime(automaticTransferTime)
-          .setBillingTime(existingDomain.getRegistrationExpirationTime()
-              .plus(registry.getAutoRenewGracePeriodLength()))
-          .setRecurringEventKey(existingDomain.getAutorenewBillingEvent())
-          .setParent(historyEntry)
-          .build());
-    }
-    return Optional.absent();
-  }
-
-  private BillingEvent.Recurring createGainingClientAutorenewEvent(
-      DateTime serverApproveNewExpirationTime, HistoryEntry historyEntry) {
-    return new BillingEvent.Recurring.Builder()
-        .setReason(Reason.RENEW)
-        .setFlags(ImmutableSet.of(Flag.AUTO_RENEW))
-        .setTargetId(targetId)
-        .setClientId(gainingClientId)
-        .setEventTime(serverApproveNewExpirationTime)
-        .setRecurrenceEndTime(END_OF_TIME)
-        .setParent(historyEntry)
-        .build();
-  }
-
-  private PollMessage.Autorenew createGainingClientAutorenewPollMessage(
-      DateTime serverApproveNewExpirationTime, HistoryEntry historyEntry) {
-    return new PollMessage.Autorenew.Builder()
-        .setTargetId(targetId)
-        .setClientId(gainingClientId)
-        .setEventTime(serverApproveNewExpirationTime)
-        .setAutorenewEndTime(END_OF_TIME)
-        .setMsg("Domain was auto-renewed.")
-        .setParent(historyEntry)
-        .build();
-  }
-
-  private Builder createTransferDataBuilder(
-      DomainResource existingDomain,
-      DateTime automaticTransferTime,
-      int years) {
-    return new TransferData.Builder()
-        .setTransferRequestTrid(trid)
-        .setTransferRequestTime(now)
-        .setGainingClientId(gainingClientId)
-        .setLosingClientId(existingDomain.getCurrentSponsorClientId())
-        .setPendingTransferExpirationTime(automaticTransferTime)
-        .setExtendedRegistrationYears(years);
-  }
-
-  private TransferData createPendingTransferData(
-      TransferData.Builder transferDataBuilder,
-      ImmutableSet<TransferServerApproveEntity> serverApproveEntities) {
-    ImmutableSet.Builder<Key<? extends TransferServerApproveEntity>> serverApproveEntityKeys =
-        new ImmutableSet.Builder<>();
-    for (TransferServerApproveEntity entity : serverApproveEntities) {
-      serverApproveEntityKeys.add(Key.create(entity));
-    }
-    return transferDataBuilder
-        .setTransferStatus(TransferStatus.PENDING)
-        .setServerApproveBillingEvent(Key.create(
-            getOnlyElement(filter(serverApproveEntities, BillingEvent.OneTime.class))))
-        .setServerApproveAutorenewEvent(Key.create(
-            getOnlyElement(filter(serverApproveEntities, BillingEvent.Recurring.class))))
-        .setServerApproveAutorenewPollMessage(Key.create(
-            getOnlyElement(filter(serverApproveEntities, PollMessage.Autorenew.class))))
-        .setServerApproveEntities(serverApproveEntityKeys.build())
-        .build();
-  }
-
-  private void handleExtraFlowLogic(
-      int years, DomainResource existingDomain, HistoryEntry historyEntry) throws EppException {
-    Optional<RegistryExtraFlowLogic> extraFlowLogic =
-        RegistryExtraFlowLogicProxy.newInstanceForDomain(existingDomain);
-    if (extraFlowLogic.isPresent()) {
-      extraFlowLogic.get().performAdditionalDomainTransferLogic(
-          existingDomain, gainingClientId, now, years, eppInput, historyEntry);
-      extraFlowLogic.get().commitAdditionalLogicChanges();
-    }
   }
 
   private DomainTransferResponse createResponse(
-      Period period, DomainResource existingDomain, DomainResource newDomain) {
+      Period period, DomainResource existingDomain, DomainResource newDomain, DateTime now) {
     // If the registration were approved this instant, this is what the new expiration would be,
     // because we cap at 10 years from the moment of approval. This is different than the server
     // approval new expiration time, which is capped at 10 years from the server approve time.
@@ -388,13 +331,17 @@ public final class DomainTransferRequestFlow extends LoggedInFlow implements Tra
         targetId, newDomain.getTransferData(), approveNowExtendedRegistrationTime);
   }
 
-  private ImmutableList<FeeTransformResponseExtension> createResponseExtensions(Money renewCost,
-      FeeTransformCommandExtension feeTransfer) {
-    return feeTransfer == null
-        ? null
-        : ImmutableList.of(feeTransfer.createResponseBuilder()
-            .setCurrency(renewCost.getCurrencyUnit())
-            .setFees(ImmutableList.of(Fee.create(renewCost.getAmount(), FeeType.RENEW)))
-            .build());
+  private static ImmutableList<FeeTransformResponseExtension> createResponseExtensions(
+      Optional<FeesAndCredits> feesAndCredits, Optional<FeeTransferCommandExtension> feeTransfer) {
+    return (feeTransfer.isPresent() && feesAndCredits.isPresent())
+        ? ImmutableList.of(
+            feeTransfer
+                .get()
+                .createResponseBuilder()
+                .setFees(feesAndCredits.get().getFees())
+                .setCredits(feesAndCredits.get().getCredits())
+                .setCurrency(feesAndCredits.get().getCurrency())
+                .build())
+        : ImmutableList.of();
   }
 }

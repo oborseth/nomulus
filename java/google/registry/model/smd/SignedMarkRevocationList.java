@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,23 +16,20 @@ package google.registry.model.smd;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.isEmpty;
+import static google.registry.model.CacheUtils.memoizeWithShortExpiration;
 import static google.registry.model.common.EntityGroupRoot.getCrossTldKey;
 import static google.registry.model.ofy.ObjectifyService.allocateId;
 import static google.registry.model.ofy.ObjectifyService.ofy;
-import static google.registry.util.CacheUtils.memoizeWithShortExpiration;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static google.registry.util.DateTimeUtils.isBeforeOrAt;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Function;
 import com.google.common.base.Supplier;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.VoidWork;
-import com.googlecode.objectify.Work;
 import com.googlecode.objectify.annotation.EmbedMap;
 import com.googlecode.objectify.annotation.Entity;
 import com.googlecode.objectify.annotation.Id;
@@ -59,7 +56,8 @@ import org.joda.time.DateTime;
  * entity into multiple entities, each entity containing {@value #SHARD_SIZE} rows.
  *
  * @see google.registry.tmch.SmdrlCsvParser
- * @see "http://tools.ietf.org/html/draft-lozano-tmch-func-spec-08#section-6.2"
+ * @see <a href="http://tools.ietf.org/html/draft-lozano-tmch-func-spec-08#section-6.2">
+ *     TMCH functional specifications - SMD Revocation List</a>
  */
 @Entity
 @NotBackedUp(reason = Reason.EXTERNALLY_SOURCED)
@@ -88,37 +86,39 @@ public class SignedMarkRevocationList extends ImmutableObject {
   boolean isShard;
 
   /**
-   * A cached supplier that fetches the SMDRL shards from the datastore and recombines them into a
+   * A cached supplier that fetches the SMDRL shards from Datastore and recombines them into a
    * single {@link SignedMarkRevocationList} object.
    */
   private static final Supplier<SignedMarkRevocationList> CACHE =
-      memoizeWithShortExpiration(new Supplier<SignedMarkRevocationList>() {
-        @Override
-        public SignedMarkRevocationList get() {
-          // Open a new transactional read even if we are in a transaction currently.
-          return ofy().transactNewReadOnly(new Work<SignedMarkRevocationList>() {
-            @Override
-            public SignedMarkRevocationList run() {
-              Iterable<SignedMarkRevocationList> shards = ofy()
-                  .load()
-                  .type(SignedMarkRevocationList.class)
-                  .ancestor(getCrossTldKey());
-              DateTime creationTime =
-                  isEmpty(shards)
-                      ? START_OF_TIME
-                      : checkNotNull(Iterables.get(shards, 0).creationTime, "creationTime");
-              ImmutableMap.Builder<String, DateTime> revokes = new ImmutableMap.Builder<>();
-              for (SignedMarkRevocationList shard : shards) {
-                revokes.putAll(shard.revokes);
-                checkState(
-                    creationTime.equals(shard.creationTime),
-                    "Inconsistent creation times: %s vs. %s", creationTime, shard.creationTime);
-              }
-              return create(creationTime, revokes.build());
-            }});
-        }});
+      memoizeWithShortExpiration(
+          () ->
+              ofy()
+                  .transactNewReadOnly(
+                      () -> {
+                        Iterable<SignedMarkRevocationList> shards =
+                            ofy()
+                                .load()
+                                .type(SignedMarkRevocationList.class)
+                                .ancestor(getCrossTldKey());
+                        DateTime creationTime =
+                            isEmpty(shards)
+                                ? START_OF_TIME
+                                : checkNotNull(
+                                    Iterables.get(shards, 0).creationTime, "creationTime");
+                        ImmutableMap.Builder<String, DateTime> revokes =
+                            new ImmutableMap.Builder<>();
+                        for (SignedMarkRevocationList shard : shards) {
+                          revokes.putAll(shard.revokes);
+                          checkState(
+                              creationTime.equals(shard.creationTime),
+                              "Inconsistent creation times: %s vs. %s",
+                              creationTime,
+                              shard.creationTime);
+                        }
+                        return create(creationTime, revokes.build());
+                      }));
 
-  /** Return a single logical instance that combines all the datastore shards. */
+  /** Return a single logical instance that combines all Datastore shards. */
   public static SignedMarkRevocationList get() {
     return CACHE.get();
   }
@@ -135,10 +135,7 @@ public class SignedMarkRevocationList extends ImmutableObject {
   /** Returns {@code true} if the SMD ID has been revoked at the given point in time. */
   public boolean isSmdRevoked(String smdId, DateTime now) {
     DateTime revoked = revokes.get(checkNotNull(smdId, "smdId"));
-    if (revoked == null) {
-      return false;
-    }
-    return isBeforeOrAt(revoked, now);
+    return revoked != null && isBeforeOrAt(revoked, now);
   }
 
   /** Returns the creation timestamp specified at the top of the SMDRL CSV file. */
@@ -151,27 +148,34 @@ public class SignedMarkRevocationList extends ImmutableObject {
     return revokes.size();
   }
 
-  /** Save this list to the datastore in sharded form. Returns {@code this}. */
+  /** Save this list to Datastore in sharded form. Returns {@code this}. */
   public SignedMarkRevocationList save() {
-    ofy().transact(new VoidWork() {
-      @Override
-      public void vrun() {
-        ofy().deleteWithoutBackup().keys(ofy()
-            .load()
-            .type(SignedMarkRevocationList.class)
-            .ancestor(getCrossTldKey())
-            .keys());
-        ofy().saveWithoutBackup().entities(FluentIterable
-            .from(CollectionUtils.partitionMap(revokes, SHARD_SIZE))
-            .transform(new Function<ImmutableMap<String, DateTime>, SignedMarkRevocationList>() {
-              @Override
-              public SignedMarkRevocationList apply(ImmutableMap<String, DateTime> shardRevokes) {
-                SignedMarkRevocationList shard = create(creationTime, shardRevokes);
-                shard.id = allocateId();
-                shard.isShard = true;  // Avoid the exception in disallowUnshardedSaves().
-                return shard;
-              }}));
-      }});
+    ofy()
+        .transact(
+            () -> {
+              ofy()
+                  .deleteWithoutBackup()
+                  .keys(
+                      ofy()
+                          .load()
+                          .type(SignedMarkRevocationList.class)
+                          .ancestor(getCrossTldKey())
+                          .keys());
+              ofy()
+                  .saveWithoutBackup()
+                  .entities(
+                      CollectionUtils.partitionMap(revokes, SHARD_SIZE)
+                          .stream()
+                          .map(
+                              shardRevokes -> {
+                                SignedMarkRevocationList shard = create(creationTime, shardRevokes);
+                                shard.id = allocateId();
+                                shard.isShard =
+                                    true; // Avoid the exception in disallowUnshardedSaves().
+                                return shard;
+                              })
+                          .collect(toImmutableList()));
+            });
     return this;
   }
 

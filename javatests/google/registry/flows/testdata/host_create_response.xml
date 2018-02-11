@@ -5,13 +5,13 @@
     </result>
     <resData>
       <host:creData xmlns:host="urn:ietf:params:xml:ns:host-1.0">
-        <host:name>ns1.example.external</host:name>
-        <host:crDate>2000-06-01T00:02:00Z</host:crDate>
+        <host:name>%HOSTNAME%</host:name>
+        <host:crDate>%CRDATE%</host:crDate>
       </host:creData>
     </resData>
     <trID>
       <clTRID>ABC-12345</clTRID>
-      <svTRID>54322-XYZ</svTRID>
+      <svTRID>server-trid</svTRID>
     </trID>
   </response>
 </epp>

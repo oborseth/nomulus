@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 package google.registry.backup;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.model.common.Cursor.CursorType.RDE_REPORT;
 import static google.registry.model.ofy.CommitLogBucket.getBucketKey;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.createTld;
@@ -23,10 +24,7 @@ import static google.registry.util.DateTimeUtils.START_OF_TIME;
 
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableMap;
-import com.googlecode.objectify.VoidWork;
-import google.registry.config.TestRegistryConfig;
 import google.registry.model.common.Cursor;
-import google.registry.model.common.Cursor.CursorType;
 import google.registry.model.ofy.CommitLogBucket;
 import google.registry.model.ofy.CommitLogCheckpoint;
 import google.registry.model.ofy.Ofy;
@@ -34,17 +32,16 @@ import google.registry.model.registry.Registry;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.InjectRule;
-import google.registry.testing.RegistryConfigRule;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link CommitLogCheckpointStrategy}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class CommitLogCheckpointStrategyTest {
 
   @Rule
@@ -54,9 +51,6 @@ public class CommitLogCheckpointStrategyTest {
 
   @Rule
   public final InjectRule inject = new InjectRule();
-
-  @Rule
-  public final RegistryConfigRule configRule = new RegistryConfigRule();
 
   final FakeClock clock = new FakeClock(DateTime.parse("2000-01-01TZ"));
   final Ofy ofy = new Ofy(clock);
@@ -92,13 +86,6 @@ public class CommitLogCheckpointStrategyTest {
   public void before() throws Exception {
     strategy.clock = clock;
     strategy.ofy = ofy;
-
-    // Use three commit log buckets for easier but sufficiently complex testing.
-    configRule.override(new TestRegistryConfig() {
-      @Override
-      public int getCommitLogBucketCount() {
-        return 3;
-      }});
 
     // Need to inject clock into Ofy so that createTld() below will get the right time.
     inject.setStaticField(Ofy.class, "clock", clock);
@@ -303,25 +290,22 @@ public class CommitLogCheckpointStrategyTest {
   private void writeCommitLogToBucket(final int bucketId) {
     fakeBucketIdSupplier.value = bucketId;
     ofy.transact(
-        new VoidWork() {
-          @Override
-          public void vrun() {
-            String tld = "tld" + bucketId;
-            ofy().save().entity(
-                Cursor.create(CursorType.RDE_REPORT, ofy.getTransactionTime(), Registry.get(tld)));
-          }
+        () -> {
+          Cursor cursor =
+              Cursor.create(RDE_REPORT, ofy.getTransactionTime(), Registry.get("tld" + bucketId));
+          ofy().save().entity(cursor);
         });
     fakeBucketIdSupplier.value = null;
   }
 
   private void saveBucketWithLastWrittenTime(final int bucketId, final DateTime lastWrittenTime) {
-    ofy.transact(new VoidWork() {
-      @Override
-      public void vrun() {
-         ofy.saveWithoutBackup().entity(
-             CommitLogBucket.loadBucket(getBucketKey(bucketId)).asBuilder()
-                 .setLastWrittenTime(lastWrittenTime)
-                 .build());
-      }});
+    ofy.transact(
+        () ->
+            ofy.saveWithoutBackup()
+                .entity(
+                    CommitLogBucket.loadBucket(getBucketKey(bucketId))
+                        .asBuilder()
+                        .setLastWrittenTime(lastWrittenTime)
+                        .build()));
   }
 }

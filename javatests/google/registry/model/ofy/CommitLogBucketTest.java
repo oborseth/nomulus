@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,16 +19,14 @@ import static google.registry.model.ofy.CommitLogBucket.getBucketKey;
 import static google.registry.model.ofy.CommitLogBucket.loadAllBuckets;
 import static google.registry.model.ofy.CommitLogBucket.loadBucket;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.annotation.Cache;
-import google.registry.config.TestRegistryConfig;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.InjectRule;
-import google.registry.testing.RegistryConfigRule;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -45,24 +43,11 @@ public class CommitLogBucketTest {
       .build();
 
   @Rule
-  public final RegistryConfigRule configRule = new RegistryConfigRule();
-
-  @Rule
   public final InjectRule inject = new InjectRule();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   CommitLogBucket bucket;
 
   @Before
   public void before() {
-    // Use 10 buckets to make the tests below more realistic.
-    configRule.override(new TestRegistryConfig() {
-      @Override
-      public int getCommitLogBucketCount() {
-        return 10;
-      }});
     // Save the bucket with some non-default properties set so that we can distinguish a correct
     // load from one that returns a newly created bucket instance.
     bucket = persistResource(
@@ -80,14 +65,16 @@ public class CommitLogBucketTest {
 
   @Test
   public void test_getBucketKey_bucketNumberTooLow_throws() {
-    thrown.expect(IllegalArgumentException.class, "0 not in [");
-    getBucketKey(0);
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> getBucketKey(0));
+    assertThat(thrown).hasMessageThat().contains("0 not in [");
   }
 
   @Test
   public void test_getBucketKey_bucketNumberTooHigh_throws() {
-    thrown.expect(IllegalArgumentException.class, "11 not in [");
-    getBucketKey(11);
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> getBucketKey(11));
+    assertThat(thrown).hasMessageThat().contains("11 not in [");
   }
 
   @Test
@@ -108,19 +95,17 @@ public class CommitLogBucketTest {
 
   @Test
   public void test_loadBucket_forNonexistentBucket_returnsNewBucket() {
-    assertThat(loadBucket(getBucketKey(10))).isEqualTo(
-        new CommitLogBucket.Builder().setBucketNum(10).build());
+    assertThat(loadBucket(getBucketKey(3))).isEqualTo(
+        new CommitLogBucket.Builder().setBucketNum(3).build());
   }
 
   @Test
   public void test_loadAllBuckets_loadsExistingBuckets_orNewOnesIfNonexistent() {
     ImmutableSet<CommitLogBucket> buckets = loadAllBuckets();
-    assertThat(buckets).hasSize(10);
+    assertThat(buckets).hasSize(3);
     assertThat(buckets).contains(bucket);
-    for (int i = 2; i <= 10; ++i) {
-      assertThat(buckets).contains(
-          new CommitLogBucket.Builder().setBucketNum(i).build());
-    }
+    assertThat(buckets).contains(new CommitLogBucket.Builder().setBucketNum(2).build());
+    assertThat(buckets).contains(new CommitLogBucket.Builder().setBucketNum(3).build());
   }
 
   @Test

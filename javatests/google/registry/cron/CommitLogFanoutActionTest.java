@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,15 +18,14 @@ import static google.registry.cron.CommitLogFanoutAction.BUCKET_PARAM;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import google.registry.model.ofy.CommitLogBucket;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.TaskQueueHelper.TaskMatcher;
 import google.registry.util.Retrier;
 import google.registry.util.TaskEnqueuer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -38,9 +37,6 @@ public class CommitLogFanoutActionTest {
 
   private static final String ENDPOINT = "/the/servlet";
   private static final String QUEUE = "the-queue";
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder()
@@ -61,7 +57,7 @@ public class CommitLogFanoutActionTest {
     action.taskEnqueuer = new TaskEnqueuer(new Retrier(null, 1));
     action.endpoint = ENDPOINT;
     action.queue = QUEUE;
-    action.jitterSeconds = Optional.absent();
+    action.jitterSeconds = Optional.empty();
     action.run();
     List<TaskMatcher> matchers = new ArrayList<>();
     for (int bucketId : CommitLogBucket.getBucketIds()) {

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,17 +15,17 @@
 package google.registry.tools;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static google.registry.model.RoidSuffixes.isRoidSuffixUsed;
 import static google.registry.util.CollectionUtils.findDuplicates;
 import static google.registry.util.DomainNameUtils.canonicalizeDomainName;
 
 import com.beust.jcommander.Parameter;
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
+import com.google.common.collect.ImmutableSortedSet;
+import com.google.common.collect.Sets;
 import google.registry.model.pricing.StaticPremiumListPricingEngine;
 import google.registry.model.registry.Registries;
 import google.registry.model.registry.Registry;
@@ -38,6 +38,7 @@ import google.registry.tools.params.TransitionListParameter.BillingCostTransitio
 import google.registry.tools.params.TransitionListParameter.TldStateTransitions;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
@@ -52,7 +53,7 @@ abstract class CreateOrUpdateTldCommand extends MutatingCommand {
 
   @Inject
   @Named("dnsWriterNames")
-  Set<String> dnsWriterNames;
+  Set<String> validDnsWriterNames;
 
   @Parameter(description = "Names of the TLDs", required = true)
   List<String> mainParameters;
@@ -72,25 +73,31 @@ abstract class CreateOrUpdateTldCommand extends MutatingCommand {
   @Nullable
   @Parameter(
       names = "--add_grace_period",
-      description = "Length of the add grace period")
+      description = "Length of the add grace period (in ISO 8601 duration format)")
   Duration addGracePeriod;
 
   @Nullable
   @Parameter(
+      names = "--sunrush_add_grace_period",
+      description = "Length of the add grace period during sunrush (in ISO 8601 duration format)")
+  Duration sunrushAddGracePeriod;
+
+  @Nullable
+  @Parameter(
       names = "--redemption_grace_period",
-      description = "Length of the redemption grace period")
+      description = "Length of the redemption grace period (in ISO 8601 duration format)")
   Duration redemptionGracePeriod;
 
   @Nullable
   @Parameter(
       names = "--pending_delete_length",
-      description = "Length of the pending delete period")
+      description = "Length of the pending delete period (in ISO 8601 duration format)")
   Duration pendingDeleteLength;
 
   @Nullable
   @Parameter(
       names = "--automatic_transfer_length",
-      description = "Length of the automatic transfer period")
+      description = "Length of the automatic transfer period (in ISO 8601 duration format)")
   private Duration automaticTransferLength;
 
   @Nullable
@@ -207,17 +214,23 @@ abstract class CreateOrUpdateTldCommand extends MutatingCommand {
 
   @Nullable
   @Parameter(
+    names = {"--domain_create_restricted"},
+    description = "If only domains with nameserver restricted reservation can be created",
+    arity = 1
+  )
+  Boolean domainCreateRestricted;
+
+  @Nullable
+  @Parameter(
       names = "--claims_period_end",
       description = "The end of the claims period")
   DateTime claimsPeriodEnd;
 
   @Nullable
   @Parameter(
-    names = "--dns_writer",
-    description = "The name of the DnsWriter implementation to use",
-    converter = OptionalStringParameter.class,
-    validateWith = OptionalStringParameter.class)
-  Optional<String> dnsWriter;
+    names = "--dns_writers",
+    description = "A comma-separated list of DnsWriter implementations to use")
+  List<String> dnsWriters;
 
   @Nullable
   @Parameter(
@@ -253,7 +266,7 @@ abstract class CreateOrUpdateTldCommand extends MutatingCommand {
     assertAllowedEnvironment();
     initTldCommand();
     String duplicates = Joiner.on(", ").join(findDuplicates(mainParameters));
-    checkArgument(duplicates.isEmpty(), "Duplicate arguments found: \"%s\"", duplicates);
+    checkArgument(duplicates.isEmpty(), "Duplicate arguments found: '%s'", duplicates);
     Set<String> tlds = ImmutableSet.copyOf(mainParameters);
     checkArgument(roidSuffix == null || tlds.size() == 1,
         "Can't update roid suffixes on multiple TLDs simultaneously");
@@ -261,15 +274,8 @@ abstract class CreateOrUpdateTldCommand extends MutatingCommand {
       checkArgument(tld.equals(canonicalizeDomainName(tld)));
       checkArgument(
           !CharMatcher.javaDigit().matches(tld.charAt(0)),
-          "TLDs cannot begin with a number.");
+          "TLDs cannot begin with a number");
       Registry oldRegistry = getOldRegistry(tld);
-      if (roidSuffix != null) {
-        checkArgument(
-            !isRoidSuffixUsed(roidSuffix)
-                || (oldRegistry != null && roidSuffix.equals(oldRegistry.getRoidSuffix())),
-            "The roid suffix %s is already in use",
-            roidSuffix);
-      }
       // TODO(b/26901539): Add a flag to set the pricing engine once we have more than one option.
       Registry.Builder builder =
           oldRegistry == null
@@ -321,57 +327,23 @@ abstract class CreateOrUpdateTldCommand extends MutatingCommand {
         builder.setEapFeeSchedule(eapFeeSchedule);
       }
 
-      if (addGracePeriod != null) {
-        builder.setAddGracePeriodLength(addGracePeriod);
-      }
-
-      if (redemptionGracePeriod != null) {
-        builder.setRedemptionGracePeriodLength(redemptionGracePeriod);
-      }
-
-      if (pendingDeleteLength != null) {
-        builder.setPendingDeleteLength(pendingDeleteLength);
-      }
-
-      if (automaticTransferLength != null) {
-        builder.setAutomaticTransferLength(automaticTransferLength);
-      }
-
-      if (driveFolderId != null) {
-        builder.setDriveFolderId(driveFolderId.orNull());
-      }
-
-      if (createBillingCost != null) {
-        builder.setCreateBillingCost(createBillingCost);
-      }
-
-      if (restoreBillingCost != null) {
-        builder.setRestoreBillingCost(restoreBillingCost);
-      }
-
-      if (roidSuffix != null) {
-        builder.setRoidSuffix(roidSuffix);
-      }
-
-      if (serverStatusChangeCost != null) {
-        builder.setServerStatusChangeBillingCost(serverStatusChangeCost);
-      }
-
-      if (tldType != null) {
-        builder.setTldType(tldType);
-      }
-
-      if (premiumPriceAckRequired != null) {
-        builder.setPremiumPriceAckRequired(premiumPriceAckRequired);
-      }
-
-      if (lordnUsername != null) {
-        builder.setLordnUsername(lordnUsername.orNull());
-      }
-
-      if (claimsPeriodEnd != null) {
-        builder.setClaimsPeriodEnd(claimsPeriodEnd);
-      }
+      Optional.ofNullable(addGracePeriod).ifPresent(builder::setAddGracePeriodLength);
+      Optional.ofNullable(sunrushAddGracePeriod).ifPresent(builder::setSunrushAddGracePeriodLength);
+      Optional.ofNullable(redemptionGracePeriod).ifPresent(builder::setRedemptionGracePeriodLength);
+      Optional.ofNullable(pendingDeleteLength).ifPresent(builder::setPendingDeleteLength);
+      Optional.ofNullable(automaticTransferLength).ifPresent(builder::setAutomaticTransferLength);
+      Optional.ofNullable(driveFolderId).ifPresent(id -> builder.setDriveFolderId(id.orElse(null)));
+      Optional.ofNullable(createBillingCost).ifPresent(builder::setCreateBillingCost);
+      Optional.ofNullable(restoreBillingCost).ifPresent(builder::setRestoreBillingCost);
+      Optional.ofNullable(roidSuffix).ifPresent(builder::setRoidSuffix);
+      Optional.ofNullable(serverStatusChangeCost)
+          .ifPresent(builder::setServerStatusChangeBillingCost);
+      Optional.ofNullable(tldType).ifPresent(builder::setTldType);
+      Optional.ofNullable(premiumPriceAckRequired).ifPresent(builder::setPremiumPriceAckRequired);
+      Optional.ofNullable(lordnUsername).ifPresent(u -> builder.setLordnUsername(u.orElse(null)));
+      Optional.ofNullable(claimsPeriodEnd).ifPresent(builder::setClaimsPeriodEnd);
+      Optional.ofNullable(domainCreateRestricted).ifPresent(builder::setDomainCreateRestricted);
+      Optional.ofNullable(lrpPeriod).ifPresent(p -> builder.setLrpPeriod(p.orElse(null)));
 
       if (premiumListName != null) {
         if (premiumListName.isPresent()) {
@@ -384,18 +356,15 @@ abstract class CreateOrUpdateTldCommand extends MutatingCommand {
         }
       }
 
-      if (dnsWriter != null) {
-        if (dnsWriter.isPresent()) {
-          checkArgument(
-              dnsWriterNames.contains(dnsWriter.get()),
-              "The DNS writer '%s' doesn't exist",
-              dnsWriter.get());
-          builder.setDnsWriter(dnsWriter.get());
-        }
-      }
-
-      if (lrpPeriod != null) {
-        builder.setLrpPeriod(lrpPeriod.orNull());
+      if (dnsWriters != null) {
+        ImmutableSet<String> dnsWritersSet = ImmutableSet.copyOf(dnsWriters);
+        ImmutableSortedSet<String> invalidDnsWriters =
+            ImmutableSortedSet.copyOf(Sets.difference(dnsWritersSet, validDnsWriterNames));
+        checkArgument(
+            invalidDnsWriters.isEmpty(),
+            "Invalid DNS writer name(s) specified: %s",
+            invalidDnsWriters);
+        builder.setDnsWriters(dnsWritersSet);
       }
 
       ImmutableSet<String> newReservedListNames = getReservedLists(oldRegistry);

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ public final class XmlToEnumMapper<T extends Enum<?>> {
    * Creates a new {@link XmlToEnumMapper} from xml value to enum value.
    */
   public static <T extends Enum<?>> XmlToEnumMapper<T> create(T[] enumValues) {
-    return new XmlToEnumMapper<T>(enumValues);
+    return new XmlToEnumMapper<>(enumValues);
   }
 
   private XmlToEnumMapper(T[] enumValues) {

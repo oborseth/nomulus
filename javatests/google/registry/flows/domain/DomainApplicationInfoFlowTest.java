@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,17 +15,22 @@
 package google.registry.flows.domain;
 
 import static com.google.common.io.BaseEncoding.base16;
+import static com.google.common.truth.Truth.assertThat;
+import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.assertNoBillingEvents;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistActiveContact;
 import static google.registry.testing.DatastoreHelper.persistActiveHost;
 import static google.registry.testing.DatastoreHelper.persistResource;
-import static google.registry.testing.TestDataHelper.loadFileWithSubstitutions;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
+import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
+import google.registry.flows.EppException;
 import google.registry.flows.ResourceFlowTestCase;
 import google.registry.flows.ResourceFlowUtils.ResourceDoesNotExistException;
 import google.registry.flows.ResourceFlowUtils.ResourceNotOwnedException;
@@ -44,6 +49,7 @@ import google.registry.model.domain.secdns.DelegationSignerData;
 import google.registry.model.eppcommon.AuthInfo.PasswordAuth;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.host.HostResource;
+import google.registry.model.ofy.RequestCapturingAsyncDatastoreService;
 import google.registry.model.registry.Registry.TldState;
 import google.registry.model.smd.EncodedSignedMark;
 import google.registry.testing.AppEngineRule;
@@ -62,8 +68,15 @@ public class DomainApplicationInfoFlowTest
   private HostResource host2;
   private DomainApplication application;
 
-  private enum MarksState { MARKS_EXIST, NO_MARKS_EXIST }
-  private enum HostsState { HOSTS_EXIST, NO_HOSTS_EXIST }
+  private enum MarksState {
+    MARKS_EXIST,
+    NO_MARKS_EXIST
+  }
+
+  private enum HostsState {
+    HOSTS_EXIST,
+    NO_HOSTS_EXIST
+  }
 
   @Before
   public void resetClientId() {
@@ -77,41 +90,49 @@ public class DomainApplicationInfoFlowTest
     contact = persistActiveContact("sh8013");
     host1 = persistActiveHost("ns1.example.net");
     host2 = persistActiveHost("ns1.example.tld");
-    application = persistResource(new DomainApplication.Builder()
-        .setRepoId("123-TLD")
-        .setFullyQualifiedDomainName("example.tld")
-        .setPhase(LaunchPhase.SUNRUSH)
-        .setCurrentSponsorClientId("NewRegistrar")
-        .setCreationClientId("TheRegistrar")
-        .setLastEppUpdateClientId("NewRegistrar")
-        .setCreationTimeForTest(DateTime.parse("1999-04-03T22:00:00.0Z"))
-        .setLastEppUpdateTime(DateTime.parse("1999-12-03T09:00:00.0Z"))
-        .setLastTransferTime(DateTime.parse("2000-04-08T09:00:00.0Z"))
-        .setRegistrant(Key.create(registrant))
-        .setContacts(ImmutableSet.of(
-            DesignatedContact.create(Type.ADMIN, Key.create(contact)),
-            DesignatedContact.create(Type.TECH, Key.create(contact))))
-        .setNameservers(hostsState.equals(HostsState.HOSTS_EXIST) ? ImmutableSet.of(
-            Key.create(host1), Key.create(host2)) : null)
-        .setAuthInfo(DomainAuthInfo.create(PasswordAuth.create("2fooBAR")))
-        .addStatusValue(StatusValue.PENDING_CREATE)
-        .setApplicationStatus(ApplicationStatus.PENDING_VALIDATION)
-        .setEncodedSignedMarks(marksState.equals(MarksState.MARKS_EXIST)
-            // If we need to include an encoded signed mark, pull it out of the create xml.
-            ? ImmutableList.of((EncodedSignedMark)
-                new EppLoader(this, "domain_create_sunrise_encoded_signed_mark.xml")
-                    .getEpp()
-                    .getSingleExtension(LaunchCreateExtension.class)
-                    .getSignedMarks().get(0))
-            : null)
-        .build());
+    application =
+        persistResource(
+            new DomainApplication.Builder()
+                .setRepoId("123-TLD")
+                .setFullyQualifiedDomainName("example.tld")
+                .setPhase(LaunchPhase.SUNRUSH)
+                .setPersistedCurrentSponsorClientId("NewRegistrar")
+                .setCreationClientId("TheRegistrar")
+                .setLastEppUpdateClientId("NewRegistrar")
+                .setCreationTimeForTest(DateTime.parse("1999-04-03T22:00:00.0Z"))
+                .setLastEppUpdateTime(DateTime.parse("1999-12-03T09:00:00.0Z"))
+                .setRegistrant(Key.create(registrant))
+                .setContacts(
+                    ImmutableSet.of(
+                        DesignatedContact.create(Type.ADMIN, Key.create(contact)),
+                        DesignatedContact.create(Type.TECH, Key.create(contact))))
+                .setNameservers(
+                    hostsState.equals(HostsState.HOSTS_EXIST)
+                        ? ImmutableSet.of(Key.create(host1), Key.create(host2))
+                        : null)
+                .setAuthInfo(DomainAuthInfo.create(PasswordAuth.create("2fooBAR")))
+                .addStatusValue(StatusValue.PENDING_CREATE)
+                .setApplicationStatus(ApplicationStatus.PENDING_VALIDATION)
+                .setEncodedSignedMarks(
+                    marksState.equals(MarksState.MARKS_EXIST)
+                        // If we need to include an encoded signed mark, pull it out of the create
+                        // xml.
+                        ? ImmutableList.of(
+                            (EncodedSignedMark)
+                                new EppLoader(this, "domain_create_sunrise_encoded_signed_mark.xml")
+                                    .getEpp()
+                                    .getSingleExtension(LaunchCreateExtension.class)
+                                    .get()
+                                    .getSignedMarks()
+                                    .get(0))
+                        : null)
+                .build());
   }
 
   private void doSuccessfulTest(String expectedXmlFilename, HostsState hostsState)
       throws Exception {
     assertTransactionalFlow(false);
-    String expected = loadFileWithSubstitutions(
-        getClass(), expectedXmlFilename, ImmutableMap.of("ROID", "123-TLD"));
+    String expected = loadFile(expectedXmlFilename, ImmutableMap.of("ROID", "123-TLD"));
     if (hostsState.equals(HostsState.NO_HOSTS_EXIST)) {
       expected = expected.replaceAll("\"ok\"", "\"inactive\"");
     }
@@ -238,12 +259,15 @@ public class DomainApplicationInfoFlowTest
   public void testSuccess_secDns() throws Exception {
     persistTestEntities(HostsState.NO_HOSTS_EXIST, MarksState.NO_MARKS_EXIST);
     // Add the dsData to the saved resource and change the nameservers to match the sample xml.
-    persistResource(application.asBuilder()
-        .setDsData(ImmutableSet.of(DelegationSignerData.create(
-            12345, 3, 1, base16().decode("49FD46E6C4B45C55D4AC"))))
-        .setNameservers(ImmutableSet.of(
-            Key.create(host1), Key.create(host2)))
-        .build());
+    persistResource(
+        application
+            .asBuilder()
+            .setDsData(
+                ImmutableSet.of(
+                    DelegationSignerData.create(
+                        12345, 3, 1, base16().decode("49FD46E6C4B45C55D4AC"))))
+            .setNameservers(ImmutableSet.of(Key.create(host1), Key.create(host2)))
+            .build());
     doSuccessfulTest("domain_info_sunrise_response_dsdata.xml", HostsState.NO_HOSTS_EXIST);
   }
 
@@ -251,71 +275,106 @@ public class DomainApplicationInfoFlowTest
   public void testSuccess_allocated() throws Exception {
     persistTestEntities(HostsState.HOSTS_EXIST, MarksState.NO_MARKS_EXIST);
     // Update the application status of the saved resource.
-    persistResource(application.asBuilder()
-        .removeStatusValue(StatusValue.PENDING_CREATE)
-        .setApplicationStatus(ApplicationStatus.ALLOCATED)
-        .build());
+    persistResource(
+        application
+            .asBuilder()
+            .removeStatusValue(StatusValue.PENDING_CREATE)
+            .setApplicationStatus(ApplicationStatus.ALLOCATED)
+            .build());
     doSuccessfulTest("domain_info_sunrise_allocated.xml", HostsState.HOSTS_EXIST);
   }
 
   @Test
   public void testFailure_neverExisted() throws Exception {
-    thrown.expect(
-        ResourceDoesNotExistException.class,
-        String.format("(%s)", getUniqueIdFromCommand()));
-    runFlow();
+    ResourceDoesNotExistException thrown =
+        expectThrows(ResourceDoesNotExistException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains(String.format("(%s)", getUniqueIdFromCommand()));
   }
 
   @Test
   public void testFailure_existedButWasDeleted() throws Exception {
-    persistResource(new DomainApplication.Builder()
-        .setRepoId("123-COM")
-        .setFullyQualifiedDomainName("timber.com")
-        .setDeletionTime(clock.nowUtc().minusDays(1))
-        .setRegistrant(Key.create(persistActiveContact("jd1234")))
-        .build());
-    thrown.expect(
-        ResourceDoesNotExistException.class,
-        String.format("(%s)", getUniqueIdFromCommand()));
-    runFlow();
+    persistResource(
+        new DomainApplication.Builder()
+            .setRepoId("123-COM")
+            .setFullyQualifiedDomainName("timber.com")
+            .setDeletionTime(clock.nowUtc().minusDays(1))
+            .setRegistrant(Key.create(persistActiveContact("jd1234")))
+            .build());
+    ResourceDoesNotExistException thrown =
+        expectThrows(ResourceDoesNotExistException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains(String.format("(%s)", getUniqueIdFromCommand()));
   }
 
   @Test
   public void testFailure_unauthorized() throws Exception {
-    persistResource(
-        AppEngineRule.makeRegistrar1().asBuilder().setClientId("ClientZ").build());
+    persistResource(AppEngineRule.makeRegistrar1().asBuilder().setClientId("ClientZ").build());
     sessionMetadata.setClientId("ClientZ");
     persistTestEntities(HostsState.NO_HOSTS_EXIST, MarksState.NO_MARKS_EXIST);
-    thrown.expect(ResourceNotOwnedException.class);
-    runFlow();
+    EppException thrown = expectThrows(ResourceNotOwnedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_applicationIdForDifferentDomain() throws Exception {
-    persistResource(new DomainApplication.Builder()
-        .setRepoId("123-TLD")
-        .setFullyQualifiedDomainName("invalid.tld")
-        .setRegistrant(Key.create(persistActiveContact("jd1234")))
-        .setPhase(LaunchPhase.SUNRUSH)
-        .build());
-    thrown.expect(ApplicationDomainNameMismatchException.class);
-    runFlow();
+    persistResource(
+        new DomainApplication.Builder()
+            .setRepoId("123-TLD")
+            .setFullyQualifiedDomainName("invalid.tld")
+            .setRegistrant(Key.create(persistActiveContact("jd1234")))
+            .setPhase(LaunchPhase.SUNRUSH)
+            .build());
+    EppException thrown = expectThrows(ApplicationDomainNameMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_noApplicationId() throws Exception {
     setEppInput("domain_info_sunrise_no_application_id.xml");
     persistTestEntities(HostsState.NO_HOSTS_EXIST, MarksState.NO_MARKS_EXIST);
-    thrown.expect(MissingApplicationIdException.class);
-    runFlow();
+    EppException thrown = expectThrows(MissingApplicationIdException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_mismatchedLaunchPhase() throws Exception {
     persistTestEntities(HostsState.NO_HOSTS_EXIST, MarksState.NO_MARKS_EXIST);
-    application = persistResource(
-        application.asBuilder().setPhase(LaunchPhase.SUNRISE).build());
-    thrown.expect(ApplicationLaunchPhaseMismatchException.class);
+    application = persistResource(application.asBuilder().setPhase(LaunchPhase.SUNRISE).build());
+    EppException thrown =
+        expectThrows(ApplicationLaunchPhaseMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  /** Test that we load contacts and hosts as a batch rather than individually. */
+  @Test
+  public void testBatchLoadingOfReferences() throws Exception {
+    persistTestEntities(HostsState.HOSTS_EXIST, MarksState.NO_MARKS_EXIST);
+    // Clear out the session cache so that we count actual Datastore calls.
+    ofy().clearSessionCache();
+    int numPreviousReads = RequestCapturingAsyncDatastoreService.getReads().size();
+    doSuccessfulTest("domain_info_sunrise_response.xml", HostsState.HOSTS_EXIST);
+    // Get all of the keys loaded in the flow, with each distinct load() call as a list of keys.
+    long numReadsWithContactsOrHosts =
+        RequestCapturingAsyncDatastoreService.getReads()
+            .stream()
+            .skip(numPreviousReads)
+            .filter(
+                keys ->
+                    keys.stream()
+                        .map(com.google.appengine.api.datastore.Key::getKind)
+                        .anyMatch(
+                            Predicates.in(
+                                ImmutableSet.of(
+                                    Key.getKind(ContactResource.class),
+                                    Key.getKind(HostResource.class)))))
+            .count();
+    assertThat(numReadsWithContactsOrHosts).isEqualTo(1);
+  }
+
+  @Test
+  public void testIcannActivityReportField_getsLogged() throws Exception {
+    persistTestEntities(HostsState.HOSTS_EXIST, MarksState.NO_MARKS_EXIST);
     runFlow();
+    assertIcannReportingActivityFieldLogged("srs-dom-info");
+    assertTldsFieldLogged("tld");
   }
 }

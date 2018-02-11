@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 package google.registry.backup;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterators.peekingIterator;
 import static google.registry.backup.BackupUtils.createDeserializingIterator;
 import static google.registry.model.ofy.ObjectifyService.ofy;
@@ -25,10 +26,9 @@ import com.google.appengine.api.datastore.Entity;
 import com.google.appengine.api.datastore.EntityTranslator;
 import com.google.appengine.tools.cloudstorage.GcsFileMetadata;
 import com.google.appengine.tools.cloudstorage.GcsService;
-import com.google.common.base.Function;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.Lists;
 import com.google.common.collect.PeekingIterator;
+import com.google.common.collect.Streams;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.Result;
 import com.googlecode.objectify.util.ResultNow;
@@ -41,6 +41,7 @@ import google.registry.model.ofy.CommitLogManifest;
 import google.registry.model.ofy.CommitLogMutation;
 import google.registry.request.Action;
 import google.registry.request.Parameter;
+import google.registry.request.auth.Auth;
 import google.registry.util.FormattingLogger;
 import google.registry.util.Retrier;
 import java.io.IOException;
@@ -49,30 +50,33 @@ import java.nio.channels.Channels;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
-import java.util.concurrent.Callable;
+import java.util.stream.Stream;
 import javax.inject.Inject;
 import org.joda.time.DateTime;
 
-/** Restore Registry 2 commit logs from GCS to datastore. */
+/** Restore Registry 2 commit logs from GCS to Datastore. */
 @Action(
-    path = RestoreCommitLogsAction.PATH,
-    method = Action.Method.POST,
-    automaticallyPrintOk = true)
+  path = RestoreCommitLogsAction.PATH,
+  method = Action.Method.POST,
+  automaticallyPrintOk = true,
+  auth = Auth.AUTH_INTERNAL_OR_ADMIN
+)
 public class RestoreCommitLogsAction implements Runnable {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
 
   static final int BLOCK_SIZE = 1024 * 1024;  // Buffer 1mb at a time, for no particular reason.
 
-  static final String PATH = "/_dr/task/restoreCommitLogs";
+  public static final String PATH = "/_dr/task/restoreCommitLogs";
   static final String DRY_RUN_PARAM = "dryRun";
   static final String FROM_TIME_PARAM = "fromTime";
+  static final String TO_TIME_PARAM = "toTime";
 
   @Inject GcsService gcsService;
   @Inject @Parameter(DRY_RUN_PARAM) boolean dryRun;
   @Inject @Parameter(FROM_TIME_PARAM) DateTime fromTime;
+  @Inject @Parameter(TO_TIME_PARAM) DateTime toTime;
   @Inject DatastoreService datastoreService;
   @Inject GcsDiffFileLister diffLister;
   @Inject Retrier retrier;
@@ -82,12 +86,13 @@ public class RestoreCommitLogsAction implements Runnable {
   public void run() {
     checkArgument( // safety
         RegistryEnvironment.get() == RegistryEnvironment.ALPHA
+            || RegistryEnvironment.get() == RegistryEnvironment.CRASH
             || RegistryEnvironment.get() == RegistryEnvironment.UNITTEST,
-        "DO NOT RUN ANYWHERE ELSE EXCEPT ALPHA OR TESTS.");
+        "DO NOT RUN ANYWHERE ELSE EXCEPT ALPHA, CRASH OR TESTS.");
     if (dryRun) {
       logger.info("Running in dryRun mode");
     }
-    List<GcsFileMetadata> diffFiles = diffLister.listDiffFiles(fromTime);
+    List<GcsFileMetadata> diffFiles = diffLister.listDiffFiles(fromTime, toTime);
     if (diffFiles.isEmpty()) {
       logger.info("Nothing to restore");
       return;
@@ -95,7 +100,7 @@ public class RestoreCommitLogsAction implements Runnable {
     Map<Integer, DateTime> bucketTimestamps = new HashMap<>();
     CommitLogCheckpoint lastCheckpoint = null;
     for (GcsFileMetadata metadata : diffFiles) {
-      logger.info("Restoring: " + metadata.getFilename().getObjectName());
+      logger.infofmt("Restoring: %s", metadata.getFilename().getObjectName());
       try (InputStream input = Channels.newInputStream(
           gcsService.openPrefetchingReadChannel(metadata.getFilename(), 0, BLOCK_SIZE))) {
         PeekingIterator<ImmutableObject> commitLogs =
@@ -111,25 +116,29 @@ public class RestoreCommitLogsAction implements Runnable {
       }
     }
     // Restore the CommitLogCheckpointRoot and CommitLogBuckets.
-    saveOfy(FluentIterable.from(bucketTimestamps.entrySet())
-        .transform(new Function<Entry<Integer, DateTime>, ImmutableObject> () {
-          @Override
-          public ImmutableObject apply(Entry<Integer, DateTime> entry) {
-            return new CommitLogBucket.Builder()
-                .setBucketNum(entry.getKey())
-                .setLastWrittenTime(entry.getValue())
-                .build();
-          }})
-        .append(CommitLogCheckpointRoot.create(lastCheckpoint.getCheckpointTime())));
+    saveOfy(
+        Streams.concat(
+                bucketTimestamps
+                    .entrySet()
+                    .stream()
+                    .map(
+                        entry ->
+                            new CommitLogBucket.Builder()
+                                .setBucketNum(entry.getKey())
+                                .setLastWrittenTime(entry.getValue())
+                                .build()),
+                Stream.of(CommitLogCheckpointRoot.create(lastCheckpoint.getCheckpointTime())))
+            .collect(toImmutableList()));
+    logger.info("Restore complete");
   }
 
   /**
-   * Restore the contents of one transaction to datastore.
+   * Restore the contents of one transaction to Datastore.
    *
    * <p>The objects to delete are listed in the {@link CommitLogManifest}, which will be the first
    * object in the iterable. The objects to save follow, each as a {@link CommitLogMutation}. We
    * restore by deleting the deletes and recreating the saves from their proto form. We also save
-   * the commit logs themselves back to datastore, so that the commit log system itself is
+   * the commit logs themselves back to Datastore, so that the commit log system itself is
    * transparently restored alongside the data.
    *
    * @return the manifest, for use in restoring the {@link CommitLogBucket}.
@@ -147,57 +156,36 @@ public class RestoreCommitLogsAction implements Runnable {
     try {
       deleteResult.now();
     } catch (Exception e) {
-      retry(new Runnable() {
-        @Override
-        public void run() {
-          deleteAsync(manifest.getDeletions()).now();
-        }});
+      retrier.callWithRetry(
+          () -> deleteAsync(manifest.getDeletions()).now(), RuntimeException.class);
     }
     return manifest;
   }
 
-  private void saveRaw(final List<Entity> entitiesToSave) {
+  private void saveRaw(List<Entity> entitiesToSave) {
     if (dryRun) {
-      logger.info("Would have saved " + entitiesToSave);
+      logger.infofmt("Would have saved entities: %s", entitiesToSave);
       return;
     }
-    retry(new Runnable() {
-      @Override
-      public void run() {
-        datastoreService.put(entitiesToSave);
-      }});
+    retrier.callWithRetry(() -> datastoreService.put(entitiesToSave), RuntimeException.class);
   }
 
-  private void saveOfy(final Iterable<? extends ImmutableObject> objectsToSave) {
+  private void saveOfy(Iterable<? extends ImmutableObject> objectsToSave) {
     if (dryRun) {
-      logger.info("Would have saved " + asList(objectsToSave));
+      logger.infofmt("Would have saved entities: %s", objectsToSave);
       return;
     }
-    retry(new Runnable() {
-      @Override
-      public void run() {
-        ofy().saveWithoutBackup().entities(objectsToSave).now();
-      }});
+    retrier.callWithRetry(
+        () -> ofy().saveWithoutBackup().entities(objectsToSave).now(), RuntimeException.class);
   }
 
   private Result<?> deleteAsync(Set<Key<?>> keysToDelete) {
     if (dryRun) {
-      logger.info("Would have deleted " + keysToDelete);
+      logger.infofmt("Would have deleted entities: %s", keysToDelete);
     }
     return dryRun || keysToDelete.isEmpty()
         ? new ResultNow<Void>(null)
-        : ofy().deleteWithoutBackup().entities(keysToDelete);
-   }
-
-  /** Retrier for saves and deletes, since we can't proceed with any failures. */
-  private void retry(final Runnable runnable) {
-    retrier.callWithRetry(
-        new Callable<Void>() {
-          @Override
-          public Void call() throws Exception {
-            runnable.run();
-            return null;
-          }},
-        RuntimeException.class);
+        : ofy().deleteWithoutBackup().keys(keysToDelete);
   }
+
 }

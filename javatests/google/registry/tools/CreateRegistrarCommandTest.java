@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,14 @@
 package google.registry.tools;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.CertificateSamples.SAMPLE_CERT;
 import static google.registry.testing.CertificateSamples.SAMPLE_CERT_HASH;
 import static google.registry.testing.DatastoreHelper.createTlds;
-import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.DatastoreHelper.persistNewRegistrar;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static org.joda.time.DateTimeZone.UTC;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.verify;
@@ -34,6 +37,8 @@ import google.registry.model.registrar.Registrar;
 import google.registry.testing.CertificateSamples;
 import google.registry.tools.ServerSideCommand.Connection;
 import java.io.IOException;
+import java.util.Optional;
+import org.joda.money.CurrencyUnit;
 import org.joda.time.DateTime;
 import org.junit.Before;
 import org.junit.Test;
@@ -48,29 +53,33 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
 
   @Before
   public void init() {
-    CreateRegistrarCommand.requireAddress = false;
     command.setConnection(connection);
   }
 
   @Test
   public void testSuccess() throws Exception {
     DateTime before = DateTime.now(UTC);
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
         "--iana_id=8",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
     DateTime after = DateTime.now(UTC);
 
     // Clear the cache so that the CreateAutoTimestamp field gets reloaded.
     ofy().clearSessionCache();
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
+    Optional<Registrar> registrarOptional = Registrar.loadByClientId("clientz");
+    assertThat(registrarOptional).isPresent();
+    Registrar registrar = registrarOptional.get();
     assertThat(registrar.testPassword("some_password")).isTrue();
     assertThat(registrar.getType()).isEqualTo(Registrar.Type.REAL);
     assertThat(registrar.getIanaIdentifier()).isEqualTo(8);
@@ -82,6 +91,7 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
     assertThat(registrar.getCreationTime()).isIn(Range.closed(before, after));
     assertThat(registrar.getLastUpdateTime()).isEqualTo(registrar.getCreationTime());
     assertThat(registrar.getBlockPremiumNames()).isFalse();
+    assertThat(registrar.getPremiumPriceAckRequired()).isFalse();
 
     verify(connection).send(
         eq("/_dr/admin/createGroups"),
@@ -92,40 +102,48 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
 
   @Test
   public void testSuccess_quotedPassword() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=\"some_password\"",
         "--registrar_type=REAL",
         "--iana_id=8",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.testPassword("some_password")).isTrue();
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().testPassword("some_password")).isTrue();
   }
 
   @Test
   public void testSuccess_registrarTypeFlag() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=TEST",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getType()).isEqualTo(Registrar.Type.TEST);
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getType()).isEqualTo(Registrar.Type.TEST);
   }
 
   @Test
   public void testSuccess_registrarStateFlag() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -133,32 +151,41 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--registrar_state=SUSPENDED",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getState()).isEqualTo(Registrar.State.SUSPENDED);
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getState()).isEqualTo(Registrar.State.SUSPENDED);
   }
 
   @Test
   public void testSuccess_allowedTlds() throws Exception {
     createTlds("xn--q9jyb4c", "foobar");
 
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
         "--iana_id=8",
         "--allowed_tlds=xn--q9jyb4c,foobar",
+        "--billing_account_map=USD=123abc",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getAllowedTlds()).containsExactly("xn--q9jyb4c", "foobar");
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getAllowedTlds()).containsExactly("xn--q9jyb4c", "foobar");
   }
 
   @Test
@@ -170,6 +197,11 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
         "--create_groups=false",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
     verifyZeroInteractions(connection);
@@ -191,10 +223,15 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--registrar_type=TEST",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
     assertInStdout("Registrar created, but groups creation failed with error");
     assertInStdout("BAD ROBOT NO COOKIE");
   }
@@ -208,6 +245,11 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--registrar_type=TEST",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "--force",
         "clientz");
 
@@ -216,7 +258,7 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
 
   @Test
   public void testSuccess_ipWhitelistFlag() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -224,18 +266,23 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--ip_whitelist=192.168.1.1,192.168.0.2/16",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getIpAddressWhitelist())
-        .containsExactlyElementsIn(registrar.getIpAddressWhitelist()).inOrder();
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getIpAddressWhitelist())
+        .containsExactlyElementsIn(registrar.get().getIpAddressWhitelist())
+        .inOrder();
   }
 
   @Test
   public void testSuccess_ipWhitelistFlagNull() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -243,17 +290,21 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--ip_whitelist=null",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getIpAddressWhitelist()).isEmpty();
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getIpAddressWhitelist()).isEmpty();
   }
 
   @Test
   public void testSuccess_clientCertFileFlag() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -261,18 +312,22 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--cert_file=" + getCertFilename(),
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getClientCertificateHash())
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getClientCertificateHash())
         .isEqualTo(CertificateSamples.SAMPLE_CERT_HASH);
   }
 
   @Test
   public void testSuccess_clientCertHashFlag() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -280,18 +335,22 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--cert_hash=" + SAMPLE_CERT_HASH,
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getClientCertificate()).isNull();
-    assertThat(registrar.getClientCertificateHash()).isEqualTo(SAMPLE_CERT_HASH);
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getClientCertificate()).isNull();
+    assertThat(registrar.get().getClientCertificateHash()).isEqualTo(SAMPLE_CERT_HASH);
   }
 
   @Test
   public void testSuccess_failoverClientCertFileFlag() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -299,11 +358,16 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--failover_cert_file=" + getCertFilename(),
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
+    Optional<Registrar> registrarOptional = Registrar.loadByClientId("clientz");
+    assertThat(registrarOptional).isPresent();
+    Registrar registrar = registrarOptional.get();
     assertThat(registrar.getClientCertificate()).isNull();
     assertThat(registrar.getClientCertificateHash()).isNull();
     assertThat(registrar.getFailoverClientCertificate()).isEqualTo(SAMPLE_CERT);
@@ -312,24 +376,28 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
 
   @Test
   public void testSuccess_ianaId() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
         "--iana_id=12345",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getIanaIdentifier()).isEqualTo(12345);
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getIanaIdentifier()).isEqualTo(12345);
   }
 
   @Test
   public void testSuccess_billingId() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -337,17 +405,94 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--billing_id=12345",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getBillingIdentifier()).isEqualTo(12345);
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getBillingIdentifier()).isEqualTo(12345);
+  }
+
+  @Test
+  public void testSuccess_billingAccountMap() throws Exception {
+    runCommandForced(
+        "--name=blobio",
+        "--password=some_password",
+        "--registrar_type=REAL",
+        "--iana_id=8",
+        "--billing_account_map=USD=abc123,JPY=789xyz",
+        "--passcode=01234",
+        "--icann_referral_email=foo@bar.test",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
+        "clientz");
+
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getBillingAccountMap())
+        .containsExactly(CurrencyUnit.USD, "abc123", CurrencyUnit.JPY, "789xyz");
+  }
+
+  @Test
+  public void testFailure_billingAccountMap_doesNotContainEntryForTldAllowed() throws Exception {
+    createTlds("foo");
+
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--name=blobio",
+                    "--password=some_password",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--billing_account_map=JPY=789xyz",
+                    "--allowed_tlds=foo",
+                    "--passcode=01234",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "clientz"));
+    assertThat(thrown).hasMessageThat().contains("USD");
+  }
+
+  @Test
+  public void testSuccess_billingAccountMap_onlyAppliesToRealRegistrar() throws Exception {
+    createTlds("foo");
+
+    runCommandForced(
+        "--name=blobio",
+        "--password=some_password",
+        "--registrar_type=TEST",
+        "--billing_account_map=JPY=789xyz",
+        "--allowed_tlds=foo",
+        "--passcode=01234",
+        "--icann_referral_email=foo@bar.test",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
+        "clientz");
+
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getBillingAccountMap()).containsExactly(CurrencyUnit.JPY, "789xyz");
   }
 
   @Test
   public void testSuccess_streetAddress() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -361,11 +506,11 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--cc US",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
+    Optional<Registrar> registrarOptional = Registrar.loadByClientId("clientz");
+    assertThat(registrarOptional).isPresent();
+    Registrar registrar = registrarOptional.get();
     assertThat(registrar.getLocalizedAddress()).isNotNull();
     assertThat(registrar.getLocalizedAddress().getStreet()).hasSize(3);
     assertThat(registrar.getLocalizedAddress().getStreet().get(0)).isEqualTo("1234 Main St");
@@ -379,7 +524,7 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
 
   @Test
   public void testSuccess_email() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -387,17 +532,21 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--email=foo@foo.foo",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getEmailAddress()).isEqualTo("foo@foo.foo");
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getEmailAddress()).isEqualTo("foo@foo.foo");
   }
 
   @Test
   public void testSuccess_url() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -405,17 +554,21 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--url=http://foo.foo",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getUrl()).isEqualTo("http://foo.foo");
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getUrl()).isEqualTo("http://foo.foo");
   }
 
   @Test
   public void testSuccess_phone() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -423,17 +576,21 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--phone=+1.2125556342",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getPhoneNumber()).isEqualTo("+1.2125556342");
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getPhoneNumber()).isEqualTo("+1.2125556342");
   }
 
   @Test
   public void testSuccess_optionalParamsAsNull() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=TEST",
@@ -445,11 +602,16 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--email=null",
         "--url=null",
         "--drive_id=null",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
+    Optional<Registrar> registrarOptional = Registrar.loadByClientId("clientz");
+    assertThat(registrarOptional).isPresent();
+    Registrar registrar = registrarOptional.get();
     assertThat(registrar.getIanaIdentifier()).isNull();
     assertThat(registrar.getBillingIdentifier()).isNull();
     assertThat(registrar.getPhoneNumber()).isNull();
@@ -462,7 +624,7 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
 
   @Test
   public void testSuccess_optionalParamsAsEmptyString() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=TEST",
@@ -474,11 +636,16 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--url=",
         "--drive_id=",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
+    Optional<Registrar> registrarOptional = Registrar.loadByClientId("clientz");
+    assertThat(registrarOptional).isPresent();
+    Registrar registrar = registrarOptional.get();
     assertThat(registrar.getIanaIdentifier()).isNull();
     assertThat(registrar.getBillingIdentifier()).isNull();
     assertThat(registrar.getPhoneNumber()).isNull();
@@ -490,7 +657,7 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
 
   @Test
   public void testSuccess_blockPremiumNames() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -498,17 +665,21 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--block_premium=true",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getBlockPremiumNames()).isTrue();
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getBlockPremiumNames()).isTrue();
   }
 
   @Test
   public void testSuccess_noBlockPremiumNames() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -516,47 +687,67 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--block_premium=false",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getBlockPremiumNames()).isFalse();
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getBlockPremiumNames()).isFalse();
   }
 
   @Test
   public void testFailure_badPhoneNumber() throws Exception {
-    thrown.expect(ParameterException.class, "phone");
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--phone=+1.112.555.6342",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    "--name=blobio",
+                    "--password=some_password",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--phone=+1.112.555.6342",
+                    "--passcode=01234",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "clientz"));
+    assertThat(thrown).hasMessageThat().contains("phone");
   }
 
   @Test
   public void testFailure_badPhoneNumber2() throws Exception {
-    thrown.expect(ParameterException.class, "phone");
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--phone=+1.5555555555e",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    "--name=blobio",
+                    "--password=some_password",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--phone=+1.5555555555e",
+                    "--passcode=01234",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "clientz"));
+    assertThat(thrown).hasMessageThat().contains("phone");
   }
 
   @Test
   public void testSuccess_fax() throws Exception {
-    runCommand(
+    runCommandForced(
         "--name=blobio",
         "--password=some_password",
         "--registrar_type=REAL",
@@ -564,679 +755,949 @@ public class CreateRegistrarCommandTest extends CommandTestCase<CreateRegistrarC
         "--fax=+1.2125556342",
         "--passcode=01234",
         "--icann_referral_email=foo@bar.test",
-        "--force",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
         "clientz");
 
-    Registrar registrar = Registrar.loadByClientId("clientz");
-    assertThat(registrar).isNotNull();
-    assertThat(registrar.getFaxNumber()).isEqualTo("+1.2125556342");
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getFaxNumber()).isEqualTo("+1.2125556342");
+  }
+
+  @Test
+  public void testSuccess_premiumPriceAckRequired() throws Exception {
+    runCommandForced(
+        "--name=blobio",
+        "--password=some_password",
+        "--registrar_type=REAL",
+        "--iana_id=8",
+        "--passcode=01234",
+        "--icann_referral_email=foo@bar.test",
+        "--street=\"123 Fake St\"",
+        "--city Fakington",
+        "--state MA",
+        "--zip 00351",
+        "--cc US",
+        "--premium_price_ack_required=true",
+        "clientz");
+
+    Optional<Registrar> registrar = Registrar.loadByClientId("clientz");
+    assertThat(registrar).isPresent();
+    assertThat(registrar.get().getPremiumPriceAckRequired()).isTrue();
   }
 
   @Test
   public void testFailure_missingRegistrarType() throws Exception {
-    thrown.expect(NullPointerException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--iana_id=8",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--name=blobio",
+                    "--password=some_password",
+                    "--iana_id=8",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "clientz"));
+    assertThat(thrown).hasMessageThat().contains("Registrar type cannot be null");
   }
 
   @Test
   public void testFailure_invalidRegistrarType() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=INVALID_TYPE",
-        "--iana_id=8",
-        "--force",
-        "clientz");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=INVALID_TYPE",
+                "--iana_id=8",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_invalidRegistrarState() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--registrar_state=INVALID_STATE",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--registrar_state=INVALID_STATE",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_allowedTldDoesNotExist() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--allowed_tlds=foobar",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--allowed_tlds=foobar",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_invalidIpWhitelistFlag() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--ip_whitelist=foobarbaz",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--ip_whitelist=foobarbaz",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testSuccess_ipWhitelistFlagWithNull() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--ip_whitelist=192.168.1.1,192.168.0.2/16,null",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--ip_whitelist=192.168.1.1,192.168.0.2/16,null",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_invalidCertFileContents() throws Exception {
-    thrown.expect(Exception.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--cert_file=" + writeToTmpFile("ABCDEF"),
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        Exception.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--cert_file=" + writeToTmpFile("ABCDEF"),
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_invalidFailoverCertFileContents() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--failover_cert_file=" + writeToTmpFile("ABCDEF"),
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--failover_cert_file=" + writeToTmpFile("ABCDEF"),
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_certHashAndCertFile() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--cert_file=" + getCertFilename(),
-        "--cert_hash=ABCDEF",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--cert_file=" + getCertFilename(),
+                "--cert_hash=ABCDEF",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_certHashNotBase64() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "base64");
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--cert_hash=!",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--name=blobio",
+                    "--password=some_password",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--cert_hash=!",
+                    "--passcode=01234",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "clientz"));
+    assertThat(thrown).hasMessageThat().contains("base64");
   }
 
   @Test
   public void testFailure_certHashNotA256BitValue() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "256");
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--cert_hash=abc",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--name=blobio",
+                    "--password=some_password",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--cert_hash=abc",
+                    "--passcode=01234",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "clientz"));
+    assertThat(thrown).hasMessageThat().contains("256");
   }
 
   @Test
   public void testFailure_missingName() throws Exception {
-    thrown.expect(NullPointerException.class);
-    runCommand(
-        "--password=blobio",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--password=blobio",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--passcode=01234",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "clientz"));
+    assertThat(thrown).hasMessageThat().contains("--name is a required field");
   }
 
   @Test
   public void testFailure_missingPassword() throws Exception {
-    thrown.expect(NullPointerException.class);
-    runCommand(
-        "--name=blobio",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--name=blobio",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--passcode=01234",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "clientz"));
+    assertThat(thrown).hasMessageThat().contains("--password is a required field");
   }
 
   @Test
   public void testFailure_emptyPassword() throws Exception {
-    thrown.expect(NullPointerException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=\"\"",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--name=blobio",
+                    "--password=\"\"",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--passcode=01234",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "clientz"));
+    assertThat(thrown).hasMessageThat().contains("--password is a required field");
   }
 
   @Test
   public void testFailure_clientIdTooShort() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "ab");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "ab"));
   }
 
   @Test
   public void testFailure_clientIdTooLong() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientabcdefghijk");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientabcdefghijk"));
   }
 
   @Test
   public void testFailure_missingClientId() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "--force"));
   }
 
   @Test
   public void testFailure_missingStreetLines() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--city Brooklyn",
-        "--state NY",
-        "--zip 11223",
-        "--cc US",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--city Brooklyn",
+                "--state NY",
+                "--zip 11223",
+                "--cc US",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "clientz"));
   }
 
   @Test
   public void testFailure_missingCity() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--street=\"1234 Main St\"",
-        "--street \"4th Floor\"",
-        "--street \"Suite 1\"",
-        "--state NY",
-        "--zip 11223",
-        "--cc US",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--street=\"1234 Main St\"",
+                "--street \"4th Floor\"",
+                "--street \"Suite 1\"",
+                "--state NY",
+                "--zip 11223",
+                "--cc US",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "clientz"));
   }
 
 
   @Test
   public void testFailure_missingState() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--street=\"1234 Main St\"",
-        "--street \"4th Floor\"",
-        "--street \"Suite 1\"",
-        "--city Brooklyn",
-        "--zip 11223",
-        "--cc US",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--street=\"1234 Main St\"",
+                "--street \"4th Floor\"",
+                "--street \"Suite 1\"",
+                "--city Brooklyn",
+                "--zip 11223",
+                "--cc US",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "clientz"));
   }
 
   @Test
   public void testFailure_missingZip() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--street=\"1234 Main St\"",
-        "--street \"4th Floor\"",
-        "--street \"Suite 1\"",
-        "--city Brooklyn",
-        "--state NY",
-        "--cc US",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--street=\"1234 Main St\"",
+                "--street \"4th Floor\"",
+                "--street \"Suite 1\"",
+                "--city Brooklyn",
+                "--state NY",
+                "--cc US",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "clientz"));
   }
 
   @Test
   public void testFailure_missingCc() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--street=\"1234 Main St\"",
-        "--street \"4th Floor\"",
-        "--street \"Suite 1\"",
-        "--city Brooklyn",
-        "--state NY",
-        "--zip 11223",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--street=\"1234 Main St\"",
+                "--street \"4th Floor\"",
+                "--street \"Suite 1\"",
+                "--city Brooklyn",
+                "--state NY",
+                "--zip 11223",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "clientz"));
   }
 
   @Test
   public void testFailure_invalidCc() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--street=\"1234 Main St\"",
-        "--street \"4th Floor\"",
-        "--street \"Suite 1\"",
-        "--city Brooklyn",
-        "--state NY",
-        "--zip 11223",
-        "--cc USA",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--street=\"1234 Main St\"",
+                "--street \"4th Floor\"",
+                "--street \"Suite 1\"",
+                "--city Brooklyn",
+                "--state NY",
+                "--zip 11223",
+                "--cc USA",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "clientz"));
   }
 
   @Test
   public void testFailure_tooManyStreetLines() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--street=\"Attn:Hey You Guys\"",
-        "--street=\"1234 Main St\"",
-        "--street \"4th Floor\"",
-        "--street \"Suite 1\"",
-        "--city Brooklyn",
-        "--state NY",
-        "--zip 11223",
-        "--cc US",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--street=\"Attn:Hey You Guys\"",
+                "--street=\"1234 Main St\"",
+                "--street \"4th Floor\"",
+                "--street \"Suite 1\"",
+                "--city Brooklyn",
+                "--state NY",
+                "--zip 11223",
+                "--cc US",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "clientz"));
   }
 
   @Test
   public void testFailure_tooFewStreetLines() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--street",
-        "--city Brooklyn",
-        "--state NY",
-        "--zip 11223",
-        "--cc US",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--street",
+                "--city Brooklyn",
+                "--state NY",
+                "--zip 11223",
+                "--cc US",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "clientz"));
   }
 
   @Test
   public void testFailure_missingIanaIdForRealRegistrar() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_negativeIanaId() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=-1",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=-1",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_nonIntegerIanaId() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=ABC12345",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=ABC12345",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_negativeBillingId() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--billing_id=-1",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--billing_id=-1",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_nonIntegerBillingId() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--billing_id=ABC12345",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--billing_id=ABC12345",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_missingPhonePasscode() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_missingIcannReferralEmail() throws Exception {
-    thrown.expect(NullPointerException.class, "--icann_referral_email");
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=01234",
-        "--force",
-        "clientz");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--name=blobio",
+                    "--password=some_password",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--passcode=01234",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "clientz"));
+    assertThat(thrown).hasMessageThat().contains("--icann_referral_email");
   }
 
   @Test
   public void testFailure_passcodeTooShort() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=0123",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--passcode=0123",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_passcodeTooLong() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=0123",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--passcode=0123",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_invalidPasscode() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=code1",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--passcode=code1",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_twoClientsSpecified() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "ClientY",
-        "clientz");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "ClientY",
+                "clientz"));
   }
 
   @Test
   public void testFailure_unknownFlag() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--unrecognized_flag=foo",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--unrecognized_flag=foo",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_alreadyExists() throws Exception {
-    persistResource(new Registrar.Builder()
-        .setClientId("existing")
-        .setIanaIdentifier(1L)
-        .setType(Registrar.Type.REAL)
-        .build());
-    thrown.expect(IllegalStateException.class, "Registrar existing already exists");
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "existing");
+    persistNewRegistrar("existing", "Existing Registrar", Registrar.Type.REAL, 1L);
+    IllegalStateException thrown =
+        expectThrows(
+            IllegalStateException.class,
+            () ->
+                runCommandForced(
+                    "--name=blobio",
+                    "--password=some_password",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--passcode=01234",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "existing"));
+    assertThat(thrown).hasMessageThat().contains("Registrar existing already exists");
   }
 
   @Test
   public void testFailure_registrarNameSimilarToExisting() throws Exception {
-    thrown.expect(IllegalArgumentException.class,
-        "The registrar name tHeRe GiStRaR normalizes "
-        + "identically to existing registrar name The Registrar");
-    // Normalizes identically to "The Registrar" which is created by AppEngineRule.
-    runCommand(
-        "--name=tHeRe GiStRaR",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    // Note that "tHeRe GiStRaR" normalizes identically to "The Registrar", which is created by
+    // AppEngineRule.
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--name=tHeRe GiStRaR",
+                    "--password=some_password",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--passcode=01234",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "clientz"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains(
+            "The registrar name tHeRe GiStRaR normalizes "
+                + "identically to existing registrar name The Registrar");
   }
 
   @Test
   public void testFailure_clientIdNormalizesToExisting() throws Exception {
-    thrown.expect(IllegalArgumentException.class,
-        "The registrar client identifier theregistrar "
-        + "normalizes identically to existing registrar TheRegistrar");
-    runCommand(
-        "--name=blahhh",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "theregistrar");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--name=blahhh",
+                    "--password=some_password",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--passcode=01234",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    "theregistrar"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains(
+            "The registrar client identifier theregistrar "
+                + "normalizes identically to existing registrar TheRegistrar");
   }
 
   @Test
   public void testFailure_clientIdIsInvalidFormat() throws Exception {
-    thrown.expect(IllegalArgumentException.class,
-        "Client identifier (.L33T) can only contain lowercase letters, numbers, and hyphens");
-    runCommand(
-        "--name=blahhh",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        ".L33T");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--name=blahhh",
+                    "--password=some_password",
+                    "--registrar_type=REAL",
+                    "--iana_id=8",
+                    "--passcode=01234",
+                    "--icann_referral_email=foo@bar.test",
+                    "--street=\"123 Fake St\"",
+                    "--city Fakington",
+                    "--state MA",
+                    "--zip 00351",
+                    "--cc US",
+                    ".L33T"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains(
+            "Client identifier (.L33T) can only contain lowercase letters, numbers, and hyphens");
   }
 
   @Test
   public void testFailure_phone() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--phone=3",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--phone=3",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 
   @Test
   public void testFailure_fax() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand(
-        "--name=blobio",
-        "--password=some_password",
-        "--registrar_type=REAL",
-        "--iana_id=8",
-        "--fax=3",
-        "--passcode=01234",
-        "--icann_referral_email=foo@bar.test",
-        "--force",
-        "clientz");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--name=blobio",
+                "--password=some_password",
+                "--registrar_type=REAL",
+                "--iana_id=8",
+                "--fax=3",
+                "--passcode=01234",
+                "--icann_referral_email=foo@bar.test",
+                "--street=\"123 Fake St\"",
+                "--city Fakington",
+                "--state MA",
+                "--zip 00351",
+                "--cc US",
+                "clientz"));
   }
 }

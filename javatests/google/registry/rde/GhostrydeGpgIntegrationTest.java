@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,11 +24,11 @@ import static org.junit.Assume.assumeTrue;
 import com.google.common.io.CharStreams;
 import google.registry.keyring.api.Keyring;
 import google.registry.testing.BouncyCastleProviderRule;
+import google.registry.testing.FakeKeyringModule;
 import google.registry.testing.GpgSystemCommandRule;
 import google.registry.testing.ShardableTestCase;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -50,9 +50,10 @@ public class GhostrydeGpgIntegrationTest extends ShardableTestCase {
   public final BouncyCastleProviderRule bouncy = new BouncyCastleProviderRule();
 
   @Rule
-  public final GpgSystemCommandRule gpg = new GpgSystemCommandRule(
-      RdeTestData.get("pgp-public-keyring.asc"),
-      RdeTestData.get("pgp-private-keyring-registry.asc"));
+  public final GpgSystemCommandRule gpg =
+      new GpgSystemCommandRule(
+          RdeTestData.loadBytes("pgp-public-keyring.asc"),
+          RdeTestData.loadBytes("pgp-private-keyring-registry.asc"));
 
   @DataPoints
   public static GpgCommand[] commands = new GpgCommand[] {
@@ -84,7 +85,7 @@ public class GhostrydeGpgIntegrationTest extends ShardableTestCase {
   public void test(GpgCommand cmd, BufferSize bufferSize, Filename filename, Content content)
       throws Exception {
     assumeTrue(hasCommand(cmd.get() + " --version"));
-    Keyring keyring = new RdeKeyringModule().get();
+    Keyring keyring = new FakeKeyringModule().get();
     PGPPublicKey publicKey = keyring.getRdeStagingEncryptionKey();
     File file = new File(gpg.getCwd(), "love.gpg");
     byte[] data = content.get().getBytes(UTF_8);
@@ -98,7 +99,7 @@ public class GhostrydeGpgIntegrationTest extends ShardableTestCase {
       os.write(data);
     }
 
-    Process pid = gpg.exec(cmd.get(), "--list-packets", file.getPath());
+    Process pid = gpg.exec(cmd.get(), "--list-packets", "--keyid-format", "long", file.getPath());
     String stdout = CharStreams.toString(new InputStreamReader(pid.getInputStream(), UTF_8));
     String stderr = CharStreams.toString(new InputStreamReader(pid.getErrorStream(), UTF_8));
     assertWithMessage(stderr).that(pid.waitFor()).isEqualTo(0);
@@ -106,7 +107,7 @@ public class GhostrydeGpgIntegrationTest extends ShardableTestCase {
     assertThat(stdout).contains(":encrypted data packet:");
     assertThat(stdout).contains("version 3, algo 1, keyid A59C132F3589A1D5");
     assertThat(stdout).contains("name=\"" + filename.get() + "\"");
-    assertThat(stderr).contains("encrypted with 2048-bit RSA key, ID 3589A1D5");
+    assertThat(stderr).contains("encrypted with 2048-bit RSA key, ID A59C132F3589A1D5");
 
     pid = gpg.exec(cmd.get(), "--use-embedded-filename", file.getPath());
     stderr = CharStreams.toString(new InputStreamReader(pid.getErrorStream(), UTF_8));
@@ -116,7 +117,7 @@ public class GhostrydeGpgIntegrationTest extends ShardableTestCase {
     assertThat(slurp(dataFile)).isEqualTo(content.get());
   }
 
-  private String slurp(File file) throws FileNotFoundException, IOException {
+  private String slurp(File file) throws IOException {
     return CharStreams.toString(new InputStreamReader(new FileInputStream(file), UTF_8));
   }
 

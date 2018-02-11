@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,8 +15,12 @@
 package google.registry.flows.session;
 
 import static google.registry.testing.DatastoreHelper.deleteResource;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
+import google.registry.flows.EppException;
 import google.registry.flows.EppException.UnimplementedExtensionException;
 import google.registry.flows.EppException.UnimplementedObjectServiceException;
 import google.registry.flows.EppException.UnimplementedProtocolVersionException;
@@ -42,7 +46,7 @@ public abstract class LoginFlowTestCase extends FlowTestCase<LoginFlow> {
   @Before
   public void initRegistrar() {
     sessionMetadata.setClientId(null);  // Don't implicitly log in (all other flows need to).
-    registrar = Registrar.loadByClientId("NewRegistrar");
+    registrar = loadRegistrar("NewRegistrar");
     registrarBuilder = registrar.asBuilder();
   }
 
@@ -55,15 +59,14 @@ public abstract class LoginFlowTestCase extends FlowTestCase<LoginFlow> {
   void doSuccessfulTest(String xmlFilename) throws Exception {
     setEppInput(xmlFilename);
     assertTransactionalFlow(false);
-    runFlowAssertResponse(readFile("login_response.xml"));
+    runFlowAssertResponse(loadFile("login_response.xml"));
   }
 
   // Also called in subclasses.
-  void doFailingTest(String xmlFilename, Class<? extends Exception> exception)
-      throws Exception {
+  void doFailingTest(String xmlFilename, Class<? extends EppException> exception) throws Exception {
     setEppInput(xmlFilename);
-    thrown.expect(exception);
-    runFlow();
+    EppException thrown = expectThrows(exception, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test

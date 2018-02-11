@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 package google.registry.testing.mapreduce;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.config.RegistryConfig.getEppResourceIndexBucketCount;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -32,8 +33,6 @@ import com.google.appengine.tools.pipeline.impl.servlets.PipelineServlet;
 import com.google.appengine.tools.pipeline.impl.servlets.TaskHandler;
 import com.google.apphosting.api.ApiProxy;
 import com.google.common.base.CharMatcher;
-import com.google.common.base.Optional;
-import google.registry.config.RegistryEnvironment;
 import google.registry.mapreduce.MapreduceRunner;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.FakeClock;
@@ -47,6 +46,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import javax.annotation.Nullable;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -88,8 +88,7 @@ public abstract class MapreduceTestCase<T> extends ShardableTestCase {
   }
 
   protected MapreduceRunner makeDefaultRunner() {
-    int numBuckets = RegistryEnvironment.get().config().getEppResourceIndexBucketCount();
-    return new MapreduceRunner(Optional.<Integer>of(numBuckets), Optional.<Integer>of(1));
+    return new MapreduceRunner(Optional.of(getEppResourceIndexBucketCount()), Optional.of(1));
   }
 
   protected List<QueueStateInfo.TaskStateInfo> getTasks(String queueName) {
@@ -115,6 +114,8 @@ public abstract class MapreduceTestCase<T> extends ShardableTestCase {
     String pathInfo = taskStateInfo.getUrl();
     if (pathInfo.startsWith("/_dr/mapreduce/")) {
       pathInfo = pathInfo.replace("/_dr/mapreduce", "");
+    } else if (pathInfo.startsWith("/mapreduce/")) {
+        pathInfo = pathInfo.replace("/mapreduce", "");
     } else if (pathInfo.startsWith("/")) {
       pathInfo = pathInfo.replace("/_ah/", "");
       pathInfo = pathInfo.substring(pathInfo.indexOf('/'));
@@ -158,6 +159,12 @@ public abstract class MapreduceTestCase<T> extends ShardableTestCase {
     }
   }
 
+  /**
+   * Executes tasks in the mapreduce queue until all are finished.
+   *
+   * <p>If you are mocking a clock in your tests, use the
+   * {@link #executeTasksUntilEmpty(String, FakeClock)} version instead.
+   */
   protected void executeTasksUntilEmpty(String queueName) throws Exception {
     executeTasksUntilEmpty(queueName, null);
   }
@@ -168,9 +175,25 @@ public abstract class MapreduceTestCase<T> extends ShardableTestCase {
    * <p>Incrementing the clock between tasks is important if tasks have transactions inside the
    * mapper or reducer, which don't have access to the fake clock.
    */
-  protected void
-      executeTasksUntilEmpty(String queueName, @Nullable FakeClock clock) throws Exception {
-    while (true) {
+  protected void executeTasksUntilEmpty(String queueName, @Nullable FakeClock clock)
+      throws Exception {
+    executeTasks(queueName, clock, Optional.empty());
+  }
+
+  /**
+   * Executes mapreduce tasks, increment the clock between each task.
+   *
+   * <p>Incrementing the clock between tasks is important if tasks have transactions inside the
+   * mapper or reducer, which don't have access to the fake clock.
+   *
+   * <p>The maxTasks parameter determines how many tasks (at most) will be run. If maxTasks is
+   * absent(), all tasks are run until the queue is empty. If maxTasks is zero, no tasks are run.
+   */
+  protected void executeTasks(
+      String queueName, @Nullable FakeClock clock, Optional<Integer> maxTasks) throws Exception {
+    for (int numTasksDeleted = 0;
+        !maxTasks.isPresent() || (numTasksDeleted < maxTasks.get());
+        numTasksDeleted++) {
       ofy().clearSessionCache();
       // We have to re-acquire task list every time, because local implementation returns a copy.
       List<QueueStateInfo.TaskStateInfo> taskInfo =

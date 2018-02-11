@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package google.registry.rde;
 
 import static com.google.common.io.BaseEncoding.base16;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.persistEppResource;
@@ -26,8 +27,6 @@ import static google.registry.xjc.rgp.XjcRgpStatusValueType.TRANSFER_PERIOD;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.joda.money.CurrencyUnit.USD;
 
-import com.google.common.base.Function;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.net.InetAddresses;
@@ -54,12 +53,10 @@ import google.registry.model.poll.PollMessage.Autorenew;
 import google.registry.model.rde.RdeMode;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.model.transfer.TransferData;
-import google.registry.model.transfer.TransferData.TransferServerApproveEntity;
 import google.registry.model.transfer.TransferStatus;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.FakeClock;
 import google.registry.util.Idn;
-import google.registry.xjc.domain.XjcDomainContactType;
 import google.registry.xjc.domain.XjcDomainStatusType;
 import google.registry.xjc.domain.XjcDomainStatusValueType;
 import google.registry.xjc.rde.XjcRdeContentsType;
@@ -69,7 +66,6 @@ import google.registry.xjc.rde.XjcRdeMenuType;
 import google.registry.xjc.rdedomain.XjcRdeDomain;
 import google.registry.xjc.rdedomain.XjcRdeDomainElement;
 import google.registry.xjc.rgp.XjcRgpStatusType;
-import google.registry.xjc.rgp.XjcRgpStatusValueType;
 import google.registry.xjc.secdns.XjcSecdnsDsDataType;
 import java.io.ByteArrayOutputStream;
 import org.joda.money.Money;
@@ -109,13 +105,11 @@ public class DomainResourceToXjcConverterTest {
 
     assertThat(bean.getClID()).isEqualTo("GetTheeBack");
 
-    assertThat(FluentIterable
-        .from(bean.getContacts())
-        .transform(new Function<XjcDomainContactType, String>() {
-          @Override
-          public String apply(XjcDomainContactType input) {
-            return String.format("%s %s", input.getType().toString(), input.getValue());
-          }})).containsExactly("ADMIN 5372808-IRL", "TECH 5372808-TRL");
+    assertThat(
+            bean.getContacts()
+                .stream()
+                .map(input -> String.format("%s %s", input.getType().toString(), input.getValue())))
+        .containsExactly("ADMIN 5372808-IRL", "TECH 5372808-TRL");
 
     assertThat(bean.getCrDate()).isEqualTo(DateTime.parse("1900-01-01T00:00:00Z"));
 
@@ -150,13 +144,8 @@ public class DomainResourceToXjcConverterTest {
     //    "pendingDelete" sub-statuses, including "redemptionPeriod",
     //    "pendingRestore", and "pendingDelete", that a domain name can be
     //    in as a result of grace period processing as specified in [RFC3915].
-    assertThat(FluentIterable
-        .from(bean.getRgpStatuses())
-        .transform(new Function<XjcRgpStatusType, XjcRgpStatusValueType>() {
-          @Override
-          public XjcRgpStatusValueType apply(XjcRgpStatusType status) {
-            return status.getS();
-          }})).containsExactly(TRANSFER_PERIOD, RENEW_PERIOD);
+    assertThat(bean.getRgpStatuses().stream().map(XjcRgpStatusType::getS))
+        .containsExactly(TRANSFER_PERIOD, RENEW_PERIOD);
 
     assertThat(bean.getSecDNS()).named("secdns").isNotNull();
     assertThat(bean.getSecDNS().getDsDatas()).named("secdns dsdata").isNotNull();
@@ -170,19 +159,12 @@ public class DomainResourceToXjcConverterTest {
 
     assertThat(bean.getRoid()).isEqualTo("2-Q9JYB4C");
 
-    assertThat(
-        FluentIterable
-            .from(bean.getStatuses())
-            .transform(new Function<XjcDomainStatusType, XjcDomainStatusValueType>() {
-              @Override
-              public XjcDomainStatusValueType apply(XjcDomainStatusType status) {
-                return status.getS();
-              }})
-            ).containsExactly(
-                XjcDomainStatusValueType.CLIENT_DELETE_PROHIBITED,
-                XjcDomainStatusValueType.CLIENT_RENEW_PROHIBITED,
-                XjcDomainStatusValueType.CLIENT_TRANSFER_PROHIBITED,
-                XjcDomainStatusValueType.SERVER_UPDATE_PROHIBITED);
+    assertThat(bean.getStatuses().stream().map(XjcDomainStatusType::getS))
+        .containsExactly(
+            XjcDomainStatusValueType.CLIENT_DELETE_PROHIBITED,
+            XjcDomainStatusValueType.CLIENT_RENEW_PROHIBITED,
+            XjcDomainStatusValueType.CLIENT_TRANSFER_PROHIBITED,
+            XjcDomainStatusValueType.SERVER_UPDATE_PROHIBITED);
 
     assertThat(bean.getTrDate()).isEqualTo(DateTime.parse("1910-01-01T00:00:00Z"));
 
@@ -266,7 +248,7 @@ public class DomainResourceToXjcConverterTest {
                     "bird or fiend!? i shrieked upstarting", "bog@cat.みんな")))))
         .setCreationClientId("LawyerCat")
         .setCreationTimeForTest(DateTime.parse("1900-01-01T00:00:00Z"))
-        .setCurrentSponsorClientId("GetTheeBack")
+        .setPersistedCurrentSponsorClientId("GetTheeBack")
         .setDsData(ImmutableSet.of(DelegationSignerData.create(
               123, 200, 230, base16().decode("1234567890"))))
         .setFullyQualifiedDomainName(Idn.toASCII("love.みんな"))
@@ -324,7 +306,6 @@ public class DomainResourceToXjcConverterTest {
                     .setParent(historyEntry)
                     .build())))
         .setTransferData(new TransferData.Builder()
-            .setExtendedRegistrationYears(1)
             .setGainingClientId("gaining")
             .setLosingClientId("losing")
             .setPendingTransferExpirationTime(DateTime.parse("1925-04-20T00:00:00Z"))
@@ -349,11 +330,11 @@ public class DomainResourceToXjcConverterTest {
                     .setMsg("Domain was auto-renewed.")
                     .setParent(historyEntry)
                     .build())))
-            .setServerApproveEntities(ImmutableSet.<Key<? extends TransferServerApproveEntity>>of(
+            .setServerApproveEntities(ImmutableSet.of(
                 Key.create(billingEvent)))
             .setTransferRequestTime(DateTime.parse("1919-01-01T00:00:00Z"))
             .setTransferStatus(TransferStatus.PENDING)
-            .setTransferRequestTrid(Trid.create("client trid"))
+            .setTransferRequestTrid(Trid.create("client-trid", "server-trid"))
             .build())
         .build();
     clock.advanceOneMilli();
@@ -367,7 +348,7 @@ public class DomainResourceToXjcConverterTest {
         new ContactResource.Builder()
             .setContactId(id)
             .setEmailAddress(email)
-            .setCurrentSponsorClientId("GetTheeBack")
+            .setPersistedCurrentSponsorClientId("GetTheeBack")
             .setCreationClientId("GetTheeBack")
             .setCreationTimeForTest(END_OF_TIME)
             .setInternationalizedPostalInfo(new PostalInfo.Builder()
@@ -401,16 +382,14 @@ public class DomainResourceToXjcConverterTest {
         new HostResource.Builder()
             .setCreationClientId("LawyerCat")
             .setCreationTimeForTest(DateTime.parse("1900-01-01T00:00:00Z"))
-            .setCurrentSponsorClientId("BusinessCat")
+            .setPersistedCurrentSponsorClientId("BusinessCat")
             .setFullyQualifiedHostName(Idn.toASCII(fqhn))
             .setInetAddresses(ImmutableSet.of(InetAddresses.forString(ip)))
             .setLastTransferTime(DateTime.parse("1910-01-01T00:00:00Z"))
             .setLastEppUpdateClientId("CeilingCat")
             .setLastEppUpdateTime(DateTime.parse("1920-01-01T00:00:00Z"))
             .setRepoId(repoId)
-            .setStatusValues(ImmutableSet.of(
-                StatusValue.OK,
-                StatusValue.PENDING_UPDATE))
+            .setStatusValues(ImmutableSet.of(StatusValue.OK))
             .build());
   }
 }

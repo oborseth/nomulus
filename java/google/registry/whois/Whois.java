@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 package google.registry.whois;
 
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.util.Clock;
 import java.io.IOException;
 import java.io.StringReader;
@@ -26,23 +26,26 @@ public final class Whois {
 
   private final Clock clock;
   private final String disclaimer;
+  private final WhoisReader whoisReader;
 
   @Inject
-  public Whois(Clock clock, @Config("whoisDisclaimer") String disclaimer) {
+  public Whois(Clock clock, @Config("whoisDisclaimer") String disclaimer, WhoisReader whoisReader) {
     this.clock = clock;
     this.disclaimer = disclaimer;
+    this.whoisReader = whoisReader;
   }
 
   /** Performs a WHOIS lookup on a plaintext query string. */
   public String lookup(String query, boolean preferUnicode) {
     DateTime now = clock.nowUtc();
     try {
-      return new WhoisReader(new StringReader(query), now)
-          .readCommand()
+      return whoisReader
+          .readCommand(new StringReader(query), now)
           .executeQuery(now)
-          .getPlainTextOutput(preferUnicode, disclaimer);
+          .getResponse(preferUnicode, disclaimer)
+          .plainTextOutput();
     } catch (WhoisException e) {
-      return e.getPlainTextOutput(preferUnicode, disclaimer);
+      return e.getResponse(preferUnicode, disclaimer).plainTextOutput();
     } catch (IOException e) {
       throw new RuntimeException(e);
     }

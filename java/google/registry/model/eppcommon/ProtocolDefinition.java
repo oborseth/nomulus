@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,9 @@
 
 package google.registry.model.eppcommon;
 
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Maps.uniqueIndex;
 
-import com.google.common.base.Function;
-import com.google.common.base.Predicate;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import google.registry.model.domain.allocate.AllocateCreateExtension;
@@ -28,7 +26,6 @@ import google.registry.model.domain.fee11.FeeCheckCommandExtensionV11;
 import google.registry.model.domain.fee11.FeeCheckResponseExtensionV11;
 import google.registry.model.domain.fee12.FeeCheckCommandExtensionV12;
 import google.registry.model.domain.fee12.FeeCheckResponseExtensionV12;
-import google.registry.model.domain.flags.FlagsCheckCommandExtension;
 import google.registry.model.domain.launch.LaunchCreateExtension;
 import google.registry.model.domain.metadata.MetadataExtension;
 import google.registry.model.domain.rgp.RgpUpdateExtension;
@@ -36,7 +33,6 @@ import google.registry.model.domain.secdns.SecDnsCreateExtension;
 import google.registry.model.eppinput.EppInput.CommandExtension;
 import google.registry.model.eppoutput.EppResponse.ResponseExtension;
 import java.util.EnumSet;
-import java.util.Set;
 import javax.xml.bind.annotation.XmlSchema;
 
 /** Constants that define the EPP protocol version we support. */
@@ -45,10 +41,11 @@ public class ProtocolDefinition {
 
   public static final String LANGUAGE = "en";
 
-  public static final Set<String> SUPPORTED_OBJECT_SERVICES = ImmutableSet.of(
-      "urn:ietf:params:xml:ns:host-1.0",
-      "urn:ietf:params:xml:ns:domain-1.0",
-      "urn:ietf:params:xml:ns:contact-1.0");
+  public static final ImmutableSet<String> SUPPORTED_OBJECT_SERVICES =
+      ImmutableSet.of(
+          "urn:ietf:params:xml:ns:host-1.0",
+          "urn:ietf:params:xml:ns:domain-1.0",
+          "urn:ietf:params:xml:ns:contact-1.0");
 
   /** Enums repesenting valid service extensions that are recognized by the server. */
   public enum ServiceExtension {
@@ -58,14 +55,13 @@ public class ProtocolDefinition {
     FEE_0_6(FeeCheckCommandExtensionV06.class, FeeCheckResponseExtensionV06.class, true),
     FEE_0_11(FeeCheckCommandExtensionV11.class, FeeCheckResponseExtensionV11.class, true),
     FEE_0_12(FeeCheckCommandExtensionV12.class, FeeCheckResponseExtensionV12.class, true),
-    FLAGS_0_1(FlagsCheckCommandExtension.class, null, true),
     ALLOCATE_1_0(AllocateCreateExtension.class, null, false),
     METADATA_1_0(MetadataExtension.class, null, false);
 
     private final Class<? extends CommandExtension> commandExtensionClass;
     private final Class<? extends ResponseExtension> responseExtensionClass;
-    private String uri;
-    private boolean visible;
+    private final String uri;
+    private final boolean visible;
 
     ServiceExtension(
         Class<? extends CommandExtension> commandExtensionClass,
@@ -99,17 +95,13 @@ public class ProtocolDefinition {
     }
   }
 
-  /** Converts a service extension enum to its URI. */
-  private static final Function<ServiceExtension, String> TO_URI_FUNCTION =
-      new Function<ServiceExtension, String>() {
-        @Override
-        public String apply(ServiceExtension serviceExtension) {
-          return serviceExtension.getUri();
-        }};
-
-  /** This stores a map from URI back to the service extension enum. */
+  /**
+   * Converts a service extension enum to its URI.
+   *
+   *  <p>This stores a map from URI back to the service extension enum.
+   */
   private static final ImmutableMap<String, ServiceExtension> serviceExtensionByUri =
-      uniqueIndex(EnumSet.allOf(ServiceExtension.class), TO_URI_FUNCTION);
+      uniqueIndex(EnumSet.allOf(ServiceExtension.class), ServiceExtension::getUri);
 
   /** Returns the service extension enum associated with a URI, or null if none are associated. */
   public static ServiceExtension getServiceExtensionFromUri(String uri) {
@@ -118,16 +110,11 @@ public class ProtocolDefinition {
 
   /** A set of all the visible extension URIs. */
   private static final ImmutableSet<String> visibleServiceExtensionUris =
-      FluentIterable.from(EnumSet.allOf(ServiceExtension.class))
-          .filter(
-              new Predicate<ServiceExtension>() {
-                @Override
-                public boolean apply(ServiceExtension serviceExtension) {
-                  return serviceExtension.getVisible();
-                }
-              })
-          .transform(TO_URI_FUNCTION)
-          .toSet();
+      EnumSet.allOf(ServiceExtension.class)
+          .stream()
+          .filter(ServiceExtension::getVisible)
+          .map(ServiceExtension::getUri)
+          .collect(toImmutableSet());
 
   /** Return the set of all visible service extension URIs. */
   public static ImmutableSet<String> getVisibleServiceExtensionUris() {

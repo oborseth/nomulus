@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,12 +14,11 @@
 
 package google.registry.tools.server;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 
-import com.google.common.base.Function;
-import com.google.common.base.Functions;
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableBiMap;
@@ -28,18 +27,22 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.ImmutableTable;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Ordering;
+import com.google.common.collect.Streams;
 import google.registry.model.ImmutableObject;
 import google.registry.request.JsonResponse;
 import google.registry.request.Parameter;
+import google.registry.util.FormattingLogger;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Stream;
 import javax.inject.Inject;
 
 /**
@@ -50,6 +53,8 @@ import javax.inject.Inject;
  * @param <T> type of object
  */
 public abstract class ListObjectsAction<T extends ImmutableObject> implements Runnable {
+
+  private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
 
   public static final String FIELDS_PARAM = "fields";
   public static final String PRINT_HEADER_ROW_PARAM = "printHeaderRow";
@@ -115,14 +120,14 @@ public abstract class ListObjectsAction<T extends ImmutableObject> implements Ru
       response.setPayload(ImmutableMap.of(
           "lines", lines,
           "status", "success"));
-    } catch (Exception e) {
-      String message = e.getMessage();
-      if (message == null) {
-        message = e.getClass().getName();
-      }
-      response.setPayload(ImmutableMap.of(
-          "error", message,
-          "status", "error"));
+    } catch (IllegalArgumentException e) {
+      logger.warning(e, "Error while listing objects.");
+      // Don't return a non-200 response, since that will cause RegistryTool to barf instead of
+      // letting ListObjectsCommand parse the JSON response and return a clean error.
+      response.setPayload(
+          ImmutableMap.of(
+              "error", firstNonNull(e.getMessage(), e.getClass().getName()),
+              "status", "error"));
     }
   }
 
@@ -146,14 +151,9 @@ public abstract class ListObjectsAction<T extends ImmutableObject> implements Ru
     final ImmutableMap<String, String> nameMapping =
         ((fullFieldNames != null) && fullFieldNames.isPresent() && fullFieldNames.get())
             ? getFieldAliases() : getFieldAliases().inverse();
-    return ImmutableSet.copyOf(Iterables.transform(
-        Iterables.concat(getPrimaryKeyFields(), fieldsToUse),
-        new Function<String, String>() {
-          @Override
-          public String apply(String field) {
-            // Rename fields that are in the map according to the map, and leave the others as is.
-            return nameMapping.containsKey(field) ? nameMapping.get(field) : field;
-          }}));
+    return Streams.concat(getPrimaryKeyFields().stream(), fieldsToUse.stream())
+        .map(field -> nameMapping.getOrDefault(field, field))
+        .collect(toImmutableSet());
   }
 
   /**
@@ -186,8 +186,7 @@ public abstract class ListObjectsAction<T extends ImmutableObject> implements Ru
       fieldMap.putAll(getFieldOverrides(object));
       // Next, add to the mapping all the aliases, with their values defined as whatever was in the
       // map under the aliased field's original name.
-      fieldMap.putAll(
-          Maps.transformValues(getFieldAliases(), Functions.forMap(new HashMap<>(fieldMap))));
+      fieldMap.putAll(new HashMap<>(Maps.transformValues(getFieldAliases(), fieldMap::get)));
       Set<String> expectedFields = ImmutableSortedSet.copyOf(fieldMap.keySet());
       for (String field : fields) {
         checkArgument(fieldMap.containsKey(field),
@@ -205,22 +204,16 @@ public abstract class ListObjectsAction<T extends ImmutableObject> implements Ru
    */
   private static ImmutableMap<String, Integer> computeColumnWidths(
       ImmutableTable<?, String, String> data, final boolean includingHeader) {
-    return ImmutableMap.copyOf(Maps.transformEntries(
-        data.columnMap(),
-        new Maps.EntryTransformer<String, Map<?, String>, Integer>() {
-          @Override
-          public Integer transformEntry(String columnName, Map<?, String> columnValues) {
-            // Return the length of the longest string in this column (including the column name).
-            return Ordering.natural().max(Iterables.transform(
-                Iterables.concat(
-                    ImmutableList.of(includingHeader ? columnName : ""),
-                    columnValues.values()),
-                new Function<String, Integer>() {
-                    @Override
-                    public Integer apply(String value) {
-                      return value.length();
-                    }}));
-          }}));
+    return ImmutableMap.copyOf(
+        Maps.transformEntries(
+            data.columnMap(),
+            (columnName, columnValues) ->
+                Streams.concat(
+                        Stream.of(includingHeader ? columnName : ""),
+                        columnValues.values().stream())
+                    .map(String::length)
+                    .max(Ordering.natural())
+                    .get()));
   }
 
   /**
@@ -241,17 +234,12 @@ public abstract class ListObjectsAction<T extends ImmutableObject> implements Ru
 
     if (isHeaderRowInUse(data)) {
       // Add a row of headers (column names mapping to themselves).
-      Map<String, String> headerRow =
-          Maps.asMap(data.columnKeySet(), Functions.<String>identity());
+      Map<String, String> headerRow = Maps.asMap(data.columnKeySet(), key -> key);
       lines.add(rowFormatter.apply(headerRow));
 
       // Add a row of separator lines (column names mapping to '-' * column width).
-      Map<String, String> separatorRow = Maps.transformValues(columnWidths,
-          new Function<Integer, String>() {
-            @Override
-            public String apply(Integer width) {
-              return Strings.repeat("-", width);
-            }});
+      Map<String, String> separatorRow =
+          Maps.transformValues(columnWidths, width -> Strings.repeat("-", width));
       lines.add(rowFormatter.apply(separatorRow));
     }
 
@@ -271,14 +259,12 @@ public abstract class ListObjectsAction<T extends ImmutableObject> implements Ru
    */
   private static Function<Map<String, String>, String> makeRowFormatter(
       final Map<String, Integer> columnWidths) {
-    return new Function<Map<String, String>, String>() {
-        @Override
-        public String apply(Map<String, String> rowByColumns) {
-          List<String> paddedFields = new ArrayList<>();
-          for (Map.Entry<String, String> cell : rowByColumns.entrySet()) {
-            paddedFields.add(Strings.padEnd(cell.getValue(), columnWidths.get(cell.getKey()), ' '));
-          }
-          return Joiner.on("  ").join(paddedFields);
-        }};
+    return rowByColumns -> {
+      List<String> paddedFields = new ArrayList<>();
+      for (Map.Entry<String, String> cell : rowByColumns.entrySet()) {
+        paddedFields.add(Strings.padEnd(cell.getValue(), columnWidths.get(cell.getKey()), ' '));
+      }
+      return Joiner.on("  ").join(paddedFields);
+    };
   }
 }

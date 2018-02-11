@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,16 +16,15 @@ package google.registry.model.tmch;
 
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.ofy.ObjectifyService.ofy;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.google.common.collect.ImmutableMap;
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.VoidWork;
 import google.registry.model.tmch.ClaimsListShard.ClaimsListRevision;
 import google.registry.model.tmch.ClaimsListShard.UnshardedSaveException;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.InjectRule;
 import java.util.HashMap;
 import java.util.List;
@@ -47,9 +46,6 @@ public class ClaimsListShardTest {
       .build();
 
   @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Rule
   public final InjectRule inject = new InjectRule();
 
   @Before
@@ -59,16 +55,19 @@ public class ClaimsListShardTest {
 
   @Test
   public void test_unshardedSaveFails() throws Exception {
-    thrown.expect(UnshardedSaveException.class);
-    ofy().transact(new VoidWork() {
-      @Override
-      public void vrun() {
-        ClaimsListShard claimsList =
-            ClaimsListShard.create(ofy().getTransactionTime(), ImmutableMap.of("a", "b"));
-        claimsList.id = 1;  // Without an id this won't save anyways.
-        claimsList.parent = ClaimsListRevision.createKey();
-        ofy().saveWithoutBackup().entity(claimsList).now();
-      }});
+    assertThrows(
+        UnshardedSaveException.class,
+        () ->
+            ofy()
+                .transact(
+                    () -> {
+                      ClaimsListShard claimsList =
+                          ClaimsListShard.create(
+                              ofy().getTransactionTime(), ImmutableMap.of("a", "b"));
+                      claimsList.id = 1; // Without an id this won't save anyways.
+                      claimsList.parent = ClaimsListRevision.createKey();
+                      ofy().saveWithoutBackup().entity(claimsList).now();
+                    }));
   }
 
   @Test

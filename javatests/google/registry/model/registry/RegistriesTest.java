@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,12 @@
 package google.registry.model.registry;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.testing.DatastoreHelper.createTlds;
+import static google.registry.testing.JUnitBackports.assertThrows;
 
 import com.google.common.net.InternetDomainName;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -31,10 +32,6 @@ public class RegistriesTest {
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder().withDatastore().build();
-
-  @Rule
-  public ExceptionRule thrown = new ExceptionRule();
-
   private void initTestTlds() {
     createTlds("foo", "a.b.c"); // Test a multipart tld.
   }
@@ -60,8 +57,7 @@ public class RegistriesTest {
   @Test
   public void testAssertTldExists_doesntExist() {
     initTestTlds();
-    thrown.expect(IllegalArgumentException.class);
-    Registries.assertTldExists("baz");
+    assertThrows(IllegalArgumentException.class, () -> Registries.assertTldExists("baz"));
   }
 
   @Test
@@ -72,13 +68,13 @@ public class RegistriesTest {
     assertThat(Registries.findTldForName(InternetDomainName.from("x.y.a.b.c")).get().toString())
         .isEqualTo("a.b.c");
     // We don't have an "example" tld.
-    assertThat(Registries.findTldForName(InternetDomainName.from("foo.example"))).isAbsent();
+    assertThat(Registries.findTldForName(InternetDomainName.from("foo.example"))).isEmpty();
     // A tld is not a match for itself.
-    assertThat(Registries.findTldForName(InternetDomainName.from("foo"))).isAbsent();
+    assertThat(Registries.findTldForName(InternetDomainName.from("foo"))).isEmpty();
     // The name must match the entire tld.
-    assertThat(Registries.findTldForName(InternetDomainName.from("x.y.a.b"))).isAbsent();
-    assertThat(Registries.findTldForName(InternetDomainName.from("x.y.b.c"))).isAbsent();
+    assertThat(Registries.findTldForName(InternetDomainName.from("x.y.a.b"))).isEmpty();
+    assertThat(Registries.findTldForName(InternetDomainName.from("x.y.b.c"))).isEmpty();
     // Substring tld matches aren't considered.
-    assertThat(Registries.findTldForName(InternetDomainName.from("example.barfoo"))).isAbsent();
+    assertThat(Registries.findTldForName(InternetDomainName.from("example.barfoo"))).isEmpty();
   }
 }

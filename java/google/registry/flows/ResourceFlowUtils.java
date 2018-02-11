@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,24 +14,25 @@
 
 package google.registry.flows;
 
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.Sets.intersection;
 import static google.registry.model.EppResourceUtils.loadByForeignKey;
-import static google.registry.model.EppResourceUtils.queryDomainsUsingResource;
+import static google.registry.model.EppResourceUtils.queryForLinkedDomains;
 import static google.registry.model.domain.DomainResource.extendRegistrationWithCap;
+import static google.registry.model.index.ForeignKeyIndex.loadAndGetKey;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
-import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.Work;
 import google.registry.flows.EppException.AuthorizationErrorException;
 import google.registry.flows.EppException.InvalidAuthorizationInformationErrorException;
 import google.registry.flows.EppException.ObjectDoesNotExistException;
+import google.registry.flows.EppException.ParameterValuePolicyErrorException;
+import google.registry.flows.EppException.ParameterValueRangeErrorException;
 import google.registry.flows.exceptions.MissingTransferRequestAuthInfoException;
 import google.registry.flows.exceptions.NotPendingTransferException;
 import google.registry.flows.exceptions.NotTransferInitiatorException;
@@ -41,12 +42,13 @@ import google.registry.flows.exceptions.ResourceToDeleteIsReferencedException;
 import google.registry.flows.exceptions.TooManyResourceChecksException;
 import google.registry.model.EppResource;
 import google.registry.model.EppResource.Builder;
+import google.registry.model.EppResource.BuilderWithTransferData;
 import google.registry.model.EppResource.ForeignKeyedEppResource;
+import google.registry.model.EppResource.ResourceWithTransferData;
 import google.registry.model.contact.ContactResource;
 import google.registry.model.domain.DomainBase;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.eppcommon.AuthInfo;
-import google.registry.model.eppcommon.AuthInfo.BadAuthInfoException;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.eppcommon.Trid;
 import google.registry.model.index.ForeignKeyIndex;
@@ -61,11 +63,16 @@ import google.registry.model.transfer.TransferResponse.ContactTransferResponse;
 import google.registry.model.transfer.TransferResponse.DomainTransferResponse;
 import google.registry.model.transfer.TransferStatus;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import org.joda.time.DateTime;
 
-/** Static utility functions for resource transfer flows. */
-public class ResourceFlowUtils {
+/** Static utility functions for resource flows. */
+public final class ResourceFlowUtils {
+
+  private ResourceFlowUtils() {}
 
   /** Statuses for which an exDate should be added to transfer responses. */
   private static final ImmutableSet<TransferStatus> ADD_EXDATE_STATUSES = Sets.immutableEnumSet(
@@ -86,15 +93,14 @@ public class ResourceFlowUtils {
       builder = new ContactTransferResponse.Builder().setContactId(eppResource.getForeignKey());
     } else {
       DomainResource domain = (DomainResource) eppResource;
-      builder = new DomainTransferResponse.Builder()
-          .setFullyQualifiedDomainNameName(eppResource.getForeignKey())
-          .setExtendedRegistrationExpirationTime(
-              ADD_EXDATE_STATUSES.contains(transferData.getTransferStatus())
-                  ? extendRegistrationWithCap(
-                      now,
-                      domain.getRegistrationExpirationTime(),
-                      transferData.getExtendedRegistrationYears())
-                  : null);
+      builder =
+          new DomainTransferResponse.Builder()
+              .setFullyQualifiedDomainName(eppResource.getForeignKey())
+              // TODO(b/25084229): fix exDate computation logic.
+              .setExtendedRegistrationExpirationTime(
+                  ADD_EXDATE_STATUSES.contains(transferData.getTransferStatus())
+                      ? extendRegistrationWithCap(now, domain.getRegistrationExpirationTime(), 1)
+                      : null);
     }
     builder.setGainingClientId(transferData.getGainingClientId())
         .setLosingClientId(transferData.getLosingClientId())
@@ -130,36 +136,9 @@ public class ResourceFlowUtils {
   /** Check that the given clientId corresponds to the owner of given resource. */
   public static void verifyResourceOwnership(String myClientId, EppResource resource)
       throws EppException {
-    if (!myClientId.equals(resource.getCurrentSponsorClientId())) {
+    if (!myClientId.equals(resource.getPersistedCurrentSponsorClientId())) {
       throw new ResourceNotOwnedException();
     }
-  }
-
-  /**
-   * Performs common deletion operations on an EPP resource and returns a builder for further
-   * modifications. This is broken out into ResourceFlowUtils in order to expose the functionality
-   * to async flows (i.e. mapreduces).
-   */
-  @SuppressWarnings("unchecked")
-  public static <R extends EppResource> Builder<R, ? extends Builder<R, ?>>
-      prepareDeletedResourceAsBuilder(R resource, DateTime now) {
-    Builder<R, ? extends Builder<R, ?>> builder =
-        (Builder<R, ? extends Builder<R, ?>>) resource.asBuilder()
-            .setDeletionTime(now)
-            .setStatusValues(null)
-            .setTransferData(
-                resource.getStatusValues().contains(StatusValue.PENDING_TRANSFER)
-                    ? resource.getTransferData().asBuilder()
-                        .setTransferStatus(TransferStatus.SERVER_CANCELLED)
-                        .setServerApproveEntities(null)
-                        .setServerApproveBillingEvent(null)
-                        .setServerApproveAutorenewEvent(null)
-                        .setServerApproveAutorenewPollMessage(null)
-                        .setPendingTransferExpirationTime(null)
-                        .build()
-                    : resource.getTransferData())
-            .wipeOut();
-    return builder;
   }
 
   /** Update the relevant {@link ForeignKeyIndex} to cache the new deletion time. */
@@ -170,8 +149,9 @@ public class ResourceFlowUtils {
   }
 
   /** If there is a transfer out, delete the server-approve entities and enqueue a poll message. */
-  public static <R extends EppResource> void handlePendingTransferOnDelete(
-      R resource, R newResource, DateTime now, HistoryEntry historyEntry) {
+  public static <R extends EppResource & ResourceWithTransferData>
+      void handlePendingTransferOnDelete(
+            R resource, R newResource, DateTime now, HistoryEntry historyEntry) {
     if (resource.getStatusValues().contains(StatusValue.PENDING_TRANSFER)) {
       TransferData oldTransferData = resource.getTransferData();
       ofy().delete().keys(oldTransferData.getServerApproveEntities());
@@ -195,29 +175,32 @@ public class ResourceFlowUtils {
       final Class<R> resourceClass,
       final Function<DomainBase, ImmutableSet<?>> getPotentialReferences) throws EppException {
     // Enter a transactionless context briefly.
-    EppException failfastException = ofy().doTransactionless(new Work<EppException>() {
-      @Override
-      public EppException run() {
-        final ForeignKeyIndex<R> fki = ForeignKeyIndex.load(resourceClass, targetId, now);
-        if (fki == null) {
-          return new ResourceDoesNotExistException(resourceClass, targetId);
-        }
-        // Query for the first few linked domains, and if found, actually load them. The query is
-        // eventually consistent and so might be very stale, but the direct load will not be stale,
-        // just non-transactional. If we find at least one actual reference then we can reliably
-        // fail. If we don't find any, we can't trust the query and need to do the full mapreduce.
-        List<Key<DomainBase>> keys = queryDomainsUsingResource(
-            resourceClass, fki.getResourceKey(), now, FAILFAST_CHECK_COUNT);
-        Predicate<DomainBase> predicate = new Predicate<DomainBase>() {
-          @Override
-          public boolean apply(DomainBase domain) {
-            return getPotentialReferences.apply(domain).contains(fki.getResourceKey());
-          }};
-        return Iterables.any(ofy().load().keys(keys).values(), predicate)
-            ? new ResourceToDeleteIsReferencedException()
-            : null;
-      }
-    });
+    EppException failfastException =
+        ofy()
+            .doTransactionless(
+                () -> {
+                  final ForeignKeyIndex<R> fki =
+                      ForeignKeyIndex.load(resourceClass, targetId, now);
+                  if (fki == null) {
+                    return new ResourceDoesNotExistException(resourceClass, targetId);
+                  }
+                  /* Query for the first few linked domains, and if found, actually load them. The
+                   * query is eventually consistent and so might be very stale, but the direct
+                   * load will not be stale, just non-transactional. If we find at least one
+                   * actual reference then we can reliably fail. If we don't find any, we can't
+                   * trust the query and need to do the full mapreduce.
+                   */
+                  Iterable<Key<DomainBase>> keys =
+                      queryForLinkedDomains(fki.getResourceKey(), now)
+                          .limit(FAILFAST_CHECK_COUNT)
+                          .keys();
+                  Predicate<DomainBase> predicate =
+                      domain ->
+                          getPotentialReferences.apply(domain).contains(fki.getResourceKey());
+                  return ofy().load().keys(keys).values().stream().anyMatch(predicate)
+                      ? new ResourceToDeleteIsReferencedException()
+                      : null;
+                });
     if (failfastException != null) {
       throw failfastException;
     }
@@ -226,61 +209,75 @@ public class ResourceFlowUtils {
   /**
    * Turn a resource into a builder with its pending transfer resolved.
    *
-   * <p>This removes the {@link StatusValue#PENDING_TRANSFER} status, sets the
-   * {@link TransferStatus}, clears all the server-approve fields on the {@link TransferData}
-   * including the extended registration years field, and sets the expiration time of the last
-   * pending transfer to now.
+   * <p>This removes the {@link StatusValue#PENDING_TRANSFER} status, sets the {@link
+   * TransferStatus}, clears all the server-approve fields on the {@link TransferData}, and sets the
+   * expiration time of the last pending transfer to now.
    */
-  @SuppressWarnings("unchecked")
-  private static <R extends EppResource> EppResource.Builder<R, ?> resolvePendingTransfer(
-      R resource, TransferStatus transferStatus, DateTime now) {
-    return (EppResource.Builder<R, ?>) resource.asBuilder()
+  private static <
+          R extends EppResource & ResourceWithTransferData,
+          B extends EppResource.Builder<R, B> & BuilderWithTransferData<B>>
+      B resolvePendingTransfer(R resource, TransferStatus transferStatus, DateTime now) {
+    checkArgument(
+        resource.getStatusValues().contains(StatusValue.PENDING_TRANSFER),
+        "Resource is not in pending transfer status.");
+    checkArgument(
+        !TransferData.EMPTY.equals(resource.getTransferData()),
+        "No old transfer data to resolve.");
+    @SuppressWarnings("unchecked")
+    B builder = (B) resource.asBuilder();
+    return builder
         .removeStatusValue(StatusValue.PENDING_TRANSFER)
-        .setTransferData(resource.getTransferData().asBuilder()
-            .setExtendedRegistrationYears(null)
-            .setServerApproveEntities(null)
-            .setServerApproveBillingEvent(null)
-            .setServerApproveAutorenewEvent(null)
-            .setServerApproveAutorenewPollMessage(null)
-            .setTransferStatus(transferStatus)
-            .setPendingTransferExpirationTime(now)
-            .build());
+        .setTransferData(
+            resource.getTransferData().copyConstantFieldsToBuilder()
+                .setTransferStatus(transferStatus)
+                .setPendingTransferExpirationTime(checkNotNull(now))
+                .build());
   }
 
   /**
    * Resolve a pending transfer by awarding it to the gaining client.
    *
-   * <p>This removes the {@link StatusValue#PENDING_TRANSFER} status, sets the
-   * {@link TransferStatus}, clears all the server-approve fields on the {@link TransferData}
-   * including the extended registration years field, and sets the expiration time of the last
-   * pending transfer to now.
+   * <p>This removes the {@link StatusValue#PENDING_TRANSFER} status, sets the {@link
+   * TransferStatus}, clears all the server-approve fields on the {@link TransferData}, sets the new
+   * client id, and sets the last transfer time and the expiration time of the last pending transfer
+   * to now.
    */
-  public static <R extends EppResource> R approvePendingTransfer(
-      R resource, TransferStatus transferStatus, DateTime now) {
-    Builder<R, ?> builder = resolvePendingTransfer(resource, transferStatus, now);
-    builder
+  public static <
+          R extends EppResource & ResourceWithTransferData,
+          B extends Builder<R, B> & BuilderWithTransferData<B>>
+      R approvePendingTransfer(R resource, TransferStatus transferStatus, DateTime now) {
+    checkArgument(transferStatus.isApproved(), "Not an approval transfer status");
+    B builder = ResourceFlowUtils.resolvePendingTransfer(resource, transferStatus, now);
+    return builder
         .setLastTransferTime(now)
-        .setCurrentSponsorClientId(resource.getTransferData().getGainingClientId());
-    return builder.build();
+        .setPersistedCurrentSponsorClientId(resource.getTransferData().getGainingClientId())
+        .build();
   }
 
   /**
    * Resolve a pending transfer by denying it.
    *
-   * <p>This removes the {@link StatusValue#PENDING_TRANSFER} status, sets the
-   * {@link TransferStatus}, clears all the server-approve fields on the {@link TransferData}
-   * including the extended registration years field, sets the new client id, and sets the last
-   * transfer time and the expiration time of the last pending transfer to now.
+   * <p>This removes the {@link StatusValue#PENDING_TRANSFER} status, sets the {@link
+   * TransferStatus}, clears all the server-approve fields on the {@link TransferData}, and sets the
+   * expiration time of the last pending transfer to now.
    */
-  public static <R extends EppResource> R denyPendingTransfer(
+  public static <R extends EppResource & ResourceWithTransferData> R denyPendingTransfer(
       R resource, TransferStatus transferStatus, DateTime now) {
+    checkArgument(transferStatus.isDenied(), "Not a denial transfer status");
     return resolvePendingTransfer(resource, transferStatus, now).build();
   }
 
-  public static void verifyHasPendingTransfer(EppResource resource)
-      throws NotPendingTransferException {
+  public static <R extends EppResource & ResourceWithTransferData> void verifyHasPendingTransfer(
+      R resource) throws NotPendingTransferException {
     if (resource.getTransferData().getTransferStatus() != TransferStatus.PENDING) {
       throw new NotPendingTransferException(resource.getForeignKey());
+    }
+  }
+
+  public static <R extends EppResource & ResourceWithTransferData> void verifyTransferInitiator(
+      String clientId, R resource) throws NotTransferInitiatorException {
+    if (!resource.getTransferData().getGainingClientId().equals(clientId)) {
+      throw new NotTransferInitiatorException();
     }
   }
 
@@ -300,41 +297,71 @@ public class ResourceFlowUtils {
 
   public static <R extends EppResource> void verifyResourceDoesNotExist(
       Class<R> clazz, String targetId, DateTime now)  throws EppException {
-    if (loadByForeignKey(clazz, targetId, now) != null) {
+    if (loadAndGetKey(clazz, targetId, now) != null) {
       throw new ResourceAlreadyExistsException(targetId);
     }
   }
 
-  public static void verifyIsGainingRegistrar(EppResource resource, String clientId)
-      throws NotTransferInitiatorException {
-    if (!clientId.equals(resource.getTransferData().getGainingClientId())) {
-      throw new NotTransferInitiatorException();
+  /** Check that the given AuthInfo is present for a resource being transferred. */
+  public static void verifyAuthInfoPresentForResourceTransfer(Optional<AuthInfo> authInfo)
+      throws EppException {
+    if (!authInfo.isPresent()) {
+      throw new MissingTransferRequestAuthInfoException();
     }
   }
 
   /** Check that the given AuthInfo is either missing or else is valid for the given resource. */
-  public static void verifyOptionalAuthInfoForResource(
-      Optional<AuthInfo> authInfo, EppResource resource) throws EppException {
+  public static void verifyOptionalAuthInfo(
+      Optional<AuthInfo> authInfo, ContactResource contact) throws EppException {
     if (authInfo.isPresent()) {
-      verifyAuthInfoForResource(authInfo.get(), resource);
+      verifyAuthInfo(authInfo.get(), contact);
     }
   }
 
-  /** Check that the given AuthInfo is present and valid for a resource being transferred. */
-  public static void verifyRequiredAuthInfoForResourceTransfer(
-      Optional<AuthInfo> authInfo, EppResource existingResource) throws EppException {
-    if (!authInfo.isPresent()) {
-      throw new MissingTransferRequestAuthInfoException();
+  /** Check that the given AuthInfo is either missing or else is valid for the given resource. */
+  public static void verifyOptionalAuthInfo(
+      Optional<AuthInfo> authInfo, DomainBase domain) throws EppException {
+    if (authInfo.isPresent()) {
+      verifyAuthInfo(authInfo.get(), domain);
     }
-    verifyOptionalAuthInfoForResource(authInfo, existingResource);
   }
 
-  /** Check that the given AuthInfo is valid for the given resource. */
-  public static void verifyAuthInfoForResource(AuthInfo authInfo, EppResource resource)
+  /** Check that the given {@link AuthInfo} is valid for the given domain. */
+  public static void verifyAuthInfo(AuthInfo authInfo, DomainBase domain) throws EppException {
+    final String authRepoId = authInfo.getPw().getRepoId();
+    String authPassword = authInfo.getPw().getValue();
+    if (authRepoId == null) {
+      // If no roid is specified, check the password against the domain's password.
+      String domainPassword = domain.getAuthInfo().getPw().getValue();
+      if (!domainPassword.equals(authPassword)) {
+        throw new BadAuthInfoForResourceException();
+      }
+      return;
+    }
+    // The roid should match one of the contacts.
+    Optional<Key<ContactResource>> foundContact =
+        domain
+            .getReferencedContacts()
+            .stream()
+            .filter(key -> key.getName().equals(authRepoId))
+            .findFirst();
+    if (!foundContact.isPresent()) {
+      throw new BadAuthInfoForResourceException();
+    }
+    // Check the authInfo against the contact.
+    verifyAuthInfo(authInfo, ofy().load().key(foundContact.get()).now());
+  }
+
+  /** Check that the given {@link AuthInfo} is valid for the given contact. */
+  public static void verifyAuthInfo(AuthInfo authInfo, ContactResource contact)
       throws EppException {
-    try {
-      authInfo.verifyAuthorizedFor(resource);
-    } catch (BadAuthInfoException e) {
+    String authRepoId = authInfo.getPw().getRepoId();
+    String authPassword = authInfo.getPw().getValue();
+    String contactPassword = contact.getAuthInfo().getPw().getValue();
+    if (!contactPassword.equals(authPassword)
+        // It's unnecessary to specify a repoId on a contact auth info, but if it's there validate
+        // it. The usual case of this is validating a domain's auth using this method.
+        || (authRepoId != null && !authRepoId.equals(contact.getRepoId()))) {
       throw new BadAuthInfoForResourceException();
     }
   }
@@ -353,6 +380,25 @@ public class ResourceFlowUtils {
       throws TooManyResourceChecksException {
     if (targetIds.size() > maxChecks) {
       throw new TooManyResourceChecksException(maxChecks);
+    }
+  }
+
+  /** Check that the same values aren't being added and removed in an update command. */
+  public static void checkSameValuesNotAddedAndRemoved(
+      ImmutableSet<?> fieldsToAdd, ImmutableSet<?> fieldsToRemove)
+          throws AddRemoveSameValueException {
+    if (!intersection(fieldsToAdd, fieldsToRemove).isEmpty()) {
+      throw new AddRemoveSameValueException();
+    }
+  }
+
+  /** Check that all {@link StatusValue} objects in a set are client-settable. */
+  public static void verifyAllStatusesAreClientSettable(Set<StatusValue> statusValues)
+      throws StatusNotClientSettableException {
+    for (StatusValue statusValue : statusValues) {
+      if (!statusValue.isClientSettable()) {
+        throw new StatusNotClientSettableException(statusValue.getXmlName());
+      }
     }
   }
 
@@ -375,6 +421,20 @@ public class ResourceFlowUtils {
       extends InvalidAuthorizationInformationErrorException {
     public BadAuthInfoForResourceException() {
       super("Authorization information for accessing resource is invalid");
+    }
+  }
+
+  /** Cannot add and remove the same value. */
+  public static class AddRemoveSameValueException extends ParameterValuePolicyErrorException {
+    public AddRemoveSameValueException() {
+      super("Cannot add and remove the same value");
+    }
+  }
+
+  /** The specified status value cannot be set by clients. */
+  public static class StatusNotClientSettableException extends ParameterValueRangeErrorException {
+    public StatusNotClientSettableException(String statusValue) {
+      super(String.format("Status value %s cannot be set by clients", statusValue));
     }
   }
 }

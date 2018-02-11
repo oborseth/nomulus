@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,11 @@
 
 package google.registry.tools;
 
-import static com.google.common.base.Predicates.notNull;
+import static com.google.common.util.concurrent.Futures.addCallback;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.FutureCallback;
@@ -29,9 +29,10 @@ import google.registry.export.ExportConstants;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
-/** Command to load datastore snapshots into Bigquery. */
-@Parameters(separators = " =", commandDescription = "Load datastore snapshot into Bigquery")
+/** Command to load Datastore snapshots into Bigquery. */
+@Parameters(separators = " =", commandDescription = "Load Datastore snapshot into Bigquery")
 final class LoadSnapshotCommand extends BigqueryCommand {
 
   @Parameter(
@@ -41,12 +42,12 @@ final class LoadSnapshotCommand extends BigqueryCommand {
 
   @Parameter(
       names = "--gcs_bucket",
-      description = "Name of the GCS bucket from which to import datastore snapshots.")
+      description = "Name of the GCS bucket from which to import Datastore snapshots.")
   private String snapshotGcsBucket = "domain-registry/snapshots/testing";
 
   @Parameter(
       names = "--kinds",
-      description = "List of datastore kinds for which to import snapshot data.")
+      description = "List of Datastore kinds for which to import snapshot data.")
   private List<String> kindNames = new ArrayList<>(ExportConstants.getReportingKinds());
 
   /** Runs the main snapshot import logic. */
@@ -97,26 +98,29 @@ final class LoadSnapshotCommand extends BigqueryCommand {
     // Add callbacks to each load job that print information on successful completion or failure.
     for (final String jobId : loadJobs.keySet()) {
       final String jobName = "load-" + jobId;
-      Futures.addCallback(loadJobs.get(jobId), new FutureCallback<Object>() {
-        private double elapsedSeconds() {
-          return (System.currentTimeMillis() - startTime) / 1000.0;
-        }
+      addCallback(
+          loadJobs.get(jobId),
+          new FutureCallback<Object>() {
+            private double elapsedSeconds() {
+              return (System.currentTimeMillis() - startTime) / 1000.0;
+            }
 
-        @Override
-        public void onSuccess(Object unused) {
-          System.err.printf("Job %s succeeded (%.3fs)\n", jobName, elapsedSeconds());
-        }
+            @Override
+            public void onSuccess(Object unused) {
+              System.err.printf("Job %s succeeded (%.3fs)\n", jobName, elapsedSeconds());
+            }
 
-        @Override
-        public void onFailure(Throwable error) {
-          System.err.printf(
-              "Job %s failed (%.3fs): %s\n", jobName, elapsedSeconds(), error.getMessage());
-        }
-      });
+            @Override
+            public void onFailure(Throwable error) {
+              System.err.printf(
+                  "Job %s failed (%.3fs): %s\n", jobName, elapsedSeconds(), error.getMessage());
+            }
+          },
+          directExecutor());
     }
     // Block on the completion of all the load jobs.
     List<?> results = Futures.successfulAsList(loadJobs.values()).get();
-    int numSucceeded = FluentIterable.from(results).filter(notNull()).size();
+    int numSucceeded = (int) results.stream().filter(Objects::nonNull).count();
     System.err.printf(
         "All load jobs have terminated: %d/%d successful.\n",
         numSucceeded, loadJobs.size());

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ import org.joda.time.DateTime;
 @Entity
 public class Cursor extends ImmutableObject {
 
-  /** The types of cursors, used as the string id field for each cursor in datastore. */
+  /** The types of cursors, used as the string id field for each cursor in Datastore. */
   public enum CursorType {
     /** Cursor for ensuring rolling transactional isolation of BRDA staging operation. */
     BRDA(Registry.class),
@@ -71,12 +71,19 @@ public class Cursor extends ImmutableObject {
      * for which Recurring billing events have been expanded (i.e. the inclusive first billing time
      * for the next expansion job).
      */
-    RECURRING_BILLING(EntityGroupRoot.class);
+    RECURRING_BILLING(EntityGroupRoot.class),
+
+    /**
+     * Cursor for {@link google.registry.export.sheet.SyncRegistrarsSheetAction}. The DateTime
+     * stored is the last time that registrar changes were successfully synced to the sheet. If
+     * there were no changes since the last time the action run, the cursor is not updated.
+     */
+    SYNC_REGISTRAR_SHEET(EntityGroupRoot.class);
 
     /** See the definition of scope on {@link #getScopeClass}. */
     private final Class<? extends ImmutableObject> scope;
 
-    private CursorType(Class<? extends ImmutableObject> scope) {
+    CursorType(Class<? extends ImmutableObject> scope) {
       this.scope = scope;
     }
 

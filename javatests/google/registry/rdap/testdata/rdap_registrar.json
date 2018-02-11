@@ -1,7 +1,7 @@
 {
   "objectClassName" : "entity",
   "handle" : "%NAME%",
-  "status" : ["active"],
+  "status" : ["%STATUS%"],
   "roles" : ["registrar"],
   "links" :
   [
@@ -35,7 +35,7 @@
     "vcard",
     [
       ["version", {}, "text", "4.0"],
-      ["fn", {}, "text", "Yes Virginia <script>"],
+      ["fn", {}, "text", "%FULLNAME%"],
       ["adr", {}, "text",
         [
           "",

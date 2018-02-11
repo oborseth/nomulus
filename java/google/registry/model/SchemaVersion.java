@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,12 +14,10 @@
 
 package google.registry.model;
 
-import static com.google.common.base.Predicates.assignableFrom;
 import static com.google.common.base.Predicates.or;
+import static com.google.common.base.Predicates.subtypeOf;
+import static java.util.stream.Collectors.joining;
 
-import com.google.common.base.Function;
-import com.google.common.base.Joiner;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.Ordering;
 import java.util.ArrayDeque;
 import java.util.Queue;
@@ -60,14 +58,11 @@ public final class SchemaVersion {
    * types (for classes), or else a list of all possible values (for enums).
    */
   public static String getSchema() {
-    return FluentIterable.from(getAllPersistedTypes())
-        .filter(or(assignableFrom(Enum.class), assignableFrom(ImmutableObject.class)))
-        .transform(new Function<Class<?>, String>() {
-            @Override
-            public String apply(Class<?> clazz) {
-              return ModelUtils.getSchema(clazz);
-            }})
-        .join(Joiner.on('\n'));
+    return getAllPersistedTypes()
+        .stream()
+        .filter(or(subtypeOf(Enum.class), subtypeOf(ImmutableObject.class)))
+        .map(ModelUtils::getSchema)
+        .collect(joining("\n"));
   }
 
   private SchemaVersion() {}

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,34 +14,43 @@
 
 package google.registry.flows.domain;
 
+import static google.registry.flows.FlowUtils.validateClientIsLoggedIn;
 import static google.registry.flows.ResourceFlowUtils.denyPendingTransfer;
 import static google.registry.flows.ResourceFlowUtils.loadAndVerifyExistence;
 import static google.registry.flows.ResourceFlowUtils.verifyHasPendingTransfer;
-import static google.registry.flows.ResourceFlowUtils.verifyIsGainingRegistrar;
-import static google.registry.flows.ResourceFlowUtils.verifyOptionalAuthInfoForResource;
+import static google.registry.flows.ResourceFlowUtils.verifyOptionalAuthInfo;
+import static google.registry.flows.ResourceFlowUtils.verifyTransferInitiator;
 import static google.registry.flows.domain.DomainFlowUtils.checkAllowedAccessToTld;
-import static google.registry.flows.domain.DomainFlowUtils.createLosingTransferPollMessage;
-import static google.registry.flows.domain.DomainFlowUtils.createTransferResponse;
+import static google.registry.flows.domain.DomainFlowUtils.createCancelingRecords;
 import static google.registry.flows.domain.DomainFlowUtils.updateAutorenewRecurrenceEndTime;
-import static google.registry.model.eppoutput.Result.Code.SUCCESS;
+import static google.registry.flows.domain.DomainTransferUtils.createLosingTransferPollMessage;
+import static google.registry.flows.domain.DomainTransferUtils.createTransferResponse;
 import static google.registry.model.ofy.ObjectifyService.ofy;
+import static google.registry.model.reporting.DomainTransactionRecord.TransactionReportField.TRANSFER_SUCCESSFUL;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 
-import com.google.common.base.Optional;
+import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
 import google.registry.flows.EppException;
+import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.ClientId;
+import google.registry.flows.FlowModule.Superuser;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.LoggedInFlow;
 import google.registry.flows.TransactionalFlow;
+import google.registry.flows.annotations.ReportingSpec;
 import google.registry.model.ImmutableObject;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.metadata.MetadataExtension;
 import google.registry.model.eppcommon.AuthInfo;
-import google.registry.model.eppoutput.EppOutput;
+import google.registry.model.eppoutput.EppResponse;
+import google.registry.model.registry.Registry;
+import google.registry.model.reporting.DomainTransactionRecord;
 import google.registry.model.reporting.HistoryEntry;
+import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
 import google.registry.model.transfer.TransferStatus;
+import java.util.Optional;
 import javax.inject.Inject;
+import org.joda.time.DateTime;
 
 /**
  * An EPP flow that cancels a pending transfer on a domain.
@@ -61,31 +70,33 @@ import javax.inject.Inject;
  * @error {@link google.registry.flows.exceptions.NotTransferInitiatorException}
  * @error {@link DomainFlowUtils.NotAuthorizedForTldException}
  */
-public final class DomainTransferCancelFlow extends LoggedInFlow implements TransactionalFlow {
+@ReportingSpec(ActivityReportField.DOMAIN_TRANSFER_CANCEL)
+public final class DomainTransferCancelFlow implements TransactionalFlow {
 
+  @Inject ExtensionManager extensionManager;
   @Inject Optional<AuthInfo> authInfo;
   @Inject @ClientId String clientId;
   @Inject @TargetId String targetId;
+  @Inject @Superuser boolean isSuperuser;
   @Inject HistoryEntry.Builder historyBuilder;
+  @Inject EppResponse.Builder responseBuilder;
   @Inject DomainTransferCancelFlow() {}
 
   @Override
-  protected final void initLoggedInFlow() throws EppException {
-    registerExtensions(MetadataExtension.class);
-  }
-
-  @Override
-  public final EppOutput run() throws EppException {
+  public final EppResponse run() throws EppException {
+    extensionManager.register(MetadataExtension.class);
+    extensionManager.validate();
+    validateClientIsLoggedIn(clientId);
+    DateTime now = ofy().getTransactionTime();
     DomainResource existingDomain = loadAndVerifyExistence(DomainResource.class, targetId, now);
-    verifyOptionalAuthInfoForResource(authInfo, existingDomain);
+    verifyOptionalAuthInfo(authInfo, existingDomain);
     verifyHasPendingTransfer(existingDomain);
-    verifyIsGainingRegistrar(existingDomain, clientId);
-    checkAllowedAccessToTld(getAllowedTlds(), existingDomain.getTld());
-    HistoryEntry historyEntry = historyBuilder
-        .setType(HistoryEntry.Type.DOMAIN_TRANSFER_CANCEL)
-        .setModificationTime(now)
-        .setParent(Key.create(existingDomain))
-        .build();
+    verifyTransferInitiator(clientId, existingDomain);
+    if (!isSuperuser) {
+      checkAllowedAccessToTld(clientId, existingDomain.getTld());
+    }
+    Registry registry = Registry.get(existingDomain.getTld());
+    HistoryEntry historyEntry = buildHistoryEntry(existingDomain, registry, now);
     DomainResource newDomain =
         denyPendingTransfer(existingDomain, TransferStatus.CLIENT_CANCELLED, now);
     ofy().save().<ImmutableObject>entities(
@@ -99,8 +110,25 @@ public final class DomainTransferCancelFlow extends LoggedInFlow implements Tran
     // Delete the billing event and poll messages that were written in case the transfer would have
     // been implicitly server approved.
     ofy().delete().keys(existingDomain.getTransferData().getServerApproveEntities());
-    return createOutput(
-        SUCCESS,
-        createTransferResponse(targetId, newDomain.getTransferData(), null));
+    return responseBuilder
+        .setResData(createTransferResponse(targetId, newDomain.getTransferData(), null))
+        .build();
+  }
+
+  private HistoryEntry buildHistoryEntry(
+      DomainResource existingDomain, Registry registry, DateTime now) {
+    ImmutableSet<DomainTransactionRecord> cancelingRecords =
+        createCancelingRecords(
+            existingDomain,
+            now,
+            registry.getAutomaticTransferLength().plus(registry.getTransferGracePeriodLength()),
+            ImmutableSet.of(TRANSFER_SUCCESSFUL));
+    return historyBuilder
+        .setType(HistoryEntry.Type.DOMAIN_TRANSFER_CANCEL)
+        .setOtherClientId(existingDomain.getTransferData().getLosingClientId())
+        .setModificationTime(now)
+        .setParent(Key.create(existingDomain))
+        .setDomainTransactionRecords(cancelingRecords)
+        .build();
   }
 }

@@ -1,4 +1,4 @@
-# Copyright 2016 The Nomulus Authors. All Rights Reserved.
+# Copyright 2017 The Nomulus Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,15 +14,15 @@
 
 """Build rule for unit testing the zip_file() rule."""
 
-load('//java/google/registry/builddefs:defs.bzl', 'ZIPPER', 'runpath')
+load('//java/google/registry/builddefs:defs.bzl', 'ZIPPER')
 
 def _impl(ctx):
   """Implementation of zip_contents_test() rule."""
   cmd = [
       'set -e',
       'repo="$(pwd)"',
-      'zipper="${repo}/%s"' % runpath(ctx.file._zipper),
-      'archive="${repo}/%s"' % runpath(ctx.file.src),
+      'zipper="${repo}/%s"' % ctx.file._zipper.short_path,
+      'archive="${repo}/%s"' % ctx.file.src.short_path,
       ('listing="$("${zipper}" v "${archive}"' +
        ' | grep -v ^d | awk \'{print $3}\' | LC_ALL=C sort)"'),
       'if [[ "${listing}" != "%s" ]]; then' % (

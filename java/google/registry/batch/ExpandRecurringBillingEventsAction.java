@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,12 +15,14 @@
 package google.registry.batch;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Sets.difference;
 import static google.registry.mapreduce.MapreduceRunner.PARAM_DRY_RUN;
 import static google.registry.mapreduce.inputs.EppResourceInputs.createChildEntityInput;
-import static google.registry.model.EppResourceUtils.loadByForeignKey;
 import static google.registry.model.common.Cursor.CursorType.RECURRING_BILLING;
+import static google.registry.model.domain.Period.Unit.YEARS;
 import static google.registry.model.ofy.ObjectifyService.ofy;
+import static google.registry.model.reporting.HistoryEntry.Type.DOMAIN_AUTORENEW;
 import static google.registry.pricing.PricingEngineProxy.getDomainRenewCost;
 import static google.registry.util.CollectionUtils.union;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
@@ -31,30 +33,33 @@ import static google.registry.util.PipelineUtils.createJobPath;
 import com.google.appengine.tools.mapreduce.Mapper;
 import com.google.appengine.tools.mapreduce.Reducer;
 import com.google.appengine.tools.mapreduce.ReducerInput;
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
-import com.google.common.base.Predicate;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Range;
+import com.google.common.collect.Streams;
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.VoidWork;
-import com.googlecode.objectify.Work;
 import google.registry.mapreduce.MapreduceRunner;
 import google.registry.mapreduce.inputs.NullInput;
+import google.registry.model.EppResource;
+import google.registry.model.ImmutableObject;
 import google.registry.model.billing.BillingEvent;
 import google.registry.model.billing.BillingEvent.Flag;
 import google.registry.model.billing.BillingEvent.OneTime;
 import google.registry.model.billing.BillingEvent.Recurring;
 import google.registry.model.common.Cursor;
 import google.registry.model.domain.DomainResource;
+import google.registry.model.domain.Period;
 import google.registry.model.registry.Registry;
+import google.registry.model.reporting.DomainTransactionRecord;
+import google.registry.model.reporting.DomainTransactionRecord.TransactionReportField;
+import google.registry.model.reporting.HistoryEntry;
 import google.registry.request.Action;
 import google.registry.request.Parameter;
 import google.registry.request.Response;
+import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
 import google.registry.util.FormattingLogger;
+import java.util.Optional;
 import java.util.Set;
 import javax.inject.Inject;
 import org.joda.money.Money;
@@ -67,10 +72,11 @@ import org.joda.time.DateTime;
  * {@code cursorTime}) represents the inclusive lower bound on the range of billing times that will
  * be expanded as a result of the job (the exclusive upper bound being the execution time of the
  * job).
- *
- * <p>NOTE: This is not yet production ready and not configured to run.
  */
-@Action(path = "/_dr/task/expandRecurringBillingEvents")
+@Action(
+  path = "/_dr/task/expandRecurringBillingEvents",
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public class ExpandRecurringBillingEventsAction implements Runnable {
 
   public static final String PARAM_CURSOR_TIME = "cursorTime";
@@ -89,7 +95,7 @@ public class ExpandRecurringBillingEventsAction implements Runnable {
     Cursor cursor = ofy().load().key(Cursor.createGlobalKey(RECURRING_BILLING)).now();
     DateTime executeTime = clock.nowUtc();
     DateTime persistedCursorTime = (cursor == null ? START_OF_TIME : cursor.getCursorTime());
-    DateTime cursorTime = cursorTimeParam.or(persistedCursorTime);
+    DateTime cursorTime = cursorTimeParam.orElse(persistedCursorTime);
     checkArgument(
         cursorTime.isBefore(executeTime),
         "Cursor time must be earlier than execution time.");
@@ -105,10 +111,9 @@ public class ExpandRecurringBillingEventsAction implements Runnable {
             new ExpandRecurringBillingEventsReducer(isDryRun, persistedCursorTime),
             // Add an extra shard that maps over a null recurring event (see the mapper for why).
             ImmutableList.of(
-                new NullInput<Recurring>(),
+                new NullInput<>(),
                 createChildEntityInput(
-                    ImmutableSet.<Class<? extends DomainResource>>of(DomainResource.class),
-                    ImmutableSet.<Class<? extends Recurring>>of(Recurring.class))))));
+                    ImmutableSet.of(DomainResource.class), ImmutableSet.of(Recurring.class))))));
   }
 
   /** Mapper to expand {@link Recurring} billing events into synthetic {@link OneTime} events. */
@@ -138,73 +143,106 @@ public class ExpandRecurringBillingEventsAction implements Runnable {
         return;
       }
       getContext().incrementCounter("Recurring billing events encountered");
-      int billingEventsSaved = 0;
+      // Ignore any recurring billing events that have yet to apply.
+      if (recurring.getEventTime().isAfter(executeTime)
+          // This second case occurs when a domain is transferred or deleted before first renewal.
+          || recurring.getRecurrenceEndTime().isBefore(recurring.getEventTime())) {
+        getContext().incrementCounter("Recurring billing events ignored");
+        return;
+      }
+      int numBillingEventsSaved = 0;
       try {
-        billingEventsSaved = ofy().transactNew(new Work<Integer>() {
-          @Override
-          public Integer run() {
-            ImmutableSet.Builder<OneTime> syntheticOneTimesBuilder =
-                new ImmutableSet.Builder<>();
-            final Registry tld = Registry.get(getTldFromDomainName(recurring.getTargetId()));
+        numBillingEventsSaved = ofy().transactNew(() -> {
+          ImmutableSet.Builder<OneTime> syntheticOneTimesBuilder =
+              new ImmutableSet.Builder<>();
+          final Registry tld = Registry.get(getTldFromDomainName(recurring.getTargetId()));
 
-            // Determine the complete set of times at which this recurring event should occur
-            // (up to and including the runtime of the mapreduce).
-            Iterable<DateTime> eventTimes =
-                recurring.getRecurrenceTimeOfYear().getInstancesInRange(Range.closed(
-                    recurring.getEventTime(),
-                    earliestOf(recurring.getRecurrenceEndTime(), executeTime)));
+          // Determine the complete set of times at which this recurring event should occur
+          // (up to and including the runtime of the mapreduce).
+          Iterable<DateTime> eventTimes =
+              recurring.getRecurrenceTimeOfYear().getInstancesInRange(Range.closed(
+                  recurring.getEventTime(),
+                  earliestOf(recurring.getRecurrenceEndTime(), executeTime)));
 
-            // Convert these event times to billing times
-            final ImmutableSet<DateTime> billingTimes =
-                getBillingTimesInScope(eventTimes, cursorTime, executeTime, tld);
+          // Convert these event times to billing times
+          final ImmutableSet<DateTime> billingTimes =
+              getBillingTimesInScope(eventTimes, cursorTime, executeTime, tld);
 
-            Iterable<OneTime> oneTimesForDomain = ofy().load()
-                .type(OneTime.class)
-                .ancestor(loadByForeignKey(
-                    DomainResource.class, recurring.getTargetId(), executeTime));
+          Key<? extends EppResource> domainKey = recurring.getParentKey().getParent();
+          Iterable<OneTime> oneTimesForDomain =
+              ofy().load().type(OneTime.class).ancestor(domainKey);
 
-            // Determine the billing times that already have OneTime events persisted.
-            ImmutableSet<DateTime> existingBillingTimes =
-                getExistingBillingTimes(oneTimesForDomain, recurring);
+          // Determine the billing times that already have OneTime events persisted.
+          ImmutableSet<DateTime> existingBillingTimes =
+              getExistingBillingTimes(oneTimesForDomain, recurring);
 
-            // Create synthetic OneTime events for all billing times that do not yet have an event
-            // persisted.
-            for (DateTime billingTime : difference(billingTimes, existingBillingTimes)) {
-              DateTime eventTime = billingTime.minus(tld.getAutoRenewGracePeriodLength());
-              // Determine the cost for a one-year renewal.
-              Money renewCost = getDomainRenewCost(recurring.getTargetId(), eventTime, 1);
-              syntheticOneTimesBuilder.add(new BillingEvent.OneTime.Builder()
-                  .setBillingTime(billingTime)
-                  .setClientId(recurring.getClientId())
-                  .setCost(renewCost)
-                  .setEventTime(eventTime)
-                  .setFlags(union(recurring.getFlags(), Flag.SYNTHETIC))
-                  .setParent(recurring.getParentKey())
-                  .setPeriodYears(1)
-                  .setReason(recurring.getReason())
-                  .setSyntheticCreationTime(executeTime)
-                  .setCancellationMatchingBillingEvent(Key.create(recurring))
-                  .setTargetId(recurring.getTargetId())
-                  .build());
-            }
-            Set<OneTime> syntheticOneTimes = syntheticOneTimesBuilder.build();
-            if (!isDryRun) {
-              ofy().save().entities(syntheticOneTimes).now();
-            }
-            return syntheticOneTimes.size();
+          ImmutableSet.Builder<HistoryEntry> historyEntriesBuilder =
+              new ImmutableSet.Builder<>();
+          // Create synthetic OneTime events for all billing times that do not yet have an event
+          // persisted.
+          for (DateTime billingTime : difference(billingTimes, existingBillingTimes)) {
+            // Construct a new HistoryEntry that parents over the OneTime
+            HistoryEntry historyEntry = new HistoryEntry.Builder()
+                .setBySuperuser(false)
+                .setClientId(recurring.getClientId())
+                .setModificationTime(ofy().getTransactionTime())
+                .setParent(domainKey)
+                .setPeriod(Period.create(1, YEARS))
+                .setReason("Domain autorenewal by ExpandRecurringBillingEventsAction")
+                .setRequestedByRegistrar(false)
+                .setType(DOMAIN_AUTORENEW)
+                .setDomainTransactionRecords(
+                    ImmutableSet.of(
+                        DomainTransactionRecord.create(
+                            tld.getTldStr(),
+                            // We report this when the autorenew grace period ends
+                            billingTime,
+                            TransactionReportField.netRenewsFieldFromYears(1),
+                            1)))
+                .build();
+            historyEntriesBuilder.add(historyEntry);
+
+            DateTime eventTime = billingTime.minus(tld.getAutoRenewGracePeriodLength());
+            // Determine the cost for a one-year renewal.
+            Money renewCost = getDomainRenewCost(recurring.getTargetId(), eventTime, 1);
+            syntheticOneTimesBuilder.add(new OneTime.Builder()
+                .setBillingTime(billingTime)
+                .setClientId(recurring.getClientId())
+                .setCost(renewCost)
+                .setEventTime(eventTime)
+                .setFlags(union(recurring.getFlags(), Flag.SYNTHETIC))
+                .setParent(historyEntry)
+                .setPeriodYears(1)
+                .setReason(recurring.getReason())
+                .setSyntheticCreationTime(executeTime)
+                .setCancellationMatchingBillingEvent(Key.create(recurring))
+                .setTargetId(recurring.getTargetId())
+                .build());
           }
+          Set<HistoryEntry> historyEntries = historyEntriesBuilder.build();
+          Set<OneTime> syntheticOneTimes = syntheticOneTimesBuilder.build();
+          if (!isDryRun) {
+            ImmutableSet<ImmutableObject> entitiesToSave =
+                new ImmutableSet.Builder<ImmutableObject>()
+                    .addAll(historyEntries)
+                    .addAll(syntheticOneTimes)
+                    .build();
+            ofy().save().entities(entitiesToSave).now();
+          }
+          return syntheticOneTimes.size();
         });
       } catch (Throwable t) {
         logger.severefmt(
             t, "Error while expanding Recurring billing events for %s", recurring.getId());
         getContext().incrementCounter("error: " + t.getClass().getSimpleName());
         getContext().incrementCounter(ERROR_COUNTER);
+        throw t;
       }
       if (!isDryRun) {
-        getContext().incrementCounter("Saved OneTime billing events", billingEventsSaved);
+        getContext().incrementCounter("Saved OneTime billing events", numBillingEventsSaved);
       } else {
         getContext().incrementCounter(
-            "Generated OneTime billing events (dry run)", billingEventsSaved);
+            "Generated OneTime billing events (dry run)", numBillingEventsSaved);
       }
     }
 
@@ -217,14 +255,10 @@ public class ExpandRecurringBillingEventsAction implements Runnable {
         DateTime cursorTime,
         DateTime executeTime,
         final Registry tld) {
-      return FluentIterable.from(eventTimes)
-          .transform(new Function<DateTime, DateTime>() {
-            @Override
-            public DateTime apply(DateTime eventTime) {
-              return eventTime.plus(tld.getAutoRenewGracePeriodLength());
-            }})
+      return Streams.stream(eventTimes)
+          .map(eventTime -> eventTime.plus(tld.getAutoRenewGracePeriodLength()))
           .filter(Range.closedOpen(cursorTime, executeTime))
-          .toSet();
+          .collect(toImmutableSet());
     }
 
     /**
@@ -234,19 +268,13 @@ public class ExpandRecurringBillingEventsAction implements Runnable {
     private ImmutableSet<DateTime> getExistingBillingTimes(
         Iterable<BillingEvent.OneTime> oneTimesForDomain,
         final BillingEvent.Recurring recurringEvent) {
-      return FluentIterable.from(oneTimesForDomain)
-          .filter(new Predicate<BillingEvent.OneTime>() {
-            @Override
-            public boolean apply(OneTime billingEvent) {
-              return Key.create(recurringEvent)
-                  .equals(billingEvent.getCancellationMatchingBillingEvent());
-            }})
-          .transform(new Function<OneTime, DateTime>() {
-            @Override
-            public DateTime apply(OneTime billingEvent) {
-              return billingEvent.getBillingTime();
-            }})
-          .toSet();
+      return Streams.stream(oneTimesForDomain)
+          .filter(
+              billingEvent ->
+                  Key.create(recurringEvent)
+                      .equals(billingEvent.getCancellationMatchingBillingEvent()))
+          .map(OneTime::getBillingTime)
+          .collect(toImmutableSet());
     }
   }
 
@@ -282,23 +310,22 @@ public class ExpandRecurringBillingEventsAction implements Runnable {
           isDryRun ? "(dry run) " : "",
           cursorTime,
           executionTime);
-      ofy().transact(new VoidWork() {
-        @Override
-        public void vrun() {
-          Cursor cursor = ofy().load().key(Cursor.createGlobalKey(RECURRING_BILLING)).now();
-          DateTime currentCursorTime = (cursor == null ? START_OF_TIME : cursor.getCursorTime());
-          if (!currentCursorTime.equals(expectedPersistedCursorTime)) {
-            logger.severefmt(
-                "Current cursor position %s does not match expected cursor position %s.",
-                currentCursorTime,
-                expectedPersistedCursorTime);
-            return;
-          }
-          if (!isDryRun) {
-            ofy().save().entity(Cursor.createGlobal(RECURRING_BILLING, executionTime));
-          }
-        }
-      });
+      ofy()
+          .transact(
+              () -> {
+                Cursor cursor = ofy().load().key(Cursor.createGlobalKey(RECURRING_BILLING)).now();
+                DateTime currentCursorTime =
+                    (cursor == null ? START_OF_TIME : cursor.getCursorTime());
+                if (!currentCursorTime.equals(expectedPersistedCursorTime)) {
+                  logger.severefmt(
+                      "Current cursor position %s does not match expected cursor position %s.",
+                      currentCursorTime, expectedPersistedCursorTime);
+                  return;
+                }
+                if (!isDryRun) {
+                  ofy().save().entity(Cursor.createGlobal(RECURRING_BILLING, executionTime));
+                }
+              });
     }
   }
 }

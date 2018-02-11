@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,8 +19,8 @@ import static com.google.common.collect.Iterables.transform;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 
-import com.google.common.base.Function;
 import google.registry.model.ImmutableObject;
 import google.registry.model.ofy.CommitLogManifest;
 import google.registry.model.ofy.CommitLogMutation;
@@ -55,26 +55,21 @@ public class ResaveEnvironmentEntitiesCommandTest
     assertThat(ofy().load().type(CommitLogMutation.class).keys()).isEmpty();
     runCommand();
 
-    // There are five entities that have been re-saved at this point (each in a separate
-    // transaction), so expect five manifests and five mutations.
-    assertThat(ofy().load().type(CommitLogManifest.class).keys()).hasSize(5);
+    // There are 5 entities that have been re-saved at this point (in 3 transactions, one for each
+    // type), so expect 3 manifests and 5 mutations.
+    assertThat(ofy().load().type(CommitLogManifest.class).keys()).hasSize(3);
     Iterable<ImmutableObject> savedEntities =
         transform(
             ofy().load().type(CommitLogMutation.class).list(),
-            new Function<CommitLogMutation, ImmutableObject>() {
-              @Override
-              public ImmutableObject apply(CommitLogMutation mutation) {
-                return ofy().load().fromEntity(mutation.getEntity());
-              }
-            });
+            mutation -> ofy().load().fromEntity(mutation.getEntity()));
     assertThat(savedEntities)
         .containsExactly(
             // The Registrars and RegistrarContacts are created by AppEngineRule.
-            Registrar.loadByClientId("TheRegistrar"),
-            Registrar.loadByClientId("NewRegistrar"),
+            loadRegistrar("TheRegistrar"),
+            loadRegistrar("NewRegistrar"),
             Registry.get("tld"),
-            getOnlyElement(Registrar.loadByClientId("TheRegistrar").getContacts()),
-            getOnlyElement(Registrar.loadByClientId("NewRegistrar").getContacts()));
+            getOnlyElement(loadRegistrar("TheRegistrar").getContacts()),
+            getOnlyElement(loadRegistrar("NewRegistrar").getContacts()));
   }
 
   @SafeVarargs

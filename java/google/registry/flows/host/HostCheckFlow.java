@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,20 +14,25 @@
 
 package google.registry.flows.host;
 
+import static google.registry.flows.FlowUtils.validateClientIsLoggedIn;
 import static google.registry.flows.ResourceFlowUtils.verifyTargetIdCount;
 import static google.registry.model.EppResourceUtils.checkResourcesExist;
-import static google.registry.model.eppoutput.Result.Code.SUCCESS;
 
 import com.google.common.collect.ImmutableList;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.flows.EppException;
-import google.registry.flows.LoggedInFlow;
+import google.registry.flows.ExtensionManager;
+import google.registry.flows.Flow;
+import google.registry.flows.FlowModule.ClientId;
+import google.registry.flows.annotations.ReportingSpec;
 import google.registry.model.eppinput.ResourceCommand;
 import google.registry.model.eppoutput.CheckData.HostCheck;
 import google.registry.model.eppoutput.CheckData.HostCheckData;
-import google.registry.model.eppoutput.EppOutput;
+import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.host.HostCommand.Check;
 import google.registry.model.host.HostResource;
+import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
+import google.registry.util.Clock;
 import java.util.List;
 import java.util.Set;
 import javax.inject.Inject;
@@ -39,22 +44,29 @@ import javax.inject.Inject;
  *
  * @error {@link google.registry.flows.exceptions.TooManyResourceChecksException}
  */
-public final class HostCheckFlow extends LoggedInFlow {
+@ReportingSpec(ActivityReportField.HOST_CHECK)
+public final class HostCheckFlow implements Flow {
 
   @Inject ResourceCommand resourceCommand;
+  @Inject @ClientId String clientId;
+  @Inject ExtensionManager extensionManager;
   @Inject @Config("maxChecks") int maxChecks;
+  @Inject Clock clock;
+  @Inject EppResponse.Builder responseBuilder;
   @Inject HostCheckFlow() {}
 
   @Override
-  protected final EppOutput run() throws EppException {
+  public final EppResponse run() throws EppException {
+    extensionManager.validate();  // There are no legal extensions for this flow.
+    validateClientIsLoggedIn(clientId);
     List<String> targetIds = ((Check) resourceCommand).getTargetIds();
     verifyTargetIdCount(targetIds, maxChecks);
-    Set<String> existingIds = checkResourcesExist(HostResource.class, targetIds, now);
+    Set<String> existingIds = checkResourcesExist(HostResource.class, targetIds, clock.nowUtc());
     ImmutableList.Builder<HostCheck> checks = new ImmutableList.Builder<>();
     for (String id : targetIds) {
       boolean unused = !existingIds.contains(id);
       checks.add(HostCheck.create(unused, id, unused ? null : "In use"));
     }
-    return createOutput(SUCCESS, HostCheckData.create(checks.build()));
+    return responseBuilder.setResData(HostCheckData.create(checks.build())).build();
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,29 +17,20 @@ package google.registry.testing;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.truth.Truth.assertAbout;
 
-import com.google.common.truth.AbstractVerb.DelegatedVerb;
-import com.google.common.truth.FailureStrategy;
-import com.google.common.truth.SubjectFactory;
+import com.google.common.truth.FailureMetadata;
+import com.google.common.truth.SimpleSubjectBuilder;
 import google.registry.model.EppResource;
 
 /** Truth subject for asserting things about {@link EppResource} instances. */
 public final class GenericEppResourceSubject
     extends AbstractEppResourceSubject<EppResource, GenericEppResourceSubject> {
 
-  /** A factory for instances of this subject. */
-  private static class GenericEppResourceSubjectFactory
-      extends SubjectFactory<GenericEppResourceSubject, EppResource> {
-    @Override
-    public GenericEppResourceSubject getSubject(FailureStrategy strategy, EppResource subject) {
-      return new GenericEppResourceSubject(strategy, subject);
-    }
+  public GenericEppResourceSubject(FailureMetadata failureMetadata, EppResource subject) {
+    super(failureMetadata, checkNotNull(subject));
   }
 
-  public GenericEppResourceSubject(FailureStrategy strategy, EppResource subject) {
-    super(strategy, checkNotNull(subject));
-  }
-
-  public static DelegatedVerb<GenericEppResourceSubject, EppResource> assertAboutEppResources() {
-    return assertAbout(new GenericEppResourceSubjectFactory());
+  public static SimpleSubjectBuilder<GenericEppResourceSubject, EppResource>
+      assertAboutEppResources() {
+    return assertAbout(GenericEppResourceSubject::new);
   }
 }

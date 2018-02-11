@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package google.registry.export;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
+import static google.registry.util.PreconditionsUtils.checkArgumentPresent;
 
 import com.google.appengine.tools.cloudstorage.GcsFilename;
 import com.google.common.collect.ImmutableMap;
@@ -28,6 +29,7 @@ import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.InternalServerErrorException;
 import google.registry.request.JsonActionRunner;
 import google.registry.request.JsonActionRunner.JsonAction;
+import google.registry.request.auth.Auth;
 import google.registry.storage.drive.DriveConnection;
 import google.registry.util.FormattingLogger;
 import java.io.FileNotFoundException;
@@ -35,12 +37,19 @@ import java.io.InputStream;
 import java.util.Map;
 import javax.inject.Inject;
 
-/** Publish a single registrar detail report from GCS to Drive. */
+/**
+ * Publish a single registrar detail report from GCS to Drive.
+ *
+ * <p>This is now DEPRECATED, and will be removed upon completion of the billing migration. If you
+ * wish to use the functionality, use {@link
+ * google.registry.reporting.billing.CopyDetailReportsAction} instead.
+ */
 @Action(
-    path = PublishDetailReportAction.PATH,
-    method = Action.Method.POST,
-    xsrfProtection = true,
-    xsrfScope = "admin")
+  path = PublishDetailReportAction.PATH,
+  method = Action.Method.POST,
+  auth = Auth.AUTH_INTERNAL_OR_ADMIN
+)
+@Deprecated
 public final class PublishDetailReportAction implements Runnable, JsonAction {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
@@ -51,7 +60,9 @@ public final class PublishDetailReportAction implements Runnable, JsonAction {
   /** Endpoint to which JSON should be sent for this servlet.  See {@code web.xml}. */
   public static final String PATH = "/_dr/publishDetailReport";
 
-  /** Name of parameter indicating the registrar for which this report will be published. */
+  /**
+   * Name of parameter indicating the registrar client ID for which this report will be published.
+   */
   public static final String REGISTRAR_ID_PARAM = "registrar";
 
   /** Name of parameter providing a name for the report file placed in Drive (the base name). */
@@ -82,10 +93,13 @@ public final class PublishDetailReportAction implements Runnable, JsonAction {
     try {
       logger.infofmt("Publishing detail report for parameters: %s", json);
       String registrarId = getParam(json, REGISTRAR_ID_PARAM);
-      Registrar registrar = checkArgumentNotNull(Registrar.loadByClientId(registrarId),
-          "Registrar %s not found", registrarId);
-      String driveFolderId = checkArgumentNotNull(registrar.getDriveFolderId(),
-          "No drive folder associated with registrar " + registrarId);
+      Registrar registrar =
+          checkArgumentPresent(
+              Registrar.loadByClientId(registrarId), "Registrar %s not found", registrarId);
+      String driveFolderId =
+          checkArgumentNotNull(
+              registrar.getDriveFolderId(),
+              "No drive folder associated with registrar " + registrarId);
       String gcsBucketName = getParam(json, GCS_BUCKET_PARAM);
       String gcsObjectName =
           getParam(json, GCS_FOLDER_PREFIX_PARAM) + getParam(json, DETAIL_REPORT_NAME_PARAM);
@@ -102,15 +116,14 @@ public final class PublishDetailReportAction implements Runnable, JsonAction {
             driveFolderId,
             gcsBucketName,
             gcsObjectName);
-        return ImmutableMap.<String, Object>of("driveId", driveId);
+        return ImmutableMap.of("driveId", driveId);
       } catch (FileNotFoundException e) {
         throw new IllegalArgumentException(e.getMessage(), e);
       }
     } catch (Throwable e) {
-      logger.severe(e, e.toString());
       String message = firstNonNull(e.getMessage(), e.toString());
       throw e instanceof IllegalArgumentException
-          ? new BadRequestException(message) : new InternalServerErrorException(message);
+          ? new BadRequestException(message, e) : new InternalServerErrorException(message, e);
     }
   }
 

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,26 +19,31 @@ import static com.google.appengine.api.taskqueue.TaskOptions.Builder.withUrl;
 import static com.google.common.base.Predicates.in;
 import static com.google.common.base.Predicates.not;
 import static com.google.common.base.Strings.nullToEmpty;
-import static com.google.common.collect.Iterables.concat;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.getFirst;
 import static com.google.common.collect.Multimaps.filterKeys;
 import static com.google.common.collect.Sets.difference;
+import static com.google.common.net.MediaType.PLAIN_TEXT_UTF_8;
 import static google.registry.model.registry.Registries.getTldsOfType;
 import static google.registry.model.registry.Registry.TldType.REAL;
 import static google.registry.model.registry.Registry.TldType.TEST;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 import com.google.appengine.api.taskqueue.Queue;
+import com.google.appengine.api.taskqueue.TaskHandle;
 import com.google.appengine.api.taskqueue.TaskOptions;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
+import com.google.common.collect.Streams;
 import google.registry.request.Action;
 import google.registry.request.Parameter;
 import google.registry.request.ParameterMap;
 import google.registry.request.RequestParameters;
+import google.registry.request.Response;
+import google.registry.request.auth.Auth;
 import google.registry.util.TaskEnqueuer;
+import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
 import javax.inject.Inject;
@@ -67,7 +72,11 @@ import javax.inject.Inject;
  *   This patharg is mostly useful for aesthetic purposes, since tasks are already namespaced.
  * </ul>
  */
-@Action(path = "/_dr/cron/fanout", automaticallyPrintOk = true)
+@Action(
+  path = "/_dr/cron/fanout",
+  automaticallyPrintOk = true,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public final class TldFanoutAction implements Runnable {
 
   private static final String ENDPOINT_PARAM = "endpoint";
@@ -79,19 +88,21 @@ public final class TldFanoutAction implements Runnable {
   private static final String JITTER_SECONDS_PARAM = "jitterSeconds";
 
   /** A set of control params to TldFanoutAction that aren't passed down to the executing action. */
-  private static final Set<String> CONTROL_PARAMS = ImmutableSet.of(
-      ENDPOINT_PARAM,
-      QUEUE_PARAM,
-      FOR_EACH_REAL_TLD_PARAM,
-      FOR_EACH_TEST_TLD_PARAM,
-      RUN_IN_EMPTY_PARAM,
-      EXCLUDE_PARAM,
-      JITTER_SECONDS_PARAM);
+  private static final ImmutableSet<String> CONTROL_PARAMS =
+      ImmutableSet.of(
+          ENDPOINT_PARAM,
+          QUEUE_PARAM,
+          FOR_EACH_REAL_TLD_PARAM,
+          FOR_EACH_TEST_TLD_PARAM,
+          RUN_IN_EMPTY_PARAM,
+          EXCLUDE_PARAM,
+          JITTER_SECONDS_PARAM);
 
   private static final String TLD_PATHARG = ":tld";
   private static final Random random = new Random();
 
   @Inject TaskEnqueuer taskEnqueuer;
+  @Inject Response response;
   @Inject @Parameter(ENDPOINT_PARAM) String endpoint;
   @Inject @Parameter(QUEUE_PARAM) String queue;
   @Inject @Parameter(FOR_EACH_REAL_TLD_PARAM) boolean forEachRealTld;
@@ -104,15 +115,31 @@ public final class TldFanoutAction implements Runnable {
 
   @Override
   public void run() {
-    Set<String> namespaces = ImmutableSet.copyOf(concat(
-        runInEmpty ? ImmutableSet.of("") : ImmutableSet.<String>of(),
-        forEachRealTld ? getTldsOfType(REAL) : ImmutableSet.<String>of(),
-        forEachTestTld ? getTldsOfType(TEST) : ImmutableSet.<String>of()));
+    Set<String> tlds =
+        difference(
+            Streams.concat(
+                    Streams.stream(runInEmpty ? ImmutableSet.of("") : ImmutableSet.of()),
+                    Streams.stream(
+                        forEachRealTld ? getTldsOfType(REAL) : ImmutableSet.of()),
+                    Streams.stream(
+                        forEachTestTld ? getTldsOfType(TEST) : ImmutableSet.of()))
+                .collect(toImmutableSet()),
+            excludes);
     Multimap<String, String> flowThruParams = filterKeys(params, not(in(CONTROL_PARAMS)));
     Queue taskQueue = getQueue(queue);
-    for (String namespace : difference(namespaces, excludes)) {
-      taskEnqueuer.enqueue(taskQueue, createTaskOptions(namespace, flowThruParams));
+    StringBuilder outputPayload =
+        new StringBuilder(
+            String.format("OK: Launched the following %d tasks in queue %s\n", tlds.size(), queue));
+    for (String tld : tlds) {
+      TaskOptions taskOptions = createTaskOptions(tld, flowThruParams);
+      TaskHandle taskHandle = taskEnqueuer.enqueue(taskQueue, taskOptions);
+      outputPayload.append(
+          String.format(
+              "- Task: %s, tld: %s, endpoint: %s\n",
+              taskHandle.getName(), tld, taskOptions.getUrl()));
     }
+    response.setContentType(PLAIN_TEXT_UTF_8);
+    response.setPayload(outputPayload.toString());
   }
 
   private TaskOptions createTaskOptions(String tld, Multimap<String, String> params) {

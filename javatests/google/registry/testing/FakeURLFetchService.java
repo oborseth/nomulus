@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 
 package google.registry.testing;
 
-import com.google.appengine.api.urlfetch.HTTPHeader;
 import com.google.appengine.api.urlfetch.HTTPRequest;
 import com.google.appengine.api.urlfetch.HTTPResponse;
 import com.google.appengine.api.urlfetch.URLFetchService;
@@ -42,8 +41,7 @@ public class FakeURLFetchService extends ForwardingURLFetchService {
     if (backingMap.containsKey(requestURL)) {
       return backingMap.get(requestURL);
     } else {
-      return new HTTPResponse(
-          HttpURLConnection.HTTP_NOT_FOUND, null, null, ImmutableList.<HTTPHeader>of());
+      return new HTTPResponse(HttpURLConnection.HTTP_NOT_FOUND, null, null, ImmutableList.of());
     }
   }
 }

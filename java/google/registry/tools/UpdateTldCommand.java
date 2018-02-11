@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 package google.registry.tools;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Sets.difference;
 import static com.google.common.collect.Sets.intersection;
 import static com.google.common.collect.Sets.union;
@@ -23,18 +24,15 @@ import static google.registry.util.CollectionUtils.nullToEmpty;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import com.googlecode.objectify.Key;
 import google.registry.config.RegistryEnvironment;
 import google.registry.model.registry.Registry;
 import google.registry.model.registry.Registry.TldState;
-import google.registry.model.registry.label.ReservedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
 import org.joda.time.DateTime;
@@ -115,15 +113,7 @@ class UpdateTldCommand extends CreateOrUpdateTldCommand {
   ImmutableSet<String> getReservedLists(Registry oldRegistry) {
     return formUpdatedList(
         "reserved lists",
-        FluentIterable
-            .from(oldRegistry.getReservedLists())
-            .transform(
-                new Function<Key<ReservedList>, String>() {
-                  @Override
-                  public String apply(Key<ReservedList> key) {
-                    return key.getName();
-                  }})
-            .toSet(),
+        oldRegistry.getReservedLists().stream().map(Key::getName).collect(toImmutableSet()),
         reservedListNames,
         reservedListsAdd,
         reservedListsRemove);
@@ -133,7 +123,7 @@ class UpdateTldCommand extends CreateOrUpdateTldCommand {
   Optional<Map.Entry<DateTime, TldState>> getTldStateTransitionToAdd() {
     return setCurrentTldState != null
         ? Optional.of(Maps.immutableEntry(DateTime.now(DateTimeZone.UTC), setCurrentTldState))
-        : Optional.<Map.Entry<DateTime, TldState>>absent();
+        : Optional.empty();
   }
 
   @Override

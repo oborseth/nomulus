@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -60,26 +60,26 @@ public class DeterministicStringGenerator extends StringGenerator {
   @Override
   public String createString(int length) {
     checkArgument(length > 0, "String length must be positive.");
-    String password = "";
+    StringBuilder password = new StringBuilder();
     for (int i = 0; i < length; i++) {
-      password += iterator.next();
+      password.append(iterator.next());
     }
     switch (rule) {
       case PREPEND_COUNTER:
-        return String.format("%04d_%s", counter++, password);
+        return String.format("%04d_%s", counter++, password.toString());
       case DEFAULT:
       default:
-        return password;
+        return password.toString();
     }
   }
 
-  public DeterministicStringGenerator(@Named("alphabet") String alphabet, Rule rule) {
+  public DeterministicStringGenerator(@Named("alphabetBase64") String alphabet, Rule rule) {
     super(alphabet);
     iterator = Iterators.cycle(charactersOf(alphabet));
     this.rule = rule;
   }
 
-  public DeterministicStringGenerator(@Named("alphabet") String alphabet) {
+  public DeterministicStringGenerator(@Named("alphabetBase64") String alphabet) {
     this(alphabet, Rule.DEFAULT);
   }
 }

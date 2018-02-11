@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,13 @@
 
 package google.registry.model.poll;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static google.registry.util.CollectionUtils.forceEmptyToNull;
-import static google.registry.util.CollectionUtils.isNullOrEmpty;
 import static google.registry.util.CollectionUtils.nullToEmpty;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
+import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Converter;
-import com.google.common.base.Optional;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.annotation.Entity;
@@ -35,19 +32,19 @@ import google.registry.model.Buildable;
 import google.registry.model.EppResource;
 import google.registry.model.ImmutableObject;
 import google.registry.model.annotations.ExternalMessagingName;
-import google.registry.model.contact.ContactResource;
-import google.registry.model.domain.DomainBase;
 import google.registry.model.domain.DomainRenewData;
 import google.registry.model.domain.launch.LaunchInfoResponseExtension;
 import google.registry.model.eppoutput.EppResponse.ResponseData;
 import google.registry.model.eppoutput.EppResponse.ResponseExtension;
 import google.registry.model.poll.PendingActionNotificationResponse.ContactPendingActionNotificationResponse;
 import google.registry.model.poll.PendingActionNotificationResponse.DomainPendingActionNotificationResponse;
+import google.registry.model.poll.PendingActionNotificationResponse.HostPendingActionNotificationResponse;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.model.transfer.TransferData.TransferServerApproveEntity;
 import google.registry.model.transfer.TransferResponse.ContactTransferResponse;
 import google.registry.model.transfer.TransferResponse.DomainTransferResponse;
 import java.util.List;
+import java.util.Optional;
 import org.joda.time.DateTime;
 
 /**
@@ -68,16 +65,13 @@ import org.joda.time.DateTime;
  * <p>Poll messages are identified externally by registrars using the format defined in {@link
  * PollMessageExternalKeyConverter}.
  *
- * @see "https://tools.ietf.org/html/rfc5730#section-2.9.2.3"
+ * @see <a href="https://tools.ietf.org/html/rfc5730#section-2.9.2.3">
+ *     RFC5730 - EPP - &ltpoll&gt Command</a>
  */
 @Entity
 @ExternalMessagingName("message")
 public abstract class PollMessage extends ImmutableObject
     implements Buildable, TransferServerApproveEntity {
-
-
-  public static final Converter<Key<PollMessage>, String> EXTERNAL_KEY_CONVERTER =
-      new PollMessageExternalKeyConverter();
 
   /** Entity id. */
   @Id
@@ -171,9 +165,9 @@ public abstract class PollMessage extends ImmutableObject
     @Override
     public T build() {
       T instance = getInstance();
-      checkNotNull(instance.clientId);
-      checkNotNull(instance.eventTime);
-      checkNotNull(instance.parent);
+      checkArgumentNotNull(instance.clientId, "clientId must be specified");
+      checkArgumentNotNull(instance.eventTime, "eventTime must be specified");
+      checkArgumentNotNull(instance.parent, "parent must be specified");
       return super.build();
     }
   }
@@ -192,6 +186,7 @@ public abstract class PollMessage extends ImmutableObject
     List<ContactTransferResponse> contactTransferResponses;
     List<DomainPendingActionNotificationResponse> domainPendingActionNotificationResponses;
     List<DomainTransferResponse> domainTransferResponses;
+    List<HostPendingActionNotificationResponse> hostPendingActionNotificationResponses;
 
     // Extensions. Objectify cannot persist a base class type, so we must have a separate field
     // to hold every possible derived type of ResponseExtensions that we might store.
@@ -214,31 +209,15 @@ public abstract class PollMessage extends ImmutableObject
           .addAll(nullToEmpty(contactTransferResponses))
           .addAll(nullToEmpty(domainPendingActionNotificationResponses))
           .addAll(nullToEmpty(domainTransferResponses))
+          .addAll(nullToEmpty(hostPendingActionNotificationResponses))
           .build();
-    }
-
-    /**
-     * Returns the class of the parent EppResource that this poll message is associated with,
-     * either DomainBase or ContactResource.
-     */
-    public Class<? extends EppResource> getParentResourceClass() {
-      if (!isNullOrEmpty(domainPendingActionNotificationResponses)
-          || !isNullOrEmpty(domainTransferResponses)) {
-        return DomainBase.class;
-      } else if (!isNullOrEmpty(contactPendingActionNotificationResponses)
-          || !isNullOrEmpty(contactTransferResponses)) {
-        return ContactResource.class;
-      } else {
-        throw new IllegalStateException(String.format(
-            "PollMessage.OneTime %s does not correspond with an EppResource of a known type",
-            Key.create(this)));
-      }
     }
 
     @Override
     public ImmutableList<ResponseExtension> getResponseExtensions() {
-      return (launchInfoResponseExtension == null) ? ImmutableList.<ResponseExtension>of() :
-          ImmutableList.<ResponseExtension>of(launchInfoResponseExtension);
+      return (launchInfoResponseExtension == null)
+          ? ImmutableList.of()
+          : ImmutableList.of(launchInfoResponseExtension);
     }
 
     /** A builder for {@link OneTime} since it is immutable. */
@@ -252,25 +231,53 @@ public abstract class PollMessage extends ImmutableObject
       }
 
       public Builder setResponseData(ImmutableList<? extends ResponseData> responseData) {
-        FluentIterable<? extends ResponseData> iterable = FluentIterable.from(responseData);
-        getInstance().contactPendingActionNotificationResponses = forceEmptyToNull(
-            iterable.filter(ContactPendingActionNotificationResponse.class).toList());
-        getInstance().contactTransferResponses = forceEmptyToNull(
-            iterable.filter(ContactTransferResponse.class).toList());
-        getInstance().domainPendingActionNotificationResponses = forceEmptyToNull(
-            iterable.filter(DomainPendingActionNotificationResponse.class).toList());
-        getInstance().domainTransferResponses = forceEmptyToNull(
-            iterable.filter(DomainTransferResponse.class).toList());
+        getInstance().contactPendingActionNotificationResponses =
+            forceEmptyToNull(
+                responseData
+                    .stream()
+                    .filter(ContactPendingActionNotificationResponse.class::isInstance)
+                    .map(ContactPendingActionNotificationResponse.class::cast)
+                    .collect(toImmutableList()));
+        getInstance().contactTransferResponses =
+            forceEmptyToNull(
+                responseData
+                    .stream()
+                    .filter(ContactTransferResponse.class::isInstance)
+                    .map(ContactTransferResponse.class::cast)
+                    .collect(toImmutableList()));
+        getInstance().domainPendingActionNotificationResponses =
+            forceEmptyToNull(
+                responseData
+                    .stream()
+                    .filter(DomainPendingActionNotificationResponse.class::isInstance)
+                    .map(DomainPendingActionNotificationResponse.class::cast)
+                    .collect(toImmutableList()));
+        getInstance().domainTransferResponses =
+            forceEmptyToNull(
+                responseData
+                    .stream()
+                    .filter(DomainTransferResponse.class::isInstance)
+                    .map(DomainTransferResponse.class::cast)
+                    .collect(toImmutableList()));
+        getInstance().hostPendingActionNotificationResponses =
+            forceEmptyToNull(
+                responseData
+                    .stream()
+                    .filter(HostPendingActionNotificationResponse.class::isInstance)
+                    .map(HostPendingActionNotificationResponse.class::cast)
+                    .collect(toImmutableList()));
         return this;
       }
 
       public Builder setResponseExtensions(
           ImmutableList<? extends ResponseExtension> responseExtensions) {
-        getInstance().launchInfoResponseExtension = FluentIterable
-            .from(responseExtensions)
-            .filter(LaunchInfoResponseExtension.class)
-            .first()
-            .orNull();
+        getInstance().launchInfoResponseExtension =
+            responseExtensions
+                .stream()
+                .filter(LaunchInfoResponseExtension.class::isInstance)
+                .map(LaunchInfoResponseExtension.class::cast)
+                .findFirst()
+                .orElse(null);
         return this;
       }
     }
@@ -305,7 +312,7 @@ public abstract class PollMessage extends ImmutableObject
     public ImmutableList<ResponseData> getResponseData() {
       // Note that the event time is when the auto-renew occured, so the expiration time in the
       // response should be 1 year past that, since it denotes the new expiration time.
-      return ImmutableList.<ResponseData>of(
+      return ImmutableList.of(
           DomainRenewData.create(getTargetId(), getEventTime().plusYears(1)));
     }
 
@@ -343,7 +350,7 @@ public abstract class PollMessage extends ImmutableObject
       public Autorenew build() {
         Autorenew instance = getInstance();
         instance.autorenewEndTime =
-            Optional.fromNullable(instance.autorenewEndTime).or(END_OF_TIME);
+            Optional.ofNullable(instance.autorenewEndTime).orElse(END_OF_TIME);
         return super.build();
       }
     }

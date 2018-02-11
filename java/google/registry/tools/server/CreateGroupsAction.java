@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,29 +19,32 @@ import static google.registry.request.Action.Method.POST;
 import static java.util.Arrays.asList;
 import static javax.servlet.http.HttpServletResponse.SC_OK;
 
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.groups.GroupsConnection;
 import google.registry.groups.GroupsConnection.Role;
 import google.registry.model.registrar.Registrar;
 import google.registry.model.registrar.RegistrarContact;
-import google.registry.model.registrar.RegistrarContact.Type;
 import google.registry.request.Action;
 import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.InternalServerErrorException;
 import google.registry.request.Parameter;
 import google.registry.request.Response;
+import google.registry.request.auth.Auth;
 import google.registry.util.Concurrent;
 import google.registry.util.FormattingLogger;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.List;
+import java.util.Optional;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 
 /** Action that creates Google Groups for a registrar's mailing lists. */
-@Action(path = CreateGroupsAction.PATH, method = POST)
+@Action(
+  path = CreateGroupsAction.PATH,
+  method = POST,
+  auth = Auth.AUTH_INTERNAL_OR_ADMIN
+)
 public class CreateGroupsAction implements Runnable {
 
   public static final String PATH = "/_dr/admin/createGroups";
@@ -52,7 +55,7 @@ public class CreateGroupsAction implements Runnable {
 
   @Inject GroupsConnection groupsConnection;
   @Inject Response response;
-  @Inject @Config("publicDomainName") String publicDomainName;
+  @Inject @Config("gSuiteDomainName") String gSuiteDomainName;
   @Inject @Parameter("clientId") Optional<String> clientId;
   @Inject CreateGroupsAction() {}
 
@@ -65,28 +68,28 @@ public class CreateGroupsAction implements Runnable {
     List<RegistrarContact.Type> types = asList(RegistrarContact.Type.values());
     // Concurrently create the groups for each RegistrarContact.Type, collecting the results from
     // each call (which are either an Exception if it failed, or absent() if it succeeded).
-    List<Optional<Exception>> results = Concurrent.transform(
-        types,
-        NUM_SIMULTANEOUS_CONNECTIONS,
-        new Function<RegistrarContact.Type, Optional<Exception>>() {
-          @Override
-          public Optional<Exception> apply(Type type) {
-            try {
-              String groupKey = getGroupEmailAddressForContactType(
-                  registrar.getClientId(), type, publicDomainName);
-              String parentGroup =
-                  getGroupEmailAddressForContactType("registrar", type, publicDomainName);
-              // Creates the group, then adds it as a member to the global registrar group for
-              // that type.
-              groupsConnection.createGroup(groupKey);
-              groupsConnection.addMemberToGroup(parentGroup, groupKey, Role.MEMBER);
-              return Optional.<Exception> absent();
-            } catch (Exception e) {
-              return Optional.of(e);
-            }
-          }});
+    List<Optional<Exception>> results =
+        Concurrent.transform(
+            types,
+            NUM_SIMULTANEOUS_CONNECTIONS,
+            type -> {
+              try {
+                String groupKey =
+                    getGroupEmailAddressForContactType(
+                        registrar.getClientId(), type, gSuiteDomainName);
+                String parentGroup =
+                    getGroupEmailAddressForContactType("registrar", type, gSuiteDomainName);
+                // Creates the group, then adds it as a member to the global registrar group for
+                // that type.
+                groupsConnection.createGroup(groupKey);
+                groupsConnection.addMemberToGroup(parentGroup, groupKey, Role.MEMBER);
+                return Optional.<Exception>empty();
+              } catch (Exception e) {
+                return Optional.of(e);
+              }
+            });
     // Return the correct server response based on the results of the group creations.
-    if (Optional.presentInstances(results).iterator().hasNext()) {
+    if (results.stream().filter(Optional::isPresent).count() > 0) {
       StringWriter responseString = new StringWriter();
       PrintWriter responseWriter = new PrintWriter(responseString);
       for (int i = 0; i < results.size(); i++) {
@@ -107,7 +110,7 @@ public class CreateGroupsAction implements Runnable {
     } else {
       response.setStatus(SC_OK);
       response.setPayload("Success!");
-      logger.info("Successfully created groups for registrar: " + registrar.getRegistrarName());
+      logger.infofmt("Successfully created groups for registrar: %s", registrar.getRegistrarName());
     }
   }
 
@@ -116,12 +119,12 @@ public class CreateGroupsAction implements Runnable {
     if (!clientId.isPresent()) {
       respondToBadRequest("Error creating Google Groups, missing parameter: clientId");
     }
-    final Registrar registrar = Registrar.loadByClientId(clientId.get());
-    if (registrar == null) {
+    Optional<Registrar> registrar = Registrar.loadByClientId(clientId.get());
+    if (!registrar.isPresent()) {
       respondToBadRequest(String.format(
           "Error creating Google Groups; could not find registrar with id %s", clientId.get()));
     }
-    return registrar;
+    return registrar.get();
   }
 
   private void respondToBadRequest(String message) {

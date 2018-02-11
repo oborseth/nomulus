@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 package google.registry.dns.writer.clouddns;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static google.registry.model.EppResourceUtils.loadByForeignKey;
 
 import com.google.api.client.googleapis.json.GoogleJsonError.ErrorInfo;
@@ -24,14 +25,14 @@ import com.google.api.services.dns.model.Change;
 import com.google.api.services.dns.model.ResourceRecordSet;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.ImmutableSet.Builder;
+import com.google.common.collect.Sets;
 import com.google.common.net.InternetDomainName;
 import com.google.common.util.concurrent.RateLimiter;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
+import google.registry.dns.writer.BaseDnsWriter;
 import google.registry.dns.writer.DnsWriter;
 import google.registry.dns.writer.DnsWriterZone;
 import google.registry.model.domain.DomainResource;
@@ -39,16 +40,21 @@ import google.registry.model.domain.secdns.DelegationSignerData;
 import google.registry.model.host.HostResource;
 import google.registry.model.registry.Registries;
 import google.registry.util.Clock;
+import google.registry.util.Concurrent;
 import google.registry.util.FormattingLogger;
 import google.registry.util.Retrier;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
+import java.util.AbstractMap.SimpleImmutableEntry;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.Callable;
+import java.util.stream.Stream;
 import javax.inject.Inject;
 import javax.inject.Named;
 import org.joda.time.Duration;
@@ -56,12 +62,12 @@ import org.joda.time.Duration;
 /**
  * {@link DnsWriter} implementation that talks to Google Cloud DNS.
  *
- * @see "https://cloud.google.com/dns/docs/"
+ * @see <a href="https://cloud.google.com/dns/docs/">Google Cloud DNS Documentation</a>
  */
-class CloudDnsWriter implements DnsWriter {
+public class CloudDnsWriter extends BaseDnsWriter {
 
   /**
-   * The name of the pricing engine, as used in {@code Registry.dnsWriter}. Remember to change
+   * The name of the dns writer, as used in {@code Registry.dnsWriter}. Remember to change
    * the value on affected Registry objects to prevent runtime failures.
    */
   public static final String NAME = "CloudDnsWriter";
@@ -72,32 +78,40 @@ class CloudDnsWriter implements DnsWriter {
 
   private final Clock clock;
   private final RateLimiter rateLimiter;
-  // TODO(shikhman): This uses @Config("transientFailureRetries") which may not be tuned for this
+  private final int numThreads;
+  // TODO(shikhman): This uses @Named("transientFailureRetries") which may not be tuned for this
   // application.
   private final Retrier retrier;
-  private final Duration defaultTtl;
+  private final Duration defaultATtl;
+  private final Duration defaultNsTtl;
+  private final Duration defaultDsTtl;
   private final String projectId;
   private final String zoneName;
   private final Dns dnsConnection;
-  private final ImmutableMap.Builder<String, ImmutableSet<ResourceRecordSet>>
-      desiredRecordsBuilder = new ImmutableMap.Builder<>();
+  private final HashMap<String, ImmutableSet<ResourceRecordSet>> desiredRecords = new HashMap<>();
 
   @Inject
   CloudDnsWriter(
       Dns dnsConnection,
       @Config("projectId") String projectId,
       @DnsWriterZone String zoneName,
-      @Config("dnsDefaultTtl") Duration defaultTtl,
+      @Config("dnsDefaultATtl") Duration defaultATtl,
+      @Config("dnsDefaultNsTtl") Duration defaultNsTtl,
+      @Config("dnsDefaultDsTtl") Duration defaultDsTtl,
       @Named("cloudDns") RateLimiter rateLimiter,
+      @Named("cloudDnsNumThreads") int numThreads,
       Clock clock,
       Retrier retrier) {
     this.dnsConnection = dnsConnection;
     this.projectId = projectId;
-    this.zoneName = zoneName;
-    this.defaultTtl = defaultTtl;
+    this.zoneName = zoneName.replace('.', '-');
+    this.defaultATtl = defaultATtl;
+    this.defaultNsTtl = defaultNsTtl;
+    this.defaultDsTtl = defaultDsTtl;
     this.rateLimiter = rateLimiter;
     this.clock = clock;
     this.retrier = retrier;
+    this.numThreads = numThreads;
   }
 
   /** Publish the domain and all subordinate hosts. */
@@ -108,13 +122,13 @@ class CloudDnsWriter implements DnsWriter {
 
     // Load the target domain. Note that it can be null if this domain was just deleted.
     Optional<DomainResource> domainResource =
-        Optional.fromNullable(loadByForeignKey(DomainResource.class, domainName, clock.nowUtc()));
+        Optional.ofNullable(loadByForeignKey(DomainResource.class, domainName, clock.nowUtc()));
 
     // Return early if no DNS records should be published.
     // desiredRecordsBuilder is populated with an empty set to indicate that all existing records
     // should be deleted.
     if (!domainResource.isPresent() || !domainResource.get().shouldPublishToDns()) {
-      desiredRecordsBuilder.put(absoluteDomainName, ImmutableSet.<ResourceRecordSet>of());
+      desiredRecords.put(absoluteDomainName, ImmutableSet.of());
       return;
     }
 
@@ -132,7 +146,7 @@ class CloudDnsWriter implements DnsWriter {
         domainRecords.add(
             new ResourceRecordSet()
                 .setName(absoluteDomainName)
-                .setTtl((int) defaultTtl.getStandardSeconds())
+                .setTtl((int) defaultDsTtl.getStandardSeconds())
                 .setType("DS")
                 .setKind("dns#resourceRecordSet")
                 .setRrdatas(ImmutableList.copyOf(dsRrData)));
@@ -157,14 +171,14 @@ class CloudDnsWriter implements DnsWriter {
         domainRecords.add(
             new ResourceRecordSet()
                 .setName(absoluteDomainName)
-                .setTtl((int) defaultTtl.getStandardSeconds())
+                .setTtl((int) defaultNsTtl.getStandardSeconds())
                 .setType("NS")
                 .setKind("dns#resourceRecordSet")
                 .setRrdatas(ImmutableList.copyOf(nsRrData)));
       }
     }
 
-    desiredRecordsBuilder.put(absoluteDomainName, domainRecords.build());
+    desiredRecords.put(absoluteDomainName, domainRecords.build());
     logger.finefmt(
         "Will write %s records for domain %s", domainRecords.build().size(), absoluteDomainName);
   }
@@ -178,11 +192,11 @@ class CloudDnsWriter implements DnsWriter {
     // desiredRecords is populated with an empty set to indicate that all existing records
     // should be deleted.
     Optional<HostResource> host =
-        Optional.fromNullable(loadByForeignKey(HostResource.class, hostName, clock.nowUtc()));
+        Optional.ofNullable(loadByForeignKey(HostResource.class, hostName, clock.nowUtc()));
 
     // Return early if the host is deleted.
     if (!host.isPresent()) {
-      desiredRecordsBuilder.put(absoluteHostName, ImmutableSet.<ResourceRecordSet>of());
+      desiredRecords.put(absoluteHostName, ImmutableSet.of());
       return;
     }
 
@@ -204,7 +218,7 @@ class CloudDnsWriter implements DnsWriter {
       domainRecords.add(
           new ResourceRecordSet()
               .setName(absoluteHostName)
-              .setTtl((int) defaultTtl.getStandardSeconds())
+              .setTtl((int) defaultATtl.getStandardSeconds())
               .setType("A")
               .setKind("dns#resourceRecordSet")
               .setRrdatas(ImmutableList.copyOf(aRrData)));
@@ -214,13 +228,13 @@ class CloudDnsWriter implements DnsWriter {
       domainRecords.add(
           new ResourceRecordSet()
               .setName(absoluteHostName)
-              .setTtl((int) defaultTtl.getStandardSeconds())
+              .setTtl((int) defaultATtl.getStandardSeconds())
               .setType("AAAA")
               .setKind("dns#resourceRecordSet")
               .setRrdatas(ImmutableList.copyOf(aaaaRrData)));
     }
 
-    desiredRecordsBuilder.put(absoluteHostName, domainRecords.build());
+    desiredRecords.put(absoluteHostName, domainRecords.build());
   }
 
   /**
@@ -264,94 +278,125 @@ class CloudDnsWriter implements DnsWriter {
    * representation built via this writer.
    */
   @Override
-  public void close() {
-    close(desiredRecordsBuilder.build());
-  }
-
-  @VisibleForTesting
-  void close(ImmutableMap<String, ImmutableSet<ResourceRecordSet>> desiredRecords) {
-    retrier.callWithRetry(getMutateZoneCallback(desiredRecords), ZoneStateException.class);
+  protected void commitUnchecked() {
+    ImmutableMap<String, ImmutableSet<ResourceRecordSet>> desiredRecordsCopy =
+        ImmutableMap.copyOf(desiredRecords);
+    retrier.callWithRetry(() -> mutateZone(desiredRecordsCopy), ZoneStateException.class);
     logger.info("Wrote to Cloud DNS");
   }
 
   /**
-   * Get a callback to mutate the zone with the provided {@code desiredRecords}.
+   * Returns the glue records for in-bailiwick nameservers for the given domain+records.
+   */
+  private Stream<String> filterGlueRecords(String domainName, Stream<ResourceRecordSet> records) {
+    return records
+        .filter(record -> record.getType().equals("NS"))
+        .flatMap(record -> record.getRrdatas().stream())
+        .filter(hostName -> hostName.endsWith(domainName) && !hostName.equals(domainName));
+  }
+
+  /**
+   * Mutate the zone with the provided {@code desiredRecords}.
    */
   @VisibleForTesting
-  Callable<Void> getMutateZoneCallback(
-      final ImmutableMap<String, ImmutableSet<ResourceRecordSet>> desiredRecords) {
-    return new Callable<Void>() {
-      @Override
-      public Void call() throws IOException, ZoneStateException {
-        // Fetch all existing records for names that this writer is trying to modify
-        Builder<ResourceRecordSet> existingRecords = new Builder<>();
-        for (String domainName : desiredRecords.keySet()) {
-          List<ResourceRecordSet> existingRecordsForDomain =
-              getResourceRecordsForDomain(domainName);
-          existingRecords.addAll(existingRecordsForDomain);
+  void mutateZone(ImmutableMap<String, ImmutableSet<ResourceRecordSet>> desiredRecords) {
+    // Fetch all existing records for names that this writer is trying to modify
+    ImmutableSet.Builder<ResourceRecordSet> flattenedExistingRecords = new ImmutableSet.Builder<>();
 
-          // Fetch glue records for in-bailiwick nameservers
-          for (ResourceRecordSet record : existingRecordsForDomain) {
-            if (!record.getType().equals("NS")) {
-              continue;
-            }
-            for (String hostName : record.getRrdatas()) {
-              if (hostName.endsWith(domainName) && !hostName.equals(domainName)) {
-                existingRecords.addAll(getResourceRecordsForDomain(hostName));
-              }
-            }
-          }
-        }
+    // First, fetch the records for the given domains
+    Map<String, List<ResourceRecordSet>> domainRecords =
+        getResourceRecordsForDomains(desiredRecords.keySet());
 
-        // Flatten the desired records into one set.
-        Builder<ResourceRecordSet> flattenedDesiredRecords = new Builder<>();
-        for (ImmutableSet<ResourceRecordSet> records : desiredRecords.values()) {
-          flattenedDesiredRecords.addAll(records);
-        }
+    // add the records to the list of existing records
+    domainRecords.values().forEach(flattenedExistingRecords::addAll);
 
-        // Delete all existing records and add back the desired records
-        updateResourceRecords(flattenedDesiredRecords.build(), existingRecords.build());
-        return null;
-      }
-    };
+    // Get the glue record host names from the given records
+    ImmutableSet<String> hostsToRead =
+        domainRecords
+            .entrySet()
+            .stream()
+            .flatMap(entry -> filterGlueRecords(entry.getKey(), entry.getValue().stream()))
+            .collect(toImmutableSet());
+
+    // Then fetch and add the records for these hosts
+    getResourceRecordsForDomains(hostsToRead).values().forEach(flattenedExistingRecords::addAll);
+
+    // Flatten the desired records into one set.
+    ImmutableSet.Builder<ResourceRecordSet> flattenedDesiredRecords = new ImmutableSet.Builder<>();
+    desiredRecords.values().forEach(flattenedDesiredRecords::addAll);
+
+    // Delete all existing records and add back the desired records
+    updateResourceRecords(flattenedDesiredRecords.build(), flattenedExistingRecords.build());
+  }
+
+  /**
+   * Fetch the {@link ResourceRecordSet}s for the given domain names under this zone.
+   *
+   * <p>The provided domain should be in absolute form.
+   */
+  private Map<String, List<ResourceRecordSet>> getResourceRecordsForDomains(
+      Set<String> domainNames) {
+    logger.finefmt("Fetching records for %s", domainNames);
+    // As per Concurrent.transform() - if numThreads or domainNames.size() < 2, it will not use
+    // threading.
+    return ImmutableMap.copyOf(
+        Concurrent.transform(
+            domainNames,
+            numThreads,
+            domainName ->
+                new SimpleImmutableEntry<>(domainName, getResourceRecordsForDomain(domainName))));
   }
 
   /**
    * Fetch the {@link ResourceRecordSet}s for the given domain name under this zone.
    *
    * <p>The provided domain should be in absolute form.
-   *
-   * @throws IOException if the operation could not be completed successfully
    */
-  private List<ResourceRecordSet> getResourceRecordsForDomain(String domainName)
-      throws IOException {
-    logger.finefmt("Fetching records for %s", domainName);
-    Dns.ResourceRecordSets.List listRecordsRequest =
-        dnsConnection.resourceRecordSets().list(projectId, zoneName).setName(domainName);
+  private List<ResourceRecordSet> getResourceRecordsForDomain(String domainName) {
+    // TODO(b/70217860): do we want to use a retrier here?
+    try {
+      Dns.ResourceRecordSets.List listRecordsRequest =
+          dnsConnection.resourceRecordSets().list(projectId, zoneName).setName(domainName);
 
-    rateLimiter.acquire();
-    return listRecordsRequest.execute().getRrsets();
+      rateLimiter.acquire();
+      return listRecordsRequest.execute().getRrsets();
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   /**
    * Update {@link ResourceRecordSet}s under this zone.
    *
-   * <p>This call should be used in conjunction with getResourceRecordsForDomain in a get-and-set
-   * retry loop.
+   * <p>This call should be used in conjunction with {@link #getResourceRecordsForDomains} in a
+   * get-and-set retry loop.
    *
    * <p>See {@link "https://cloud.google.com/dns/troubleshooting"} for a list of errors produced by
    * the Google Cloud DNS API.
    *
-   * @throws IOException if the operation could not be completed successfully due to an
-   *     uncorrectable error.
    * @throws ZoneStateException if the operation could not be completely successfully because the
    *     records to delete do not exist, already exist or have been modified with different
    *     attributes since being queried.
    */
   private void updateResourceRecords(
-      ImmutableSet<ResourceRecordSet> additions, ImmutableSet<ResourceRecordSet> deletions)
-      throws IOException, ZoneStateException {
-    Change change = new Change().setAdditions(additions.asList()).setDeletions(deletions.asList());
+      ImmutableSet<ResourceRecordSet> additions, ImmutableSet<ResourceRecordSet> deletions) {
+    // Find records that are both in additions and deletions, so we can remove them from both before
+    // requesting the change. This is mostly for optimization reasons - not doing so doesn't affect
+    // the result.
+    ImmutableSet<ResourceRecordSet> intersection =
+        Sets.intersection(additions, deletions).immutableCopy();
+    logger.infofmt(
+        "There are %s common items out of the %s items in 'additions' and %s items in 'deletions'",
+        intersection.size(), additions.size(), deletions.size());
+    // Exit early if we have nothing to update - dnsConnection doesn't work on empty changes
+    if (additions.equals(deletions)) {
+      logger.infofmt("Returning early because additions is the same as deletions");
+      return;
+    }
+    Change change =
+        new Change()
+            .setAdditions(ImmutableList.copyOf(Sets.difference(additions, intersection)))
+            .setDeletions(ImmutableList.copyOf(Sets.difference(deletions, intersection)));
 
     rateLimiter.acquire();
     try {
@@ -360,15 +405,17 @@ class CloudDnsWriter implements DnsWriter {
       List<ErrorInfo> errors = e.getDetails().getErrors();
       // We did something really wrong here, just give up and re-throw
       if (errors.size() > 1) {
-        throw e;
+        throw new RuntimeException(e);
       }
       String errorReason = errors.get(0).getReason();
 
       if (RETRYABLE_EXCEPTION_REASONS.contains(errorReason)) {
         throw new ZoneStateException(errorReason);
       } else {
-        throw e;
+        throw new RuntimeException(e);
       }
+    } catch (IOException e) {
+      throw new RuntimeException(e);
     }
   }
 

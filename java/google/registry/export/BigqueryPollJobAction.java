@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@ import google.registry.request.Header;
 import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.NotModifiedException;
 import google.registry.request.Payload;
+import google.registry.request.auth.Auth;
 import google.registry.util.FormattingLogger;
 import google.registry.util.TaskEnqueuer;
 import java.io.ByteArrayInputStream;
@@ -46,9 +47,11 @@ import org.joda.time.Duration;
  * completion state; otherwise it will return a failure code so that the task will be retried.
  */
 @Action(
-    path = BigqueryPollJobAction.PATH,
-    method = {Action.Method.GET, Action.Method.POST},
-    automaticallyPrintOk = true)
+  path = BigqueryPollJobAction.PATH,
+  method = {Action.Method.GET, Action.Method.POST},
+  automaticallyPrintOk = true,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public class BigqueryPollJobAction implements Runnable {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
@@ -79,7 +82,6 @@ public class BigqueryPollJobAction implements Runnable {
     try {
       task = (TaskOptions) new ObjectInputStream(new ByteArrayInputStream(payload)).readObject();
     } catch (ClassNotFoundException | IOException e) {
-      logger.severe(e, e.toString());
       throw new BadRequestException("Cannot deserialize task from payload", e);
     }
     String taskName = enqueuer.enqueue(getQueue(chainedQueueName.get()), task).getName();
@@ -104,7 +106,7 @@ public class BigqueryPollJobAction implements Runnable {
       job = bigquery.jobs().get(projectId, jobId).execute();
     } catch (IOException e) {
       // We will throw a new exception because done==false, but first log this exception.
-      logger.warning(e, e.getMessage());
+      logger.warningfmt(e, "Error checking outcome of BigQuery job %s.", jobId);
     }
     // If job is not yet done, then throw an exception so that we'll return a failing HTTP status
     // code and the task will be retried.

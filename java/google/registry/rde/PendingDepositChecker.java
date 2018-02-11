@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,8 +19,7 @@ import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.util.DateTimeUtils.isBeforeOrAt;
 
 import com.google.common.collect.ImmutableSetMultimap;
-import com.googlecode.objectify.Work;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.model.common.Cursor;
 import google.registry.model.common.Cursor.CursorType;
 import google.registry.model.rde.RdeMode;
@@ -48,7 +47,7 @@ import org.joda.time.Duration;
  *
  * <p>If no deposits have been made so far, then {@code startingPoint} is used as the watermark
  * of the next deposit. If that's a day in the future, then escrow won't start until that date.
- * This first deposit time will be set to datastore in a transaction.
+ * This first deposit time will be set to Datastore in a transaction.
  */
 public final class PendingDepositChecker {
 
@@ -107,16 +106,16 @@ public final class PendingDepositChecker {
       final Registry registry,
       final CursorType cursorType,
       final DateTime initialValue) {
-    return ofy().transact(new Work<DateTime>() {
-      @Override
-      public DateTime run() {
-        Cursor cursor = ofy().load().key(Cursor.createKey(cursorType, registry)).now();
-        if (cursor != null) {
-          return cursor.getCursorTime();
-        }
-        ofy().save().entity(Cursor.create(cursorType, initialValue, registry));
-        return initialValue;
-      }});
+    return ofy()
+        .transact(
+            () -> {
+              Cursor cursor = ofy().load().key(Cursor.createKey(cursorType, registry)).now();
+              if (cursor != null) {
+                return cursor.getCursorTime();
+              }
+              ofy().save().entity(Cursor.create(cursorType, initialValue, registry));
+              return initialValue;
+            });
   }
 
   private static DateTime advanceToDayOfWeek(DateTime date, int dayOfWeek) {

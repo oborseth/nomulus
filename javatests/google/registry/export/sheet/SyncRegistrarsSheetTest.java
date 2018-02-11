@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,19 +16,26 @@ package google.registry.export.sheet;
 
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.config.RegistryConfig.getDefaultRegistrarReferralUrl;
+import static google.registry.config.RegistryConfig.getDefaultRegistrarWhoisServer;
+import static google.registry.model.common.Cursor.CursorType.SYNC_REGISTRAR_SHEET;
+import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.deleteResource;
+import static google.registry.testing.DatastoreHelper.persistNewRegistrar;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.DatastoreHelper.persistSimpleResources;
+import static org.joda.money.CurrencyUnit.JPY;
+import static org.joda.money.CurrencyUnit.USD;
 import static org.joda.time.DateTimeZone.UTC;
-import static org.joda.time.Duration.standardHours;
+import static org.joda.time.Duration.standardMinutes;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.verify;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import google.registry.config.RegistryEnvironment;
+import google.registry.model.common.Cursor;
 import google.registry.model.ofy.Ofy;
 import google.registry.model.registrar.Registrar;
 import google.registry.model.registrar.RegistrarAddress;
@@ -37,7 +44,6 @@ import google.registry.testing.AppEngineRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.InjectRule;
 import org.joda.time.DateTime;
-import org.joda.time.Duration;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -50,8 +56,6 @@ import org.mockito.runners.MockitoJUnitRunner;
 /** Unit tests for {@link SyncRegistrarsSheet}. */
 @RunWith(MockitoJUnitRunner.class)
 public class SyncRegistrarsSheetTest {
-
-  private static final RegistryEnvironment ENVIRONMENT = RegistryEnvironment.get();
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder()
@@ -87,29 +91,22 @@ public class SyncRegistrarsSheetTest {
   }
 
   @Test
-  public void testWasRegistrarsModifiedInLast_noRegistrars_returnsFalse() throws Exception {
-    SyncRegistrarsSheet sync = newSyncRegistrarsSheet();
-    assertThat(sync.wasRegistrarsModifiedInLast(Duration.standardHours(1))).isFalse();
+  public void test_wereRegistrarsModified_noRegistrars_returnsFalse() throws Exception {
+    assertThat(newSyncRegistrarsSheet().wereRegistrarsModified()).isFalse();
   }
 
   @Test
-  public void testWasRegistrarsModifiedInLastInterval() throws Exception {
-    Duration interval = standardHours(1);
-    persistResource(new Registrar.Builder()
-        .setClientId("SomeRegistrar")
-        .setRegistrarName("Some Registrar Inc.")
-        .setType(Registrar.Type.REAL)
-        .setIanaIdentifier(8L)
-        .setState(Registrar.State.ACTIVE)
-        .build());
-    clock.advanceBy(interval);
-    assertThat(newSyncRegistrarsSheet().wasRegistrarsModifiedInLast(interval)).isTrue();
-    clock.advanceOneMilli();
-    assertThat(newSyncRegistrarsSheet().wasRegistrarsModifiedInLast(interval)).isFalse();
+  public void test_wereRegistrarsModified_atDifferentCursorTimes() throws Exception {
+    persistNewRegistrar("SomeRegistrar", "Some Registrar Inc.", Registrar.Type.REAL, 8L);
+    persistResource(Cursor.createGlobal(SYNC_REGISTRAR_SHEET, clock.nowUtc().minusHours(1)));
+    assertThat(newSyncRegistrarsSheet().wereRegistrarsModified()).isTrue();
+    persistResource(Cursor.createGlobal(SYNC_REGISTRAR_SHEET, clock.nowUtc().plusHours(1)));
+    assertThat(newSyncRegistrarsSheet().wereRegistrarsModified()).isFalse();
   }
 
   @Test
   public void testRun() throws Exception {
+    DateTime beforeExecution = clock.nowUtc();
     persistResource(new Registrar.Builder()
         .setClientId("anotherregistrar")
         .setRegistrarName("Another Registrar LLC")
@@ -140,25 +137,29 @@ public class SyncRegistrarsSheetTest {
         .setIcannReferralEmail("jim@example.net")
         .build());
 
-    Registrar registrar = new Registrar.Builder()
-        .setClientId("aaaregistrar")
-        .setRegistrarName("AAA Registrar Inc.")
-        .setType(Registrar.Type.REAL)
-        .setIanaIdentifier(8L)
-        .setState(Registrar.State.SUSPENDED)
-        .setPassword("pa$$word")
-        .setEmailAddress("nowhere@example.org")
-        .setInternationalizedAddress(new RegistrarAddress.Builder()
-            .setStreet(ImmutableList.of("I get fallen back upon since there's no l10n addr"))
-            .setCity("Williamsburg")
-            .setState("NY")
-            .setZip("11211")
-            .setCountryCode("US")
-            .build())
-        .setAllowedTlds(ImmutableSet.of("example"))
-        .setPhoneNumber("+1.2223334444")
-        .setUrl("http://www.example.org/aaa_registrar")
-        .build();
+    Registrar registrar =
+        new Registrar.Builder()
+            .setClientId("aaaregistrar")
+            .setRegistrarName("AAA Registrar Inc.")
+            .setType(Registrar.Type.REAL)
+            .setIanaIdentifier(8L)
+            .setState(Registrar.State.SUSPENDED)
+            .setPassword("pa$$word")
+            .setEmailAddress("nowhere@example.org")
+            .setInternationalizedAddress(
+                new RegistrarAddress.Builder()
+                    .setStreet(
+                        ImmutableList.of("I get fallen back upon since there's no l10n addr"))
+                    .setCity("Williamsburg")
+                    .setState("NY")
+                    .setZip("11211")
+                    .setCountryCode("US")
+                    .build())
+            .setAllowedTlds(ImmutableSet.of("example"))
+            .setPhoneNumber("+1.2223334444")
+            .setUrl("http://www.example.org/aaa_registrar")
+            .setBillingAccountMap(ImmutableMap.of(USD, "USD1234", JPY, "JPY7890"))
+            .build();
     ImmutableList<RegistrarContact> contacts = ImmutableList.of(
         new RegistrarContact.Builder()
             .setParent(registrar)
@@ -190,6 +191,7 @@ public class SyncRegistrarsSheetTest {
     persistSimpleResources(contacts);
     persistResource(registrar);
 
+    clock.advanceBy(standardMinutes(1));
     newSyncRegistrarsSheet().run("foobar");
 
     verify(sheetSynchronizer).synchronize(eq("foobar"), rowsCaptor.capture());
@@ -202,49 +204,71 @@ public class SyncRegistrarsSheetTest {
     assertThat(row).containsEntry("state", "SUSPENDED");
     assertThat(row).containsEntry("ianaIdentifier", "8");
     assertThat(row).containsEntry("billingIdentifier", "");
-    assertThat(row).containsEntry("primaryContacts", ""
-        + "Jane Doe\n"
-        + "contact@example.com\n"
-        + "Tel: +1.1234567890\n"
-        + "Types: [ADMIN, BILLING]\n"
-        + "Visible in WHOIS as Admin contact: No\n"
-        + "Visible in WHOIS as Technical contact: No\n"
-        + "\n"
-        + "John Doe\n"
-        + "john.doe@example.tld\n"
-        + "Tel: +1.1234567890\n"
-        + "Fax: +1.1234567891\n"
-        + "Types: [ADMIN]\n"
-        + "Visible in WHOIS as Admin contact: No\n"
-        + "Visible in WHOIS as Technical contact: Yes\n"
-        + "GAE-UserID: light\n");
-    assertThat(row).containsEntry("techContacts", ""
-        + "Jane Smith\n"
-        + "pride@example.net\n"
-        + "Types: [TECH]\n"
-        + "Visible in WHOIS as Admin contact: No\n"
-        + "Visible in WHOIS as Technical contact: No\n");
+    assertThat(row)
+        .containsEntry(
+            "primaryContacts",
+            ""
+                + "Jane Doe\n"
+                + "contact@example.com\n"
+                + "Tel: +1.1234567890\n"
+                + "Types: [ADMIN, BILLING]\n"
+                + "Visible in registrar WHOIS query as Admin contact: No\n"
+                + "Visible in registrar WHOIS query as Technical contact: No\n"
+                + "Phone number and email visible in domain WHOIS query as "
+                + "Registrar Abuse contact info: No\n"
+                + "\n"
+                + "John Doe\n"
+                + "john.doe@example.tld\n"
+                + "Tel: +1.1234567890\n"
+                + "Fax: +1.1234567891\n"
+                + "Types: [ADMIN]\n"
+                + "Visible in registrar WHOIS query as Admin contact: No\n"
+                + "Visible in registrar WHOIS query as Technical contact: Yes\n"
+                + "Phone number and email visible in domain WHOIS query as "
+                + "Registrar Abuse contact info: No\n"
+                + "GAE-UserID: light\n");
+    assertThat(row)
+        .containsEntry(
+            "techContacts",
+            ""
+                + "Jane Smith\n"
+                + "pride@example.net\n"
+                + "Types: [TECH]\n"
+                + "Visible in registrar WHOIS query as Admin contact: No\n"
+                + "Visible in registrar WHOIS query as Technical contact: No\n"
+                + "Phone number and email visible in domain WHOIS query as "
+                + "Registrar Abuse contact info: No\n");
     assertThat(row).containsEntry("marketingContacts", "");
     assertThat(row).containsEntry("abuseContacts", "");
     assertThat(row).containsEntry("whoisInquiryContacts", "");
     assertThat(row).containsEntry("legalContacts", "");
-    assertThat(row).containsEntry("billingContacts", ""
-        + "Jane Doe\n"
-        + "contact@example.com\n"
-        + "Tel: +1.1234567890\n"
-        + "Types: [ADMIN, BILLING]\n"
-        + "Visible in WHOIS as Admin contact: No\n"
-        + "Visible in WHOIS as Technical contact: No\n");
+    assertThat(row)
+        .containsEntry(
+            "billingContacts",
+            ""
+                + "Jane Doe\n"
+                + "contact@example.com\n"
+                + "Tel: +1.1234567890\n"
+                + "Types: [ADMIN, BILLING]\n"
+                + "Visible in registrar WHOIS query as Admin contact: No\n"
+                + "Visible in registrar WHOIS query as Technical contact: No\n"
+                + "Phone number and email visible in domain WHOIS query as "
+                + "Registrar Abuse contact info: No\n");
     assertThat(row).containsEntry("contactsMarkedAsWhoisAdmin", "");
-    assertThat(row).containsEntry("contactsMarkedAsWhoisTech", ""
-        + "John Doe\n"
-        + "john.doe@example.tld\n"
-        + "Tel: +1.1234567890\n"
-        + "Fax: +1.1234567891\n"
-        + "Types: [ADMIN]\n"
-        + "Visible in WHOIS as Admin contact: No\n"
-        + "Visible in WHOIS as Technical contact: Yes\n"
-        + "GAE-UserID: light\n");
+    assertThat(row)
+        .containsEntry(
+            "contactsMarkedAsWhoisTech",
+            ""
+                + "John Doe\n"
+                + "john.doe@example.tld\n"
+                + "Tel: +1.1234567890\n"
+                + "Fax: +1.1234567891\n"
+                + "Types: [ADMIN]\n"
+                + "Visible in registrar WHOIS query as Admin contact: No\n"
+                + "Visible in registrar WHOIS query as Technical contact: Yes\n"
+                + "Phone number and email visible in domain WHOIS query as "
+                + "Registrar Abuse contact info: No\n"
+                + "GAE-UserID: light\n");
     assertThat(row).containsEntry("emailAddress", "nowhere@example.org");
     assertThat(row).containsEntry(
         "address.street", "I get fallen back upon since there's no l10n addr");
@@ -254,17 +278,16 @@ public class SyncRegistrarsSheetTest {
     assertThat(row).containsEntry("address.countryCode", "US");
     assertThat(row).containsEntry("phoneNumber", "+1.2223334444");
     assertThat(row).containsEntry("faxNumber", "");
-    assertThat(row.get("creationTime")).isEqualTo(clock.nowUtc().toString());
-    assertThat(row.get("lastUpdateTime")).isEqualTo(clock.nowUtc().toString());
+    assertThat(row.get("creationTime")).isEqualTo(beforeExecution.toString());
+    assertThat(row.get("lastUpdateTime")).isEqualTo(beforeExecution.toString());
     assertThat(row).containsEntry("allowedTlds", "example");
     assertThat(row).containsEntry("blockPremiumNames", "false");
     assertThat(row).containsEntry("ipAddressWhitelist", "");
     assertThat(row).containsEntry("url", "http://www.example.org/aaa_registrar");
     assertThat(row).containsEntry("icannReferralEmail", "");
-    assertThat(row).containsEntry("whoisServer",
-        ENVIRONMENT.config().getRegistrarDefaultWhoisServer());
-    assertThat(row).containsEntry("referralUrl",
-        ENVIRONMENT.config().getRegistrarDefaultReferralUrl().toString());
+    assertThat(row).containsEntry("whoisServer", getDefaultRegistrarWhoisServer());
+    assertThat(row).containsEntry("referralUrl", getDefaultRegistrarReferralUrl());
+    assertThat(row).containsEntry("billingAccountMap", "{JPY=JPY7890, USD=USD1234}");
 
     row = rows.get(1);
     assertThat(row).containsEntry("clientIdentifier", "anotherregistrar");
@@ -289,32 +312,32 @@ public class SyncRegistrarsSheetTest {
     assertThat(row).containsEntry("address.countryCode", "US");
     assertThat(row).containsEntry("phoneNumber", "+1.2125551212");
     assertThat(row).containsEntry("faxNumber", "+1.2125551213");
-    assertThat(row.get("creationTime")).isEqualTo(clock.nowUtc().toString());
-    assertThat(row.get("lastUpdateTime")).isEqualTo(clock.nowUtc().toString());
+    assertThat(row.get("creationTime")).isEqualTo(beforeExecution.toString());
+    assertThat(row.get("lastUpdateTime")).isEqualTo(beforeExecution.toString());
     assertThat(row).containsEntry("allowedTlds", "");
     assertThat(row).containsEntry("whoisServer", "whois.example.com");
     assertThat(row).containsEntry("blockPremiumNames", "false");
     assertThat(row).containsEntry("ipAddressWhitelist", "");
     assertThat(row).containsEntry("url", "http://www.example.org/another_registrar");
-    assertThat(row).containsEntry("referralUrl",
-        ENVIRONMENT.config().getRegistrarDefaultReferralUrl().toString());
+    assertThat(row).containsEntry("referralUrl", getDefaultRegistrarReferralUrl());
     assertThat(row).containsEntry("icannReferralEmail", "jim@example.net");
+    assertThat(row).containsEntry("billingAccountMap", "{}");
+
+    Cursor cursor = ofy().load().key(Cursor.createGlobalKey(SYNC_REGISTRAR_SHEET)).now();
+    assertThat(cursor).isNotNull();
+    assertThat(cursor.getCursorTime()).isGreaterThan(beforeExecution);
   }
 
   @Test
   public void testRun_missingValues_stillWorks() throws Exception {
-    persistResource(new Registrar.Builder()
-        .setClientId("SomeRegistrar")
-        .setType(Registrar.Type.REAL)
-        .setIanaIdentifier(8L)
-        .build());
+    persistNewRegistrar("SomeRegistrar", "Some Registrar", Registrar.Type.REAL, 8L);
 
     newSyncRegistrarsSheet().run("foobar");
 
     verify(sheetSynchronizer).synchronize(eq("foobar"), rowsCaptor.capture());
     ImmutableMap<String, String> row = getOnlyElement(getOnlyElement(rowsCaptor.getAllValues()));
     assertThat(row).containsEntry("clientIdentifier", "SomeRegistrar");
-    assertThat(row).containsEntry("registrarName", "");
+    assertThat(row).containsEntry("registrarName", "Some Registrar");
     assertThat(row).containsEntry("state", "");
     assertThat(row).containsEntry("ianaIdentifier", "8");
     assertThat(row).containsEntry("billingIdentifier", "");
@@ -328,21 +351,20 @@ public class SyncRegistrarsSheetTest {
     assertThat(row).containsEntry("contactsMarkedAsWhoisAdmin", "");
     assertThat(row).containsEntry("contactsMarkedAsWhoisTech", "");
     assertThat(row).containsEntry("emailAddress", "");
-    assertThat(row).containsEntry("address.street", "UNKNOWN");
-    assertThat(row).containsEntry("address.city", "UNKNOWN");
+    assertThat(row).containsEntry("address.street", "123 Fake St");
+    assertThat(row).containsEntry("address.city", "Fakington");
     assertThat(row).containsEntry("address.state", "");
     assertThat(row).containsEntry("address.zip", "");
     assertThat(row).containsEntry("address.countryCode", "US");
     assertThat(row).containsEntry("phoneNumber", "");
     assertThat(row).containsEntry("faxNumber", "");
     assertThat(row).containsEntry("allowedTlds", "");
-    assertThat(row).containsEntry("whoisServer",
-        ENVIRONMENT.config().getRegistrarDefaultWhoisServer());
+    assertThat(row).containsEntry("whoisServer", getDefaultRegistrarWhoisServer());
     assertThat(row).containsEntry("blockPremiumNames", "false");
     assertThat(row).containsEntry("ipAddressWhitelist", "");
     assertThat(row).containsEntry("url", "");
-    assertThat(row).containsEntry("referralUrl",
-        ENVIRONMENT.config().getRegistrarDefaultReferralUrl().toString());
+    assertThat(row).containsEntry("referralUrl", getDefaultRegistrarReferralUrl());
     assertThat(row).containsEntry("icannReferralEmail", "");
+    assertThat(row).containsEntry("billingAccountMap", "{}");
   }
 }

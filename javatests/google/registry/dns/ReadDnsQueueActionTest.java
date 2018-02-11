@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,25 +20,22 @@ import static google.registry.dns.DnsConstants.DNS_PUBLISH_PUSH_QUEUE_NAME;
 import static google.registry.dns.DnsConstants.DNS_PULL_QUEUE_NAME;
 import static google.registry.dns.DnsConstants.DNS_TARGET_NAME_PARAM;
 import static google.registry.dns.DnsConstants.DNS_TARGET_TYPE_PARAM;
-import static google.registry.request.RequestParameters.PARAM_TLD;
 import static google.registry.testing.DatastoreHelper.createTlds;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.TaskQueueHelper.assertNoTasksEnqueued;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
-import static java.util.Arrays.asList;
 
 import com.google.appengine.api.taskqueue.QueueFactory;
 import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.taskqueue.TaskOptions.Method;
-import com.google.common.base.Function;
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMultimap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.net.InternetDomainName;
 import google.registry.dns.DnsConstants.TargetType;
 import google.registry.model.registry.Registry;
 import google.registry.model.registry.Registry.TldType;
-import google.registry.request.RequestParameters;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.TaskQueueHelper.TaskMatcher;
@@ -46,6 +43,8 @@ import google.registry.util.Retrier;
 import google.registry.util.TaskEnqueuer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map.Entry;
+import java.util.Optional;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 import org.joda.time.Duration;
@@ -85,20 +84,27 @@ public class ReadDnsQueueActionTest {
   public void before() throws Exception {
     clock.setTo(DateTime.now(DateTimeZone.UTC));
     createTlds("com", "net", "example");
-    persistResource(Registry.get("example").asBuilder().setTldType(TldType.TEST).build());
-    dnsQueue = new DnsQueue();
-    dnsQueue.queue = getQueue(DNS_PULL_QUEUE_NAME);
+    persistResource(
+        Registry.get("com").asBuilder().setDnsWriters(ImmutableSet.of("comWriter")).build());
+    persistResource(
+        Registry.get("net").asBuilder().setDnsWriters(ImmutableSet.of("netWriter")).build());
+    persistResource(
+        Registry.get("example")
+            .asBuilder()
+            .setTldType(TldType.TEST)
+            .setDnsWriters(ImmutableSet.of("exampleWriter"))
+            .build());
+    dnsQueue = DnsQueue.create();
   }
 
-  private void run(boolean keepTasks) throws Exception {
+  private void run() throws Exception {
     ReadDnsQueueAction action = new ReadDnsQueueAction();
     action.tldUpdateBatchSize = TEST_TLD_UPDATE_BATCH_SIZE;
     action.writeLockTimeout = Duration.standardSeconds(10);
     action.dnsQueue = dnsQueue;
     action.dnsPublishPushQueue = QueueFactory.getQueue(DNS_PUBLISH_PUSH_QUEUE_NAME);
     action.taskEnqueuer = new TaskEnqueuer(new Retrier(null, 1));
-    action.jitterSeconds = Optional.absent();
-    action.keepTasks = keepTasks;
+    action.jitterSeconds = Optional.empty();
     // Advance the time a little, to ensure that leaseTasks() returns all tasks.
     clock.setTo(DateTime.now(DateTimeZone.UTC).plusMillis(1));
     action.run();
@@ -110,20 +116,21 @@ public class ReadDnsQueueActionTest {
         .param(DNS_TARGET_TYPE_PARAM, type.toString())
         .param(DNS_TARGET_NAME_PARAM, name);
     String tld = InternetDomainName.from(name).parts().reverse().get(0);
-    return options.param(PARAM_TLD, tld);
+    return options.param("tld", tld);
   }
 
-  private void assertTldsEnqueuedInPushQueue(String... tlds) throws Exception {
+  private void assertTldsEnqueuedInPushQueue(ImmutableMultimap<String, String> tldsToDnsWriters)
+      throws Exception {
     assertTasksEnqueued(
         DNS_PUBLISH_PUSH_QUEUE_NAME,
-        transform(asList(tlds), new Function<String, TaskMatcher>() {
-          @Override
-          public TaskMatcher apply(String tld) {
-            return new TaskMatcher()
-                .url(PublishDnsUpdatesAction.PATH)
-                .param(RequestParameters.PARAM_TLD, tld)
-                .header("content-type", "application/x-www-form-urlencoded");
-          }}));
+        transform(
+            tldsToDnsWriters.entries().asList(),
+            (Entry<String, String> tldToDnsWriter) ->
+                new TaskMatcher()
+                    .url(PublishDnsUpdatesAction.PATH)
+                    .param("tld", tldToDnsWriter.getKey())
+                    .param("dnsWriter", tldToDnsWriter.getValue())
+                    .header("content-type", "application/x-www-form-urlencoded")));
   }
 
   @Test
@@ -131,8 +138,8 @@ public class ReadDnsQueueActionTest {
     dnsQueue.addDomainRefreshTask("domain.com");
     dnsQueue.addDomainRefreshTask("domain.net");
     dnsQueue.addDomainRefreshTask("domain.example");
-    run(false);
-    assertNoTasksEnqueued(DnsConstants.DNS_PULL_QUEUE_NAME);
+    run();
+    assertNoTasksEnqueued(DNS_PULL_QUEUE_NAME);
     assertTasksEnqueued(
         DNS_PUBLISH_PUSH_QUEUE_NAME,
         new TaskMatcher().method("POST"),
@@ -145,23 +152,23 @@ public class ReadDnsQueueActionTest {
     dnsQueue.addDomainRefreshTask("domain.com");
     dnsQueue.addDomainRefreshTask("domain.net");
     dnsQueue.addDomainRefreshTask("domain.example");
-    run(false);
-    assertNoTasksEnqueued(DnsConstants.DNS_PULL_QUEUE_NAME);
-    assertTldsEnqueuedInPushQueue("com", "net", "example");
+    run();
+    assertNoTasksEnqueued(DNS_PULL_QUEUE_NAME);
+    assertTldsEnqueuedInPushQueue(
+        ImmutableMultimap.of("com", "comWriter", "net", "netWriter", "example", "exampleWriter"));
   }
 
   @Test
-  public void testSuccess_allTldsKeepTasks() throws Exception {
+  public void testSuccess_twoDnsWriters() throws Exception {
+    persistResource(
+        Registry.get("com")
+            .asBuilder()
+            .setDnsWriters(ImmutableSet.of("comWriter", "otherWriter"))
+            .build());
     dnsQueue.addDomainRefreshTask("domain.com");
-    dnsQueue.addDomainRefreshTask("domain.net");
-    dnsQueue.addDomainRefreshTask("domain.example");
-    run(true);
-    assertTasksEnqueued(
-        DnsConstants.DNS_PULL_QUEUE_NAME,
-        new TaskMatcher().payload("Target-Type=DOMAIN&Target-Name=domain.com&tld=com"),
-        new TaskMatcher().payload("Target-Type=DOMAIN&Target-Name=domain.net&tld=net"),
-        new TaskMatcher().payload("Target-Type=DOMAIN&Target-Name=domain.example&tld=example"));
-    assertTldsEnqueuedInPushQueue("com", "net", "example");
+    run();
+    assertNoTasksEnqueued(DNS_PULL_QUEUE_NAME);
+    assertTldsEnqueuedInPushQueue(ImmutableMultimap.of("com", "comWriter", "com", "otherWriter"));
   }
 
   @Test
@@ -170,9 +177,10 @@ public class ReadDnsQueueActionTest {
     dnsQueue.addDomainRefreshTask("domain.com");
     dnsQueue.addDomainRefreshTask("domain.net");
     dnsQueue.addDomainRefreshTask("domain.example");
-    run(false);
-    assertTasksEnqueued(DnsConstants.DNS_PULL_QUEUE_NAME, new TaskMatcher());
-    assertTldsEnqueuedInPushQueue("com", "example");
+    run();
+    assertTasksEnqueued(DNS_PULL_QUEUE_NAME, new TaskMatcher());
+    assertTldsEnqueuedInPushQueue(
+        ImmutableMultimap.of("com", "comWriter", "example", "exampleWriter"));
   }
 
   @Test
@@ -180,15 +188,12 @@ public class ReadDnsQueueActionTest {
     dnsQueue.addHostRefreshTask("ns1.domain.com");
     dnsQueue.addDomainRefreshTask("domain.net");
     dnsQueue.addZoneRefreshTask("example");
-    run(false);
-    assertNoTasksEnqueued(DnsConstants.DNS_PULL_QUEUE_NAME);
-    assertTasksEnqueued(DNS_PUBLISH_PUSH_QUEUE_NAME,
-        new TaskMatcher()
-            .url(PublishDnsUpdatesAction.PATH)
-            .param("domains", "domain.net"),
-        new TaskMatcher()
-            .url(PublishDnsUpdatesAction.PATH)
-            .param("hosts", "ns1.domain.com"));
+    run();
+    assertNoTasksEnqueued(DNS_PULL_QUEUE_NAME);
+    assertTasksEnqueued(
+        DNS_PUBLISH_PUSH_QUEUE_NAME,
+        new TaskMatcher().url(PublishDnsUpdatesAction.PATH).param("domains", "domain.net"),
+        new TaskMatcher().url(PublishDnsUpdatesAction.PATH).param("hosts", "ns1.domain.com"));
   }
 
   @Test
@@ -208,17 +213,19 @@ public class ReadDnsQueueActionTest {
             refreshItemsInTask = 0;
           }
           switch (thingType) {
-            default:
-              dnsQueue.addDomainRefreshTask(domainName);
-              task.param("domains", domainName);
-              break;
             case 1:
-              dnsQueue.queue.add(createRefreshTask("ns1." + domainName, TargetType.HOST));
+              getQueue(DNS_PULL_QUEUE_NAME)
+                  .add(createRefreshTask("ns1." + domainName, TargetType.HOST));
               task.param("hosts", "ns1." + domainName);
               break;
             case 2:
-              dnsQueue.queue.add(createRefreshTask("ns2." + domainName, TargetType.HOST));
+              getQueue(DNS_PULL_QUEUE_NAME)
+                  .add(createRefreshTask("ns2." + domainName, TargetType.HOST));
               task.param("hosts", "ns2." + domainName);
+              break;
+            default:
+              dnsQueue.addDomainRefreshTask(domainName);
+              task.param("domains", domainName);
               break;
           }
           // If this task is now full up, wash our hands of it, so that we'll start a new one the
@@ -230,8 +237,8 @@ public class ReadDnsQueueActionTest {
         }
       }
     }
-    run(false);
-    assertNoTasksEnqueued(DnsConstants.DNS_PULL_QUEUE_NAME);
+    run();
+    assertNoTasksEnqueued(DNS_PULL_QUEUE_NAME);
     assertTasksEnqueued(DNS_PUBLISH_PUSH_QUEUE_NAME, expectedTasks);
   }
 }

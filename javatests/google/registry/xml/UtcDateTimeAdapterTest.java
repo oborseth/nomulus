@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,12 +15,11 @@
 package google.registry.xml;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static org.joda.time.DateTimeZone.UTC;
 
-import google.registry.testing.ExceptionRule;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -28,9 +27,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link UtcDateTimeAdapter}. */
 @RunWith(JUnit4.class)
 public class UtcDateTimeAdapterTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   @Test
   public void testMarshal() {
@@ -70,7 +66,8 @@ public class UtcDateTimeAdapterTest {
 
   @Test
   public void testUnmarshalInvalid() {
-    thrown.expect(IllegalArgumentException.class);
-    assertThat((new UtcDateTimeAdapter()).unmarshal("oh my goth")).isNull();
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> assertThat((new UtcDateTimeAdapter()).unmarshal("oh my goth")).isNull());
   }
 }

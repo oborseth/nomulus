@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,17 +16,15 @@ package google.registry.flows;
 
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.persistActiveDomain;
 import static google.registry.testing.DatastoreHelper.persistReservedList;
 import static google.registry.testing.DatastoreHelper.persistResource;
 
 import com.google.common.collect.ImmutableSet;
-import google.registry.config.RegistryEnvironment;
 import google.registry.flows.EppTestComponent.FakesAndMocksModule;
-import google.registry.model.registrar.Registrar;
 import google.registry.model.registry.Registry;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.FakeClock;
 import google.registry.testing.FakeResponse;
 import java.util.Map;
 import org.json.simple.JSONValue;
@@ -61,9 +59,9 @@ public class CheckApiActionTest {
   private Map<String, Object> getCheckResponse(String domain) {
     action.domain = domain;
     action.response = new FakeResponse();
-    action.config = RegistryEnvironment.UNITTEST.config();
+    action.checkApiServletRegistrarClientId = "TheRegistrar";
     action.eppController = DaggerEppTestComponent.builder()
-        .fakesAndMocksModule(new FakesAndMocksModule(new FakeClock()))
+        .fakesAndMocksModule(FakesAndMocksModule.create())
         .build()
         .startRequest()
         .eppController();
@@ -110,10 +108,7 @@ public class CheckApiActionTest {
   public void testFailure_unauthorizedTld() throws Exception {
     createTld("foo");
     persistResource(
-        Registrar.loadByClientId("TheRegistrar")
-            .asBuilder()
-            .setAllowedTlds(ImmutableSet.of("foo"))
-            .build());
+        loadRegistrar("TheRegistrar").asBuilder().setAllowedTlds(ImmutableSet.of("foo")).build());
     assertThat(getCheckResponse("timmy.example")).containsExactly(
         "status", "error",
         "reason", "Registrar is not authorized to access the TLD example");

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,14 +20,22 @@ import com.googlecode.objectify.annotation.Embed;
 import com.googlecode.objectify.annotation.Index;
 import google.registry.model.ImmutableObject;
 import google.registry.model.contact.ContactResource;
-import javax.xml.bind.annotation.XmlAttribute;
 import javax.xml.bind.annotation.XmlEnumValue;
-import javax.xml.bind.annotation.XmlValue;
 
 /**
- * XML type for contact identifiers associated with a domain.
+ * Persisted type for storing a domain's contact associations.
  *
- * @see "http://tools.ietf.org/html/rfc5731#section-2.2"
+ * <p>A contact association on a domain consists of the contact key and the contact "type", which is
+ * the designated role of this contact with respect to this domain.  When converting to and from
+ * EPP XML, we use {@link ForeignKeyedDesignatedContact} to replace the contact's Datastore key
+ * with its foreign key, since that is what EPP exposes.
+ *
+ * <p>Note one could in principle store contact foreign keys here in addition to keys, unlike the
+ * situation with hosts where client-side renames would make that data stale.  However, we sometimes
+ * rename contacts internally ourselves, and it's easier to use the same model for both cases.
+ *
+ * @see <a href="http://tools.ietf.org/html/rfc5731#section-2.2">
+ *     RFC 5731 - EPP Domain Name Mapping - Contact and Client Identifiers</a>
  */
 @Embed
 public class DesignatedContact extends ImmutableObject {
@@ -51,18 +59,11 @@ public class DesignatedContact extends ImmutableObject {
   public static DesignatedContact create(Type type, Key<ContactResource> contact) {
     DesignatedContact instance = new DesignatedContact();
     instance.type = type;
-    instance.contactId = ReferenceUnion.create(contact);
     instance.contact = contact;
     return instance;
   }
 
-  @XmlAttribute(required = true)
   Type type;
-
-  @Index
-  @XmlValue
-  //TODO(b/28713909): Remove contactId and replace with contact.
-  ReferenceUnion<ContactResource> contactId;
 
   @Index
   Key<ContactResource> contact;

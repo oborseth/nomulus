@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@ import google.registry.request.HttpException.ConflictException;
 import google.registry.request.Parameter;
 import google.registry.request.RequestParameters;
 import google.registry.request.Response;
+import google.registry.request.auth.Auth;
 import google.registry.util.FormattingLogger;
 import google.registry.util.UrlFetchException;
 import java.io.IOException;
@@ -51,7 +52,12 @@ import javax.inject.Inject;
  * @see <a href="http://tools.ietf.org/html/draft-lozano-tmch-func-spec-08#section-5.2.3.3">
  *      http://tools.ietf.org/html/draft-lozano-tmch-func-spec-08#section-5.2.3.3</a>
  */
-@Action(path = NordnVerifyAction.PATH, method = Action.Method.POST, automaticallyPrintOk = true)
+@Action(
+  path = NordnVerifyAction.PATH,
+  method = Action.Method.POST,
+  automaticallyPrintOk = true,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public final class NordnVerifyAction implements Runnable {
 
   public static final String PARAM_CSV_DATA = "csvData";
@@ -88,7 +94,8 @@ public final class NordnVerifyAction implements Runnable {
    * available.
    *
    * @throws ConflictException if MarksDB has not yet finished processing the LORDN upload
-   * @see "http://tools.ietf.org/html/draft-lozano-tmch-func-spec-08#section-6.3.1"
+   * @see <a href="http://tools.ietf.org/html/draft-lozano-tmch-func-spec-08#section-6.3.1">
+   *     TMCH functional specifications LORDN Log File</a>
    */
   @VisibleForTesting
   LordnLog verify() throws IOException {
@@ -129,8 +136,8 @@ public final class NordnVerifyAction implements Runnable {
           logger.warning(result.toString());
           break;
         default:
-          logger.warningfmt("LORDN verify task %s: Unexpected outcome: %s",
-              actionLogId, result.toString());
+          logger.warningfmt(
+              "LORDN verify task %s: Unexpected outcome: %s", actionLogId, result.toString());
           break;
       }
     }

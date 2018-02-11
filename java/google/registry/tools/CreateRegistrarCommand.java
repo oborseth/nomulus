@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,26 +15,25 @@
 package google.registry.tools;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.emptyToNull;
-import static com.google.common.collect.Iterables.filter;
 import static com.google.common.collect.Iterables.getOnlyElement;
-import static com.google.common.collect.Lists.newArrayList;
 import static google.registry.model.registrar.Registrar.State.ACTIVE;
 import static google.registry.tools.RegistryToolEnvironment.PRODUCTION;
 import static google.registry.tools.RegistryToolEnvironment.SANDBOX;
 import static google.registry.tools.RegistryToolEnvironment.UNITTEST;
+import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
 import static google.registry.util.RegistrarUtils.normalizeClientId;
+import static java.util.stream.Collectors.toCollection;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Optional;
-import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Streams;
 import google.registry.model.registrar.Registrar;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import javax.annotation.Nullable;
 
 /** Command to create a Registrar. */
@@ -44,10 +43,6 @@ final class CreateRegistrarCommand extends CreateOrUpdateRegistrarCommand
 
   private static final ImmutableSet<RegistryToolEnvironment> ENVIRONMENTS_ALLOWING_GROUP_CREATION =
       ImmutableSet.of(PRODUCTION, SANDBOX, UNITTEST);
-
-  // Allows test cases to be cleaner.
-  @VisibleForTesting
-  static boolean requireAddress = true;
 
   @Parameter(
       names = "--create_groups",
@@ -65,14 +60,12 @@ final class CreateRegistrarCommand extends CreateOrUpdateRegistrarCommand
   @Override
   protected void initRegistrarCommand() throws Exception {
     checkArgument(mainParameters.size() == 1, "Must specify exactly one client identifier.");
-    checkNotNull(emptyToNull(password), "--password is a required field");
-    checkNotNull(registrarName, "--name is a required field");
-    checkNotNull(icannReferralEmail, "--icann_referral_email is a required field");
-    if (requireAddress) {
-      checkNotNull(street, "Address fields are required when creating a registrar");
-    }
+    checkArgumentNotNull(emptyToNull(password), "--password is a required field");
+    checkArgumentNotNull(registrarName, "--name is a required field");
+    checkArgumentNotNull(icannReferralEmail, "--icann_referral_email is a required field");
+    checkArgumentNotNull(street, "Address fields are required when creating a registrar");
     // Default new registrars to active.
-    registrarState = Optional.fromNullable(registrarState).or(ACTIVE);
+    registrarState = Optional.ofNullable(registrarState).orElse(ACTIVE);
   }
 
   @Nullable
@@ -86,13 +79,12 @@ final class CreateRegistrarCommand extends CreateOrUpdateRegistrarCommand
           "Client identifier (%s) can only contain lowercase letters, numbers, and hyphens",
           clientId);
     }
-    checkState(Registrar.loadByClientId(clientId) == null, "Registrar %s already exists", clientId);
+    checkState(
+        !Registrar.loadByClientId(clientId).isPresent(), "Registrar %s already exists", clientId);
     List<Registrar> collisions =
-        newArrayList(filter(Registrar.loadAll(), new Predicate<Registrar>() {
-          @Override
-          public boolean apply(Registrar registrar) {
-            return normalizeClientId(registrar.getClientId()).equals(clientId);
-          }}));
+        Streams.stream(Registrar.loadAll())
+            .filter(registrar -> normalizeClientId(registrar.getClientId()).equals(clientId))
+            .collect(toCollection(ArrayList::new));
     if (!collisions.isEmpty()) {
       throw new IllegalArgumentException(String.format(
           "The registrar client identifier %s normalizes identically to existing registrar %s",

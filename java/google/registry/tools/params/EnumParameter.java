@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,6 +25,6 @@ public abstract class EnumParameter<T extends Enum<T>> extends ParameterConverte
 
   @Override
   public T convert(String value) {
-    return Enum.<T>valueOf(new TypeInstantiator<T>(getClass()){}.getExactType(), value);
+    return Enum.valueOf(new TypeInstantiator<T>(getClass()){}.getExactType(), value);
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.JSchException;
 import com.jcraft.jsch.Session;
 import com.jcraft.jsch.SftpException;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.util.FormattingLogger;
 import java.io.Closeable;
 import java.io.IOException;
@@ -60,9 +60,9 @@ final class JSchSshSession implements Closeable {
      */
     JSchSshSession create(JSch jsch, URI uri) throws JSchException {
       RdeUploadUrl url = RdeUploadUrl.create(uri);
-      logger.info("Connecting to SSH endpoint: " + url);
+      logger.infofmt("Connecting to SSH endpoint: %s", url);
       Session session = jsch.getSession(
-          url.getUser().or("domain-registry"),
+          url.getUser().orElse("domain-registry"),
           url.getHost(),
           url.getPort());
       if (url.getPass().isPresent()) {
@@ -99,7 +99,7 @@ final class JSchSshSession implements Closeable {
       try {
         chan.cd(dir);
       } catch (SftpException e) {
-        logger.warning(e.toString());
+        logger.warning(e, "Could not open SFTP channel.");
         mkdirs(chan, dir);
         chan.cd(dir);
       }

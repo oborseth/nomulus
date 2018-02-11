@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,12 @@
 // limitations under the License.
 
 package google.registry.flows;
+
+import static google.registry.model.eppoutput.Result.Code.SUCCESS;
+import static google.registry.model.eppoutput.Result.Code.SUCCESS_WITH_ACK_MESSAGE;
+import static google.registry.model.eppoutput.Result.Code.SUCCESS_WITH_ACTION_PENDING;
+import static google.registry.model.eppoutput.Result.Code.SUCCESS_WITH_NO_MESSAGES;
+import static google.registry.testing.EppMetricSubject.assertThat;
 
 import com.google.common.collect.ImmutableMap;
 import google.registry.testing.AppEngineRule;
@@ -37,15 +43,41 @@ public class EppLifecycleContactTest extends EppTestCase {
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
     assertCommandAndResponse(
         "contact_create_sh8013.xml",
-        null,
-         "contact_create_response_sh8013.xml",
-         ImmutableMap.of("CRDATE", "2000-06-01T00:00:00Z"),
-         DateTime.parse("2000-06-01T00:00:00Z"));
+        ImmutableMap.of(),
+        "contact_create_response_sh8013.xml",
+        ImmutableMap.of("CRDATE", "2000-06-01T00:00:00Z"),
+        DateTime.parse("2000-06-01T00:00:00Z"));
+    assertThat(getRecordedEppMetric())
+        .hasClientId("NewRegistrar")
+        .and()
+        .hasNoTld()
+        .and()
+        .hasCommandName("ContactCreate")
+        .and()
+        .hasEppTarget("sh8013")
+        .and()
+        .hasStatus(SUCCESS);
     assertCommandAndResponse(
         "contact_info.xml",
         "contact_info_from_create_response.xml",
         DateTime.parse("2000-06-01T00:01:00Z"));
+    assertThat(getRecordedEppMetric())
+        .hasClientId("NewRegistrar")
+        .and()
+        .hasCommandName("ContactInfo")
+        .and()
+        .hasEppTarget("sh8013")
+        .and()
+        .hasStatus(SUCCESS);
     assertCommandAndResponse("contact_delete_sh8013.xml", "contact_delete_response_sh8013.xml");
+    assertThat(getRecordedEppMetric())
+        .hasClientId("NewRegistrar")
+        .and()
+        .hasCommandName("ContactDelete")
+        .and()
+        .hasEppTarget("sh8013")
+        .and()
+        .hasStatus(SUCCESS_WITH_ACTION_PENDING);
     assertCommandAndResponse("logout.xml", "logout_response.xml");
   }
 
@@ -53,11 +85,11 @@ public class EppLifecycleContactTest extends EppTestCase {
   public void testContactTransferPollMessage() throws Exception {
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
     assertCommandAndResponse(
-    "contact_create_sh8013.xml",
-    ImmutableMap.<String, String>of(),
-    "contact_create_response_sh8013.xml",
-    ImmutableMap.of("CRDATE", "2000-06-01T00:00:00Z"),
-    DateTime.parse("2000-06-01T00:00:00Z"));
+        "contact_create_sh8013.xml",
+        ImmutableMap.of(),
+        "contact_create_response_sh8013.xml",
+        ImmutableMap.of("CRDATE", "2000-06-01T00:00:00Z"),
+        DateTime.parse("2000-06-01T00:00:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
 
     // Initiate a transfer of the newly created contact.
@@ -74,12 +106,24 @@ public class EppLifecycleContactTest extends EppTestCase {
         "poll.xml",
         "poll_response_contact_transfer.xml",
         DateTime.parse("2000-06-08T22:01:00Z"));
+    assertThat(getRecordedEppMetric())
+        .hasClientId("NewRegistrar")
+        .and()
+        .hasCommandName("PollRequest")
+        .and()
+        .hasStatus(SUCCESS_WITH_ACK_MESSAGE);
     assertCommandAndResponse(
         "poll_ack.xml",
-        ImmutableMap.of("ID", "2-1-ROID-3-6"),
+        ImmutableMap.of("ID", "2-1-ROID-3-6-2000"),
         "poll_ack_response_empty.xml",
-        null,
+        ImmutableMap.of(),
         DateTime.parse("2000-06-08T22:02:00Z"));
+    assertThat(getRecordedEppMetric())
+        .hasClientId("NewRegistrar")
+        .and()
+        .hasCommandName("PollAck")
+        .and()
+        .hasStatus(SUCCESS_WITH_NO_MESSAGES);
     assertCommandAndResponse("logout.xml", "logout_response.xml");
   }
 }

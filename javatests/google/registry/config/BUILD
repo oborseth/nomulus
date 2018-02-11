@@ -7,15 +7,15 @@ licenses(["notice"])  # Apache 2.0
 
 load("//java/com/google/testing/builddefs:GenTestRules.bzl", "GenTestRules")
 
-
 java_library(
     name = "config",
     srcs = glob(["*.java"]),
     deps = [
-        "//java/com/google/common/annotations",
-        "//third_party/java/junit",
-        "//third_party/java/truth",
         "//java/google/registry/config",
+        "@com_google_guava",
+        "@com_google_truth",
+        "@com_google_truth_extensions_truth_java8_extension",
+        "@junit",
     ],
 )
 

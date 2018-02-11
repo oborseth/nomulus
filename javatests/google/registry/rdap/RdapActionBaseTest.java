@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,16 +19,29 @@ import static com.google.common.truth.Truth.assertThat;
 import static google.registry.request.Action.Method.GET;
 import static google.registry.request.Action.Method.HEAD;
 import static google.registry.testing.DatastoreHelper.createTld;
-import static google.registry.testing.TestDataHelper.loadFileWithSubstitutions;
+import static google.registry.testing.TestDataHelper.loadFile;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
+import com.google.appengine.api.users.User;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import google.registry.model.ofy.Ofy;
 import google.registry.rdap.RdapJsonFormatter.BoilerplateType;
+import google.registry.rdap.RdapMetrics.EndpointType;
+import google.registry.rdap.RdapMetrics.SearchType;
+import google.registry.rdap.RdapMetrics.WildcardType;
+import google.registry.rdap.RdapSearchResults.IncompletenessWarningType;
+import google.registry.request.Action;
+import google.registry.request.auth.AuthLevel;
+import google.registry.request.auth.AuthResult;
+import google.registry.request.auth.UserAuthInfo;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.FakeResponse;
 import google.registry.testing.InjectRule;
+import google.registry.ui.server.registrar.SessionUtils;
+import java.util.Optional;
 import org.joda.time.DateTime;
 import org.json.simple.JSONValue;
 import org.junit.Before;
@@ -51,6 +64,10 @@ public class RdapActionBaseTest {
 
   private final FakeResponse response = new FakeResponse();
   private final FakeClock clock = new FakeClock(DateTime.parse("2000-01-01TZ"));
+  private final SessionUtils sessionUtils = mock(SessionUtils.class);
+  private final User user = new User("rdap.user@example.com", "gmail.com", "12345");
+  private final UserAuthInfo userAuthInfo = UserAuthInfo.create(user, false);
+  private final RdapMetrics rdapMetrics = mock(RdapMetrics.class);
 
   /**
    * Dummy RdapActionBase subclass used for testing.
@@ -65,13 +82,18 @@ public class RdapActionBaseTest {
     }
 
     @Override
+    public EndpointType getEndpointType() {
+      return EndpointType.HELP;
+    }
+
+    @Override
     public String getActionPath() {
       return PATH;
     }
 
     @Override
     public ImmutableMap<String, Object> getJsonObjectForResource(
-        String pathSearchString, boolean isHeadRequest, String linkBase) {
+        String pathSearchString, boolean isHeadRequest) {
       if (pathSearchString.equals("IllegalArgumentException")) {
         throw new IllegalArgumentException();
       }
@@ -80,12 +102,12 @@ public class RdapActionBaseTest {
       }
       ImmutableMap.Builder<String, Object> builder = new ImmutableMap.Builder<>();
       builder.put("key", "value");
-      RdapJsonFormatter.addTopLevelEntries(
+      rdapJsonFormatter.addTopLevelEntries(
           builder,
           BoilerplateType.OTHER,
-          ImmutableList.<ImmutableMap<String, Object>>of(),
-          ImmutableList.<ImmutableMap<String, Object>>of(),
-          "http://myserver.google.com/");
+          ImmutableList.of(),
+          ImmutableList.of(),
+          "http://myserver.example.com/");
       return builder.build();
     }
   }
@@ -97,21 +119,28 @@ public class RdapActionBaseTest {
     createTld("thing");
     inject.setStaticField(Ofy.class, "clock", clock);
     action = new RdapTestAction();
+    action.sessionUtils = sessionUtils;
+    action.authResult = AuthResult.create(AuthLevel.USER, userAuthInfo);
+    action.includeDeletedParam = Optional.empty();
+    action.registrarParam = Optional.empty();
+    action.formatOutputParam = Optional.empty();
     action.response = response;
+    action.rdapJsonFormatter = RdapTestHelper.getTestRdapJsonFormatter();
+    action.rdapMetrics = rdapMetrics;
   }
 
   private Object generateActualJson(String domainName) {
     action.requestPath = RdapTestAction.PATH + domainName;
+    action.fullServletPath = "http://myserver.example.com" + RdapTestAction.PATH;
     action.requestMethod = GET;
-    action.rdapLinkBase = "http://myserver.google.com/";
     action.run();
     return JSONValue.parse(response.getPayload());
   }
 
   private String generateHeadPayload(String domainName) {
     action.requestPath = RdapTestAction.PATH + domainName;
+    action.fullServletPath = "http://myserver.example.com" + RdapTestAction.PATH;
     action.requestMethod = HEAD;
-    action.rdapLinkBase = "http://myserver.google.com/";
     action.run();
     return response.getPayload();
   }
@@ -137,8 +166,15 @@ public class RdapActionBaseTest {
   @Test
   public void testValidName_works() throws Exception {
     assertThat(generateActualJson("no.thing")).isEqualTo(JSONValue.parse(
-        loadFileWithSubstitutions(this.getClass(), "rdapjson_toplevel.json", null)));
+        loadFile(this.getClass(), "rdapjson_toplevel.json")));
     assertThat(response.getStatus()).isEqualTo(200);
+  }
+
+  @Test
+  public void testContentType_rdapjson_utf8() throws Exception {
+    generateActualJson("no.thing");
+    assertThat(response.getContentType().toString())
+        .isEqualTo("application/rdap+json; charset=utf-8");
   }
 
   @Test
@@ -157,5 +193,69 @@ public class RdapActionBaseTest {
   public void testRdapServer_allowsAllCrossOriginRequests() throws Exception {
     generateActualJson("no.thing");
     assertThat(response.getHeaders().get(ACCESS_CONTROL_ALLOW_ORIGIN)).isEqualTo("*");
+  }
+
+  @Test
+  public void testMetrics_onSuccess() throws Exception {
+    generateActualJson("no.thing");
+    verify(rdapMetrics)
+        .updateMetrics(
+            RdapMetrics.RdapMetricInformation.builder()
+                .setEndpointType(EndpointType.HELP)
+                .setSearchType(SearchType.NONE)
+                .setWildcardType(WildcardType.INVALID)
+                .setPrefixLength(0)
+                .setIncludeDeleted(false)
+                .setRegistrarSpecified(false)
+                .setRole(RdapAuthorization.Role.PUBLIC)
+                .setRequestMethod(Action.Method.GET)
+                .setStatusCode(200)
+                .setIncompletenessWarningType(IncompletenessWarningType.COMPLETE)
+                .build());
+  }
+
+  @Test
+  public void testMetrics_onError() throws Exception {
+    generateActualJson("IllegalArgumentException");
+    verify(rdapMetrics)
+        .updateMetrics(
+            RdapMetrics.RdapMetricInformation.builder()
+                .setEndpointType(EndpointType.HELP)
+                .setSearchType(SearchType.NONE)
+                .setWildcardType(WildcardType.INVALID)
+                .setPrefixLength(0)
+                .setIncludeDeleted(false)
+                .setRegistrarSpecified(false)
+                .setRole(RdapAuthorization.Role.PUBLIC)
+                .setRequestMethod(Action.Method.GET)
+                .setStatusCode(400)
+                .setIncompletenessWarningType(IncompletenessWarningType.COMPLETE)
+                .build());
+  }
+
+  private String loadFileWithoutTrailingNewline(String fileName) {
+    String contents = loadFile(this.getClass(), fileName);
+    return contents.endsWith("\n") ? contents.substring(0, contents.length() - 1) : contents;
+  }
+
+  @Test
+  public void testUnformatted() throws Exception {
+    action.requestPath = RdapTestAction.PATH + "no.thing";
+    action.fullServletPath = "http://myserver.example.com" + RdapTestAction.PATH;
+    action.requestMethod = GET;
+    action.run();
+    assertThat(response.getPayload())
+        .isEqualTo(loadFileWithoutTrailingNewline("rdap_unformatted_output.json"));
+  }
+
+  @Test
+  public void testFormatted() throws Exception {
+    action.requestPath = RdapTestAction.PATH + "no.thing?formatOutput=true";
+    action.fullServletPath = "http://myserver.example.com" + RdapTestAction.PATH;
+    action.requestMethod = GET;
+    action.formatOutputParam = Optional.of(true);
+    action.run();
+    assertThat(response.getPayload())
+        .isEqualTo(loadFileWithoutTrailingNewline("rdap_formatted_output.json"));
   }
 }

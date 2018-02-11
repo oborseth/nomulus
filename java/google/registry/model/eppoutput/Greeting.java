@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ import org.joda.time.DateTime;
  */
 public class Greeting extends ImmutableObject implements ResponseOrGreeting {
 
-  String svID = "Charleston Road Registry";
+  String svID;
   DateTime svDate;
 
   /** This is never changed, so it might as well be static for efficiency. */
@@ -42,8 +42,9 @@ public class Greeting extends ImmutableObject implements ResponseOrGreeting {
   @XmlElement
   static Dcp dcp = new Dcp();
 
-  public static Greeting create(DateTime svDate) {
+  public static Greeting create(DateTime svDate, String svID) {
     Greeting instance = new Greeting();
+    instance.svID = svID;
     instance.svDate = svDate;
     return instance;
   }

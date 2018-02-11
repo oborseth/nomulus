@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,9 +25,9 @@ import google.registry.tools.Command.RemoteApiCommand;
 import java.util.List;
 
 /**
- * Command to get info on a datastore resource by websafe key.
+ * Command to get info on a Datastore resource by websafe key.
  */
-@Parameters(separators = " =")
+@Parameters(separators = " =", commandDescription = "Fetch a Datastore resource by websafe key")
 final class GetResourceByKeyCommand implements RemoteApiCommand {
 
   @Parameter(

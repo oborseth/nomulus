@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,18 @@
 
 package google.registry.tmch;
 
-import static google.registry.tmch.TmchTestData.loadString;
+import static com.google.common.truth.Truth.assertThat;
+import static google.registry.config.RegistryConfig.ConfigModule.TmchCaMode.PILOT;
+import static google.registry.config.RegistryConfig.ConfigModule.TmchCaMode.PRODUCTION;
+import static google.registry.testing.JUnitBackports.expectThrows;
+import static google.registry.tmch.TmchTestData.loadFile;
 import static google.registry.util.ResourceUtils.readResourceUtf8;
 import static google.registry.util.X509Utils.loadCertificate;
 
 import google.registry.model.tmch.TmchCrl;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.InjectRule;
-import google.registry.testing.RegistryConfigRule;
 import java.security.SignatureException;
 import java.security.cert.CertificateExpiredException;
 import java.security.cert.CertificateNotYetValidException;
@@ -39,22 +41,15 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class TmchCertificateAuthorityTest {
 
-  public static final String GOOD_TEST_CERTIFICATE = loadString("icann-tmch-test-good.crt");
-  public static final String REVOKED_TEST_CERTIFICATE = loadString("icann-tmch-test-revoked.crt");
+  public static final String GOOD_TEST_CERTIFICATE = loadFile("icann-tmch-test-good.crt");
+  public static final String REVOKED_TEST_CERTIFICATE = loadFile("icann-tmch-test-revoked.crt");
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder()
       .withDatastore()
       .build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   @Rule
   public final InjectRule inject = new InjectRule();
-
-  @Rule
-  public final RegistryConfigRule configRule = new RegistryConfigRule();
 
   private FakeClock clock = new FakeClock(DateTime.parse("2014-01-01T00:00:00Z"));
 
@@ -65,45 +60,58 @@ public class TmchCertificateAuthorityTest {
 
   @Test
   public void testFailure_prodRootExpired() throws Exception {
-    configRule.useTmchProdCert();
+    TmchCertificateAuthority tmchCertificateAuthority = new TmchCertificateAuthority(PRODUCTION);
     clock.setTo(DateTime.parse("2024-01-01T00:00:00Z"));
-    thrown.expectRootCause(
-        CertificateExpiredException.class, "NotAfter: Sun Jul 23 23:59:59 UTC 2023");
-    TmchCertificateAuthority.getRoot();
+    CertificateExpiredException e =
+        expectThrows(CertificateExpiredException.class, tmchCertificateAuthority::getRoot);
+    assertThat(e).hasMessageThat().containsMatch("NotAfter: Sun Jul 23 23:59:59 UTC 2023");
   }
 
   @Test
   public void testFailure_prodRootNotYetValid() throws Exception {
-    configRule.useTmchProdCert();
+    TmchCertificateAuthority tmchCertificateAuthority = new TmchCertificateAuthority(PRODUCTION);
     clock.setTo(DateTime.parse("2000-01-01T00:00:00Z"));
-    thrown.expectRootCause(CertificateNotYetValidException.class,
-        "NotBefore: Wed Jul 24 00:00:00 UTC 2013");
-    TmchCertificateAuthority.getRoot();
+    CertificateNotYetValidException e =
+        expectThrows(CertificateNotYetValidException.class, tmchCertificateAuthority::getRoot);
+    assertThat(e).hasMessageThat().containsMatch("NotBefore: Wed Jul 24 00:00:00 UTC 2013");
   }
 
   @Test
   public void testFailure_crlDoesntMatchCerts() throws Exception {
     // Use the prod cl, which won't match our test certificate.
-    TmchCrl.set(readResourceUtf8(TmchCertificateAuthority.class, "icann-tmch.crl"));
-    thrown.expectRootCause(SignatureException.class, "Signature does not match");
-    TmchCertificateAuthority.verify(loadCertificate(GOOD_TEST_CERTIFICATE));
+    TmchCertificateAuthority tmchCertificateAuthority = new TmchCertificateAuthority(PILOT);
+    TmchCrl.set(
+        readResourceUtf8(TmchCertificateAuthority.class, "icann-tmch.crl"), "http://cert.crl");
+    SignatureException e =
+        expectThrows(
+            SignatureException.class,
+            () -> tmchCertificateAuthority.verify(loadCertificate(GOOD_TEST_CERTIFICATE)));
+    assertThat(e).hasMessageThat().contains("Signature does not match");
   }
 
   @Test
   public void testSuccess_verify() throws Exception {
-    TmchCertificateAuthority.verify(loadCertificate(GOOD_TEST_CERTIFICATE));
+    TmchCertificateAuthority tmchCertificateAuthority = new TmchCertificateAuthority(PILOT);
+    tmchCertificateAuthority.verify(loadCertificate(GOOD_TEST_CERTIFICATE));
   }
 
   @Test
   public void testFailure_verifySignatureDoesntMatch() throws Exception {
-    configRule.useTmchProdCert();
-    thrown.expectRootCause(SignatureException.class, "Signature does not match");
-    TmchCertificateAuthority.verify(loadCertificate(GOOD_TEST_CERTIFICATE));
+    TmchCertificateAuthority tmchCertificateAuthority = new TmchCertificateAuthority(PRODUCTION);
+    SignatureException e =
+        expectThrows(
+            SignatureException.class,
+            () -> tmchCertificateAuthority.verify(loadCertificate(GOOD_TEST_CERTIFICATE)));
+    assertThat(e).hasMessageThat().contains("Signature does not match");
   }
 
   @Test
   public void testFailure_verifyRevoked() throws Exception {
-    thrown.expect(CertificateRevokedException.class, "revoked, reason: KEY_COMPROMISE");
-    TmchCertificateAuthority.verify(loadCertificate(REVOKED_TEST_CERTIFICATE));
+    TmchCertificateAuthority tmchCertificateAuthority = new TmchCertificateAuthority(PILOT);
+    CertificateRevokedException thrown =
+        expectThrows(
+            CertificateRevokedException.class,
+            () -> tmchCertificateAuthority.verify(loadCertificate(REVOKED_TEST_CERTIFICATE)));
+    assertThat(thrown).hasMessageThat().contains("revoked, reason: KEY_COMPROMISE");
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,12 +15,12 @@
 package google.registry.rde;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
+import static google.registry.xml.ValidationMode.STRICT;
 
-import google.registry.model.registrar.Registrar;
 import google.registry.testing.AppEngineRule;
+import google.registry.testing.ShardableTestCase;
 import google.registry.xml.XmlTestUtils;
-import org.joda.time.DateTime;
-import org.joda.time.format.ISODateTimeFormat;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -28,7 +28,7 @@ import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link RdeMarshaller}. */
 @RunWith(JUnit4.class)
-public class RdeMarshallerTest {
+public class RdeMarshallerTest extends ShardableTestCase {
 
   private static final String DECLARATION =
       "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
@@ -41,7 +41,7 @@ public class RdeMarshallerTest {
   @Test
   public void testMarshalRegistrar_validData_producesXmlFragment() throws Exception {
     DepositFragment fragment =
-        new RdeMarshaller().marshalRegistrar(Registrar.loadByClientId("TheRegistrar"));
+        new RdeMarshaller(STRICT).marshalRegistrar(loadRegistrar("TheRegistrar"));
     assertThat(fragment.type()).isEqualTo(RdeResourceType.REGISTRAR);
     assertThat(fragment.error()).isEmpty();
     String expected = ""
@@ -82,45 +82,9 @@ public class RdeMarshallerTest {
   }
 
   @Test
-  public void testMarshalRegistrar_breaksRdeXmlSchema_producesErrorMessage() throws Exception {
-    Registrar reg = Registrar.loadByClientId("TheRegistrar").asBuilder()
-        .setLocalizedAddress(null)
-        .setInternationalizedAddress(null)
-        .build();
-    DepositFragment fragment = new RdeMarshaller().marshalRegistrar(reg);
-    assertThat(fragment.type()).isEqualTo(RdeResourceType.REGISTRAR);
-    assertThat(fragment.xml()).isEmpty();
-    assertThat(fragment.error()).isEqualTo(""
-        + "RDE XML schema validation failed: "
-            + "Key<?>(EntityGroupRoot(\"cross-tld\")/Registrar(\"TheRegistrar\"))\n"
-        + "org.xml.sax.SAXParseException; lineNumber: 0; columnNumber: 0; cvc-complex-type.2.4.a: "
-            + "Invalid content was found starting with element 'rdeRegistrar:voice'. "
-            + "One of '{\"urn:ietf:params:xml:ns:rdeRegistrar-1.0\":postalInfo}' is expected.\n"
-        + "<rdeRegistrar:registrar>\n"
-        + "    <rdeRegistrar:id>TheRegistrar</rdeRegistrar:id>\n"
-        + "    <rdeRegistrar:name>The Registrar</rdeRegistrar:name>\n"
-        + "    <rdeRegistrar:gurid>1</rdeRegistrar:gurid>\n"
-        + "    <rdeRegistrar:status>ok</rdeRegistrar:status>\n"
-        + "    <rdeRegistrar:voice>+1.2223334444</rdeRegistrar:voice>\n"
-        + "    <rdeRegistrar:email>new.registrar@example.com</rdeRegistrar:email>\n"
-        + "    <rdeRegistrar:whoisInfo>\n"
-        + "        <rdeRegistrar:name>whois.nic.fakewhois.example</rdeRegistrar:name>\n"
-        + "    </rdeRegistrar:whoisInfo>\n"
-        + "    <rdeRegistrar:crDate>" + ft(reg.getCreationTime()) + "</rdeRegistrar:crDate>\n"
-        + "    <rdeRegistrar:upDate>" + ft(reg.getLastUpdateTime()) + "</rdeRegistrar:upDate>\n"
-        + "</rdeRegistrar:registrar>\n"
-        + "\n");
-  }
-
-  @Test
   public void testMarshalRegistrar_unicodeCharacters_dontGetMangled() throws Exception {
     DepositFragment fragment =
-        new RdeMarshaller().marshalRegistrar(Registrar.loadByClientId("TheRegistrar"));
+        new RdeMarshaller(STRICT).marshalRegistrar(loadRegistrar("TheRegistrar"));
     assertThat(fragment.xml()).contains("123 Example Bőulevard");
-  }
-
-  /** Formats {@code timestamp} without milliseconds. */
-  private static String ft(DateTime timestamp) {
-    return ISODateTimeFormat.dateTimeNoMillis().withZoneUTC().print(timestamp);
   }
 }

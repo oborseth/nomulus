@@ -1,19 +1,15 @@
 package(
-    default_visibility = ["//java/google/registry:registry_project"],
+    default_visibility = ["//visibility:public"],
 )
 
 licenses(["notice"])  # Apache 2.0
 
-
 java_library(
     name = "writer",
-    srcs = glob(
-        ["*.java"],
-    ),
+    srcs = glob(["*.java"]),
     deps = [
-        "//java/com/google/common/annotations",
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//third_party/java/dagger",
+        "//java/google/registry/util",
+        "@com_google_dagger",
+        "@com_google_guava",
     ],
 )

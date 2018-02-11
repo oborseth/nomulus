@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@ package google.registry.util;
 
 import static com.google.appengine.api.taskqueue.TaskOptions.Builder.withUrl;
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -27,7 +29,6 @@ import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.taskqueue.TransientFailureException;
 import com.google.common.collect.ImmutableList;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.FakeSleeper;
 import org.joda.time.DateTime;
@@ -41,10 +42,6 @@ import org.junit.runners.JUnit4;
 public final class TaskEnqueuerTest {
 
   private static final int MAX_RETRIES = 3;
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder()
       .withDatastore()
@@ -95,8 +92,9 @@ public final class TaskEnqueuerTest {
         .thenThrow(new TransientFailureException("two"))
         .thenThrow(new TransientFailureException("three"))
         .thenThrow(new TransientFailureException("four"));
-    thrown.expect(TransientFailureException.class, "three");
-    taskEnqueuer.enqueue(queue, task);
+    TransientFailureException thrown =
+        expectThrows(TransientFailureException.class, () -> taskEnqueuer.enqueue(queue, task));
+    assertThat(thrown).hasMessageThat().contains("three");
   }
 
   @Test
@@ -104,8 +102,7 @@ public final class TaskEnqueuerTest {
     when(queue.add(ImmutableList.of(task))).thenThrow(new TransientFailureException(""));
     try {
       Thread.currentThread().interrupt();
-      thrown.expect(TransientFailureException.class);
-      taskEnqueuer.enqueue(queue, task);
+      assertThrows(TransientFailureException.class, () -> taskEnqueuer.enqueue(queue, task));
     } finally {
       Thread.interrupted();  // Clear interrupt state so it doesn't pwn other tests.
     }

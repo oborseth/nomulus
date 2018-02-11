@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,8 +24,8 @@ import static org.junit.Assume.assumeTrue;
 import com.google.common.io.CharStreams;
 import google.registry.keyring.api.Keyring;
 import google.registry.testing.BouncyCastleProviderRule;
+import google.registry.testing.FakeKeyringModule;
 import google.registry.testing.GpgSystemCommandRule;
-import google.registry.testing.Providers;
 import google.registry.testing.ShardableTestCase;
 import google.registry.util.FormattingLogger;
 import java.io.File;
@@ -57,10 +57,10 @@ public class RydeGpgIntegrationTest extends ShardableTestCase {
 
   @Rule
   public final GpgSystemCommandRule gpg = new GpgSystemCommandRule(
-      RdeTestData.get("pgp-public-keyring.asc"),
-      RdeTestData.get("pgp-private-keyring-escrow.asc"));
+      RdeTestData.loadBytes("pgp-public-keyring.asc"),
+      RdeTestData.loadBytes("pgp-private-keyring-escrow.asc"));
 
-  private final RdeKeyringModule keyringFactory = new RdeKeyringModule();
+  private final FakeKeyringModule keyringFactory = new FakeKeyringModule();
 
   @DataPoints
   public static GpgCommand[] commands = new GpgCommand[] {
@@ -96,11 +96,11 @@ public class RydeGpgIntegrationTest extends ShardableTestCase {
     RydeTarOutputStreamFactory tarFactory =
         new RydeTarOutputStreamFactory();
     RydePgpFileOutputStreamFactory pgpFileFactory =
-        new RydePgpFileOutputStreamFactory(Providers.of(bufSize.get()));
+        new RydePgpFileOutputStreamFactory(bufSize::get);
     RydePgpEncryptionOutputStreamFactory pgpEncryptionFactory =
-        new RydePgpEncryptionOutputStreamFactory(Providers.of(bufSize.get()));
+        new RydePgpEncryptionOutputStreamFactory(bufSize::get);
     RydePgpCompressionOutputStreamFactory pgpCompressionFactory =
-        new RydePgpCompressionOutputStreamFactory(Providers.of(bufSize.get()));
+        new RydePgpCompressionOutputStreamFactory(bufSize::get);
     RydePgpSigningOutputStreamFactory pgpSigningFactory =
         new RydePgpSigningOutputStreamFactory();
 
@@ -147,7 +147,14 @@ public class RydeGpgIntegrationTest extends ShardableTestCase {
     // gpg: WARNING: message was not integrity protected
     logger.info("Running GPG to list info about OpenPGP message...");
     {
-      Process pid = gpg.exec(cmd.get(), "--list-packets", rydeFile.toString());
+      Process pid =
+          gpg.exec(
+              cmd.get(),
+              "--list-packets",
+              "--ignore-mdc-error",
+              "--keyid-format",
+              "long",
+              rydeFile.toString());
       String stdout = slurp(pid.getInputStream());
       String stderr = slurp(pid.getErrorStream());
       assertWithMessage(stderr).that(pid.waitFor()).isEqualTo(0);
@@ -175,7 +182,9 @@ public class RydeGpgIntegrationTest extends ShardableTestCase {
       assertWithMessage("Unexpected asymmetric encryption algorithm")
           .that(stderr)
           .contains("encrypted with 2048-bit RSA key");
-      assertWithMessage("Unexpected receiver public key").that(stderr).contains("ID 54E1EB0F");
+      assertWithMessage("Unexpected receiver public key")
+          .that(stderr)
+          .contains("ID 7F9084EE54E1EB0F");
     }
 
     // Iron Mountain now verifies that rydeFile is authentic and was signed appropriately.
@@ -203,7 +212,8 @@ public class RydeGpgIntegrationTest extends ShardableTestCase {
     // gpg: WARNING: message was not integrity protected
     logger.info("Running GPG to extract tar...");
     {
-      Process pid = gpg.exec(cmd.get(), "--use-embedded-filename", rydeFile.toString());
+      Process pid =
+          gpg.exec(cmd.get(), "--use-embedded-filename", "--ignore-mdc-error", rydeFile.toString());
       String stderr = slurp(pid.getErrorStream());
       assertWithMessage(stderr).that(pid.waitFor()).isEqualTo(0);
     }
@@ -226,7 +236,7 @@ public class RydeGpgIntegrationTest extends ShardableTestCase {
     return CharStreams.toString(new InputStreamReader(new FileInputStream(file), UTF_8));
   }
 
-  private String slurp(InputStream is) throws FileNotFoundException, IOException {
+  private String slurp(InputStream is) throws IOException {
     return CharStreams.toString(new InputStreamReader(is, UTF_8));
   }
 

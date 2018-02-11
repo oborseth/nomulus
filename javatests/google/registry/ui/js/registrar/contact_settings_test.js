@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -57,6 +57,7 @@ function setUp() {
     supportEmail: 'support@google.com',
     announcementsEmail: 'announcements@google.com',
     supportPhoneNumber: '123 456 7890',
+    technicalDocsUrl: 'http://example.com/techdocs'
   });
   stubs.setPath('goog.net.XhrIo', goog.testing.net.XhrIo);
   registry.registrar.ConsoleTestUtil.setup(test);
@@ -72,6 +73,8 @@ function tearDown() {
 
 
 function testCollectionView() {
+  testContactWithoutType = createTestContact('notype@example.com');
+  testContactWithoutType.types = '';
   registry.registrar.ConsoleTestUtil.visit(test, {
     path: 'contact-settings',
     xsrfToken: test.testXsrfToken,
@@ -85,11 +88,12 @@ function testCollectionView() {
         status: 'SUCCESS',
         message: 'OK',
         results: [{
-          contacts: [testContact]
+          contacts: [testContact, testContactWithoutType]
         }]
       }
   );
   assertEquals(1, $('admin-contacts').childNodes.length);
+  assertEquals(1, $('other-contacts').childNodes.length);
   // XXX: Needs more field testing.
 }
 
@@ -138,7 +142,7 @@ function testItemEditButtons() {
 function testItemEdit() {
   testItemView();
   registry.testing.click($('reg-app-btn-edit'));
-  document.forms.namedItem('item').elements['contacts[0].name'].value = 'bob';
+  $('contacts[0].name').setAttribute('value', 'bob');
   registry.testing.click($('reg-app-btn-save'));
   testContact.name = 'bob';
   registry.testing.assertReqMockRsp(
@@ -244,6 +248,36 @@ function testOneOfManyUpdate() {
 }
 
 
+function testDomainWhoisAbuseContactOverride() {
+  registry.registrar.ConsoleTestUtil.visit(test, {
+    path: 'contact-settings/test@example.com',
+    xsrfToken: test.testXsrfToken,
+    testClientId: test.testClientId
+  });
+  var oldDomainWhoisAbuseContact = createTestContact('old@asdf.com');
+  oldDomainWhoisAbuseContact.visibleInDomainWhoisAsAbuse = true;
+  var testContacts = [oldDomainWhoisAbuseContact, testContact];
+  registry.testing.assertReqMockRsp(
+      test.testXsrfToken, '/registrar-settings', {op: 'read', args: {}},
+      {status: 'SUCCESS', message: 'OK', results: [{contacts: testContacts}]});
+  // Edit testContact.
+  registry.testing.click($('reg-app-btn-edit'));
+  $('contacts[1].visibleInDomainWhoisAsAbuse.true')
+      .setAttribute('checked', 'checked');
+  $('contacts[1].visibleInDomainWhoisAsAbuse.false').removeAttribute('checked');
+  registry.testing.click($('reg-app-btn-save'));
+
+  // Should save them all back, and flip the old abuse contact's visibility
+  // boolean.
+  testContact.visibleInDomainWhoisAsAbuse = true;
+  oldDomainWhoisAbuseContact.visibleInDomainWhoisAsAbuse = false;
+  registry.testing.assertReqMockRsp(
+      test.testXsrfToken, '/registrar-settings',
+      {op: 'update', args: {contacts: testContacts, readonly: false}},
+      {status: 'SUCCESS', message: 'OK', results: [{contacts: testContacts}]});
+}
+
+
 function testDelete() {
   registry.registrar.ConsoleTestUtil.visit(test, {
     path: 'contact-settings/test@example.com',
@@ -301,6 +335,7 @@ function createTestContact(opt_email) {
     faxNumber: '+1.2345551234',
     visibleInWhoisAsAdmin: false,
     visibleInWhoisAsTech: false,
+    visibleInDomainWhoisAsAbuse: false,
     types: 'ADMIN'
   };
 }
@@ -314,6 +349,7 @@ function createTestContact(opt_email) {
 function simulateJsonForContact(contact) {
   contact.visibleInWhoisAsAdmin = contact.visibleInWhoisAsAdmin == 'true';
   contact.visibleInWhoisAsTech = contact.visibleInWhoisAsTech == 'true';
+  contact.visibleInDomainWhoisAsAbuse = contact.visibleInDomainWhoisAsAbuse == 'true';
   contact.types = '';
   for (var tNdx in contact.type) {
     if (contact.type[tNdx]) {

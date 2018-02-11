@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,10 +15,11 @@
 package google.registry.tools;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistReservedList;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import google.registry.model.registry.Registry;
 import google.registry.model.registry.label.ReservedList;
@@ -39,28 +40,31 @@ public class DeleteReservedListCommandTest extends CommandTestCase<DeleteReserve
   public void testSuccess() throws Exception {
     assertThat(reservedList.getReservedListEntries()).hasSize(1);
     runCommandForced("--name=common");
-    assertThat(ReservedList.get("common")).isAbsent();
+    assertThat(ReservedList.get("common")).isEmpty();
   }
 
   @Test
   public void testFailure_whenReservedListDoesNotExist() throws Exception {
     String expectedError =
         "Cannot delete the reserved list doesntExistReservedList because it doesn't exist.";
-    thrown.expect(IllegalArgumentException.class, expectedError);
-    runCommandForced("--name=doesntExistReservedList");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--name=doesntExistReservedList"));
+    assertThat(thrown).hasMessageThat().contains(expectedError);
   }
 
   @Test
   public void testFailure_whenReservedListIsInUse() throws Exception {
     createTld("xn--q9jyb4c");
     persistResource(Registry.get("xn--q9jyb4c").asBuilder().setReservedLists(reservedList).build());
-    try {
-      runCommandForced("--name=" + reservedList.getName());
-      assertWithMessage("Expected IllegalArgumentException to be thrown").fail();
-    } catch (IllegalArgumentException e) {
-      assertThat(ReservedList.get(reservedList.getName())).isPresent();
-      assertThat(e).hasMessage(
-          "Cannot delete reserved list because it is used on these tld(s): xn--q9jyb4c");
-    }
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--name=" + reservedList.getName()));
+    assertThat(ReservedList.get(reservedList.getName())).isPresent();
+    assertThat(thrown)
+        .hasMessageThat()
+        .isEqualTo("Cannot delete reserved list because it is used on these tld(s): xn--q9jyb4c");
   }
 }

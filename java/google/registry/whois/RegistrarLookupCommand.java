@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@ package google.registry.whois;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
-import static google.registry.util.CacheUtils.memoizeWithShortExpiration;
+import static google.registry.model.CacheUtils.memoizeWithShortExpiration;
 import static google.registry.util.RegistrarUtils.normalizeRegistrarName;
 import static javax.servlet.http.HttpServletResponse.SC_NOT_FOUND;
 
@@ -25,6 +25,7 @@ import com.google.common.base.CharMatcher;
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
 import com.google.common.base.Supplier;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import google.registry.model.registrar.Registrar;
 import google.registry.util.FormattingLogger;
@@ -44,43 +45,42 @@ final class RegistrarLookupCommand implements WhoisCommand {
    * WHOIS.
    */
   private static final Supplier<Map<String, Registrar>> REGISTRAR_BY_NORMALIZED_NAME_CACHE =
-      memoizeWithShortExpiration(new Supplier<Map<String, Registrar>>() {
-        @Override
-        public Map<String, Registrar> get() {
-          Map<String, Registrar> map = new HashMap<>();
-          // Use the normalized registrar name as a key.
-          Iterable<Registrar> registrars = Registrar.loadAllActiveAndPubliclyVisible();
-          for (Registrar registrar : registrars) {
-            if (registrar.getRegistrarName() == null) {
-              continue;
-            }
-            String normalized = normalizeRegistrarName(registrar.getRegistrarName());
-            if (map.put(normalized, registrar) != null) {
-              logger.warning(normalized
-                  + " appeared as a normalized registrar name for more than one registrar");
-            }
-          }
-          // Use the normalized registrar name without its last word as a key, assuming there are
-          // multiple words in the name. This allows searches without LLC or INC, etc. Only insert
-          // if there isn't already a mapping for this string, so that if there's a registrar with a
-          // two word name (Go Daddy) and no business-type suffix and another registrar with just
-          // that first word as its name (Go), the latter will win.
-          for (Registrar registrar : registrars) {
-            if (registrar.getRegistrarName() == null) {
-              continue;
-            }
-            List<String> words =
-                Splitter.on(CharMatcher.whitespace()).splitToList(registrar.getRegistrarName());
-            if (words.size() > 1) {
-              String normalized =
-                  normalizeRegistrarName(Joiner.on("").join(words.subList(0, words.size() - 1)));
-              if (!map.containsKey(normalized)) {
-                map.put(normalized, registrar);
+      memoizeWithShortExpiration(
+          () -> {
+            Map<String, Registrar> map = new HashMap<>();
+            // Use the normalized registrar name as a key, and ignore inactive and hidden
+            // registrars.
+            for (Registrar registrar : Registrar.loadAllCached()) {
+              if (!registrar.isLiveAndPubliclyVisible() || registrar.getRegistrarName() == null) {
+                continue;
+              }
+              String normalized = normalizeRegistrarName(registrar.getRegistrarName());
+              if (map.put(normalized, registrar) != null) {
+                logger.warningfmt(
+                    "%s appeared as a normalized registrar name for more than one registrar.",
+                    normalized);
               }
             }
-          }
-          return ImmutableMap.copyOf(map);
-        }});
+            // Use the normalized registrar name without its last word as a key, assuming there are
+            // multiple words in the name. This allows searches without LLC or INC, etc. Only insert
+            // if there isn't already a mapping for this string, so that if there's a registrar with
+            // a
+            // two word name (Go Daddy) and no business-type suffix and another registrar with just
+            // that first word as its name (Go), the latter will win.
+            for (Registrar registrar : ImmutableList.copyOf(map.values())) {
+              if (registrar.getRegistrarName() == null) {
+                continue;
+              }
+              List<String> words =
+                  Splitter.on(CharMatcher.whitespace()).splitToList(registrar.getRegistrarName());
+              if (words.size() > 1) {
+                String normalized =
+                    normalizeRegistrarName(Joiner.on("").join(words.subList(0, words.size() - 1)));
+                map.putIfAbsent(normalized, registrar);
+              }
+            }
+            return ImmutableMap.copyOf(map);
+          });
 
   @VisibleForTesting
   final String registrarName;

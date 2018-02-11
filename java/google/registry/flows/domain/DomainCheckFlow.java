@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,54 +14,61 @@
 
 package google.registry.flows.domain;
 
+import static com.google.common.base.Strings.emptyToNull;
+import static google.registry.flows.FlowUtils.validateClientIsLoggedIn;
 import static google.registry.flows.ResourceFlowUtils.verifyTargetIdCount;
 import static google.registry.flows.domain.DomainFlowUtils.checkAllowedAccessToTld;
-import static google.registry.flows.domain.DomainFlowUtils.getReservationType;
+import static google.registry.flows.domain.DomainFlowUtils.getReservationTypes;
 import static google.registry.flows.domain.DomainFlowUtils.handleFeeRequest;
 import static google.registry.flows.domain.DomainFlowUtils.validateDomainName;
 import static google.registry.flows.domain.DomainFlowUtils.validateDomainNameWithIdnTables;
 import static google.registry.flows.domain.DomainFlowUtils.verifyNotInPredelegation;
 import static google.registry.model.EppResourceUtils.checkResourcesExist;
-import static google.registry.model.domain.fee.Fee.FEE_CHECK_COMMAND_EXTENSIONS_IN_PREFERENCE_ORDER;
-import static google.registry.model.domain.fee.Fee.FEE_EXTENSION_URIS;
-import static google.registry.model.eppoutput.Result.Code.SUCCESS;
 import static google.registry.model.index.DomainApplicationIndex.loadActiveApplicationsByDomainName;
-import static google.registry.model.registry.label.ReservationType.UNRESERVED;
-import static google.registry.pricing.PricingEngineProxy.getPricesForDomainName;
-import static google.registry.util.CollectionUtils.nullToEmpty;
+import static google.registry.model.registry.label.ReservationType.getTypeOfHighestSeverity;
+import static google.registry.pricing.PricingEngineProxy.isDomainPremium;
 
-import com.google.common.base.Predicate;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.common.net.InternetDomainName;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.flows.EppException;
 import google.registry.flows.EppException.ParameterValuePolicyErrorException;
+import google.registry.flows.ExtensionManager;
+import google.registry.flows.Flow;
 import google.registry.flows.FlowModule.ClientId;
-import google.registry.flows.LoggedInFlow;
-import google.registry.model.domain.DomainApplication;
+import google.registry.flows.FlowModule.Superuser;
+import google.registry.flows.annotations.ReportingSpec;
+import google.registry.flows.custom.DomainCheckFlowCustomLogic;
+import google.registry.flows.custom.DomainCheckFlowCustomLogic.BeforeResponseParameters;
+import google.registry.flows.custom.DomainCheckFlowCustomLogic.BeforeResponseReturnData;
+import google.registry.flows.domain.token.AllocationTokenFlowUtils;
 import google.registry.model.domain.DomainCommand.Check;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.fee.FeeCheckCommandExtension;
 import google.registry.model.domain.fee.FeeCheckCommandExtensionItem;
 import google.registry.model.domain.fee.FeeCheckResponseExtensionItem;
 import google.registry.model.domain.launch.LaunchCheckExtension;
+import google.registry.model.domain.token.AllocationTokenExtension;
+import google.registry.model.eppinput.EppInput;
 import google.registry.model.eppinput.ResourceCommand;
 import google.registry.model.eppoutput.CheckData.DomainCheck;
 import google.registry.model.eppoutput.CheckData.DomainCheckData;
-import google.registry.model.eppoutput.EppOutput;
+import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.eppoutput.EppResponse.ResponseExtension;
 import google.registry.model.registry.Registry;
 import google.registry.model.registry.Registry.TldState;
 import google.registry.model.registry.label.ReservationType;
-import java.util.Collections;
+import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
+import google.registry.util.Clock;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import javax.inject.Inject;
+import org.joda.time.DateTime;
 
 /**
  * An EPP flow that checks whether a domain can be provisioned.
@@ -71,6 +78,7 @@ import javax.inject.Inject;
  * @error {@link google.registry.flows.exceptions.TooManyResourceChecksException}
  * @error {@link DomainFlowUtils.BadDomainNameCharacterException}
  * @error {@link DomainFlowUtils.BadDomainNamePartsCountException}
+ * @error {@link DomainFlowUtils.DomainNameExistsAsTldException}
  * @error {@link DomainFlowUtils.BadPeriodUnitException}
  * @error {@link DomainFlowUtils.BadCommandForRegistryPhaseException}
  * @error {@link DomainFlowUtils.CurrencyUnitMismatchException}
@@ -85,33 +93,43 @@ import javax.inject.Inject;
  * @error {@link DomainFlowUtils.RestoresAreAlwaysForOneYearException}
  * @error {@link DomainFlowUtils.TldDoesNotExistException}
  * @error {@link DomainFlowUtils.TrailingDashException}
+ * @error {@link DomainFlowUtils.TransfersAreAlwaysForOneYearException}
  * @error {@link DomainFlowUtils.UnknownFeeCommandException}
  * @error {@link OnlyCheckedNamesCanBeFeeCheckedException}
  */
-public final class DomainCheckFlow extends LoggedInFlow {
+@ReportingSpec(ActivityReportField.DOMAIN_CHECK)
+public final class DomainCheckFlow implements Flow {
 
   /**
    * The TLD states during which we want to report a domain with pending applications as
    * unavailable.
    */
-  private static final Set<TldState> PENDING_ALLOCATION_TLD_STATES =
+  private static final ImmutableSet<TldState> PENDING_ALLOCATION_TLD_STATES =
       Sets.immutableEnumSet(TldState.GENERAL_AVAILABILITY, TldState.QUIET_PERIOD);
 
   @Inject ResourceCommand resourceCommand;
+  @Inject ExtensionManager extensionManager;
+  @Inject EppInput eppInput;
   @Inject @ClientId String clientId;
   @Inject @Config("maxChecks") int maxChecks;
+  @Inject @Superuser boolean isSuperuser;
+  @Inject Clock clock;
+  @Inject EppResponse.Builder responseBuilder;
+  @Inject AllocationTokenFlowUtils allocationTokenFlowUtils;
+  @Inject DomainCheckFlowCustomLogic flowCustomLogic;
+  @Inject DomainPricingLogic pricingLogic;
   @Inject DomainCheckFlow() {}
 
   @Override
-  protected final void initLoggedInFlow() throws EppException {
-    registerExtensions(LaunchCheckExtension.class);
-    registerExtensions(FEE_CHECK_COMMAND_EXTENSIONS_IN_PREFERENCE_ORDER);
-  }
-
-  @Override
-  public EppOutput run() throws EppException {
+  public EppResponse run() throws EppException {
+    extensionManager.register(
+        FeeCheckCommandExtension.class, LaunchCheckExtension.class, AllocationTokenExtension.class);
+    flowCustomLogic.beforeValidation();
+    extensionManager.validate();
+    validateClientIsLoggedIn(clientId);
     List<String> targetIds = ((Check) resourceCommand).getTargetIds();
     verifyTargetIdCount(targetIds, maxChecks);
+    DateTime now = clock.nowUtc();
     ImmutableMap.Builder<String, InternetDomainName> domains = new ImmutableMap.Builder<>();
     // Only check that the registrar has access to a TLD the first time it is encountered
     Set<String> seenTlds = new HashSet<>();
@@ -121,75 +139,95 @@ public final class DomainCheckFlow extends LoggedInFlow {
       // This validation is moderately expensive, so cache the results.
       domains.put(targetId, domainName);
       String tld = domainName.parent().toString();
-      if (seenTlds.add(tld)) {
-        checkAllowedAccessToTld(getAllowedTlds(), tld);
-        if (!isSuperuser) {
-          verifyNotInPredelegation(Registry.get(tld), now);
-        }
+      boolean tldFirstTimeSeen = seenTlds.add(tld);
+      if (tldFirstTimeSeen && !isSuperuser) {
+        checkAllowedAccessToTld(clientId, tld);
+        verifyNotInPredelegation(Registry.get(tld), now);
       }
     }
     ImmutableMap<String, InternetDomainName> domainNames = domains.build();
+    flowCustomLogic.afterValidation(
+        DomainCheckFlowCustomLogic.AfterValidationParameters.newBuilder()
+            .setDomainNames(domainNames)
+            // TODO: Use as of date from fee extension v0.12 instead of now, if specified.
+            .setAsOfDate(now)
+            .build());
     Set<String> existingIds = checkResourcesExist(DomainResource.class, targetIds, now);
+    Optional<AllocationTokenExtension> allocationTokenExtension =
+        eppInput.getSingleExtension(AllocationTokenExtension.class);
+    ImmutableMap<String, String> tokenCheckResults =
+        allocationTokenExtension.isPresent()
+            ? allocationTokenFlowUtils.checkDomainsWithToken(
+                targetIds, allocationTokenExtension.get().getAllocationToken(), clientId)
+            : ImmutableMap.of();
     ImmutableList.Builder<DomainCheck> checks = new ImmutableList.Builder<>();
     for (String targetId : targetIds) {
-      String message = getMessageForCheck(domainNames.get(targetId), existingIds);
-      checks.add(DomainCheck.create(message == null, targetId, message));
+      Optional<String> message =
+          getMessageForCheck(domainNames.get(targetId), existingIds, tokenCheckResults, now);
+      checks.add(DomainCheck.create(!message.isPresent(), targetId, message.orElse(null)));
     }
-    return createOutput(
-        SUCCESS,
-        DomainCheckData.create(checks.build()),
-        getResponseExtensions(domainNames));
+    BeforeResponseReturnData responseData =
+        flowCustomLogic.beforeResponse(
+            BeforeResponseParameters.newBuilder()
+                .setDomainChecks(checks.build())
+                .setResponseExtensions(getResponseExtensions(domainNames, now))
+                .setAsOfDate(now)
+                .build());
+    return responseBuilder
+        .setResData(DomainCheckData.create(responseData.domainChecks()))
+        .setExtensions(responseData.responseExtensions())
+        .build();
   }
 
-  private String getMessageForCheck(
-      InternetDomainName domainName, Set<String> existingIds) {
+  private Optional<String> getMessageForCheck(
+      InternetDomainName domainName,
+      Set<String> existingIds,
+      ImmutableMap<String, String> tokenCheckResults,
+      DateTime now) {
     if (existingIds.contains(domainName.toString())) {
-      return "In use";
+      return Optional.of("In use");
     }
     Registry registry = Registry.get(domainName.parent().toString());
     if (PENDING_ALLOCATION_TLD_STATES.contains(registry.getTldState(now))
-        && FluentIterable.from(loadActiveApplicationsByDomainName(domainName.toString(), now))
-            .anyMatch(new Predicate<DomainApplication>() {
-              @Override
-              public boolean apply(DomainApplication input) {
-                return !input.getApplicationStatus().isFinalStatus();
-              }})) {
-      return "Pending allocation";
+        && loadActiveApplicationsByDomainName(domainName.toString(), now)
+            .stream()
+            .anyMatch(input -> !input.getApplicationStatus().isFinalStatus())) {
+      return Optional.of("Pending allocation");
     }
-    ReservationType reservationType = getReservationType(domainName);
-    if (reservationType == UNRESERVED
-        && getPricesForDomainName(domainName.toString(), now).isPremium()
+    ImmutableSet<ReservationType> reservationTypes = getReservationTypes(domainName);
+    if (reservationTypes.isEmpty()
+        && isDomainPremium(domainName.toString(), now)
         && registry.getPremiumPriceAckRequired()
-        && Collections.disjoint(
-            nullToEmpty(sessionMetadata.getServiceExtensionUris()),
-            FEE_EXTENSION_URIS)) {
-      return "Premium names require EPP ext.";
+        && !eppInput.getSingleExtension(FeeCheckCommandExtension.class).isPresent()) {
+      return Optional.of("Premium names require EPP ext.");
     }
-    return reservationType.getMessageForCheck();
+    if (!reservationTypes.isEmpty()) {
+      return Optional.of(getTypeOfHighestSeverity(reservationTypes).getMessageForCheck());
+    }
+    return Optional.ofNullable(emptyToNull(tokenCheckResults.get(domainName.toString())));
   }
-
 
   /** Handle the fee check extension. */
   private ImmutableList<? extends ResponseExtension> getResponseExtensions(
-      ImmutableMap<String, InternetDomainName> domainNames) throws EppException {
-    FeeCheckCommandExtension<?, ?> feeCheck =
-        eppInput.getFirstExtensionOfClasses(FEE_CHECK_COMMAND_EXTENSIONS_IN_PREFERENCE_ORDER);
-    if (feeCheck == null) {
-      return null;  // No fee checks were requested.
+      ImmutableMap<String, InternetDomainName> domainNames, DateTime now) throws EppException {
+    Optional<FeeCheckCommandExtension> feeCheckOpt =
+        eppInput.getSingleExtension(FeeCheckCommandExtension.class);
+    if (!feeCheckOpt.isPresent()) {
+      return ImmutableList.of();  // No fee checks were requested.
     }
+    FeeCheckCommandExtension<?, ?> feeCheck = feeCheckOpt.get();
     ImmutableList.Builder<FeeCheckResponseExtensionItem> responseItems =
         new ImmutableList.Builder<>();
     for (FeeCheckCommandExtensionItem feeCheckItem : feeCheck.getItems()) {
       for (String domainName : getDomainNamesToCheckForFee(feeCheckItem, domainNames.keySet())) {
-        FeeCheckResponseExtensionItem.Builder builder = feeCheckItem.createResponseBuilder();
+        FeeCheckResponseExtensionItem.Builder<?> builder = feeCheckItem.createResponseBuilder();
         handleFeeRequest(
             feeCheckItem,
             builder,
             domainNames.get(domainName),
-            clientId,
             feeCheck.getCurrency(),
             now,
-            eppInput);
+            pricingLogic);
         responseItems.add(builder.setDomainNameIfSupported(domainName).build());
       }
     }

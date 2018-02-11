@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -56,7 +56,7 @@ public final class FullFieldsTestEntityHelper {
 
   public static Registrar makeRegistrar(
       String clientId, String registrarName, Registrar.State state, Long ianaIdentifier) {
-    Registrar registrar = new Registrar.Builder()
+    return new Registrar.Builder()
       .setClientId(clientId)
       .setRegistrarName(registrarName)
       .setType(Registrar.Type.REAL)
@@ -82,7 +82,6 @@ public final class FullFieldsTestEntityHelper {
       .setWhoisServer("whois.example.com")
       .setReferralUrl("http://www.example.com")
       .build();
-    return registrar;
   }
 
   public static ImmutableList<RegistrarContact> makeRegistrarContacts(Registrar registrar) {
@@ -99,7 +98,7 @@ public final class FullFieldsTestEntityHelper {
             .setVisibleInWhoisAsAdmin(false)
             .setVisibleInWhoisAsTech(true)
             .build(),
-          new RegistrarContact.Builder()
+        new RegistrarContact.Builder()
             .setParent(registrar)
             .setName("Jane Doe")
             .setEmailAddress("janedoe@example.com")
@@ -110,7 +109,15 @@ public final class FullFieldsTestEntityHelper {
             // distinction to make sure we're not relying on it.  Sigh.
             .setVisibleInWhoisAsAdmin(true)
             .setVisibleInWhoisAsTech(false)
-        .build());
+            .build(),
+        new RegistrarContact.Builder()
+            .setParent(registrar)
+            .setName("Jake Doe")
+            .setEmailAddress("jakedoe@example.com")
+            .setPhoneNumber("+1.2125551216")
+            .setFaxNumber("+1.2125551216")
+            .setVisibleInDomainWhoisAsAbuse(true)
+            .build());
   }
 
   public static HostResource makeHostResource(String fqhn, String ip) {
@@ -122,7 +129,8 @@ public final class FullFieldsTestEntityHelper {
     HostResource.Builder builder = new HostResource.Builder()
         .setRepoId(generateNewContactHostRoid())
         .setFullyQualifiedHostName(Idn.toASCII(fqhn))
-        .setCreationTimeForTest(DateTime.parse("2000-10-08T00:45:00Z"));
+        .setCreationTimeForTest(DateTime.parse("2000-10-08T00:45:00Z"))
+        .setPersistedCurrentSponsorClientId("TheRegistrar");
     if ((ip1 != null) || (ip2 != null)) {
       ImmutableSet.Builder<InetAddress> ipBuilder = new ImmutableSet.Builder<>();
       if (ip1 != null) {
@@ -154,11 +162,31 @@ public final class FullFieldsTestEntityHelper {
   public static ContactResource makeContactResource(
       String id, String name, @Nullable String email) {
     return makeContactResource(
-        id, name, email, ImmutableList.of("123 Example Boulevard <script>"));
+        id, name, email, ImmutableList.of("123 Example Boulevard <script>"), null);
   }
 
   public static ContactResource makeContactResource(
-      String id, String name, @Nullable String email, @Nullable List<String> street) {
+      String id, String name, @Nullable String email, @Nullable Registrar registrar) {
+    return makeContactResource(
+        id, name, email, ImmutableList.of("123 Example Boulevard <script>"), registrar);
+  }
+
+  public static ContactResource makeContactResource(
+      String id,
+      String name,
+      @Nullable String email,
+      @Nullable List<String> street,
+      @Nullable Registrar registrar) {
+    return makeContactResource(id, name, email, street, registrar, null);
+  }
+
+  public static ContactResource makeContactResource(
+      String id,
+      String name,
+      @Nullable String email,
+      @Nullable List<String> street,
+      @Nullable Registrar registrar,
+      @Nullable DateTime deletionTime) {
     PostalInfo.Builder postalBuilder = new PostalInfo.Builder()
         .setType(PostalInfo.Type.INTERNATIONALIZED)
         .setName(name)
@@ -188,13 +216,50 @@ public final class FullFieldsTestEntityHelper {
     if (email != null) {
       builder.setEmailAddress(email);
     }
+    if (registrar != null) {
+      builder
+          .setCreationClientId(registrar.getClientId())
+          .setPersistedCurrentSponsorClientId(registrar.getClientId());
+    }
+    if (deletionTime != null) {
+      builder.setDeletionTime(deletionTime);
+    }
+    return builder.build();
+  }
+
+  public static ContactResource makeWipedOutContactResource(
+      String id,
+      @Nullable Registrar registrar,
+      @Nullable DateTime deletionTime) {
+    ContactResource.Builder builder = new ContactResource.Builder()
+        .setContactId(id)
+        .setRepoId(generateNewContactHostRoid())
+        .setCreationTimeForTest(DateTime.parse("2000-10-08T00:45:00Z"));
+    if (registrar != null) {
+      builder
+          .setCreationClientId(registrar.getClientId())
+          .setPersistedCurrentSponsorClientId(registrar.getClientId());
+    }
+    if (deletionTime != null) {
+      builder.setDeletionTime(deletionTime);
+    }
     return builder.build();
   }
 
   public static ContactResource makeAndPersistContactResource(
-      String id, String name, @Nullable String email, @Nullable DateTime creationTime) {
+      String id,
+      String name,
+      @Nullable String email,
+      @Nullable DateTime creationTime,
+      @Nullable Registrar registrar) {
     return makeAndPersistContactResource(
-        id, name, email, ImmutableList.of("123 Example Boulevard <script>"), creationTime);
+        id,
+        name,
+        email,
+        ImmutableList.of("123 Example Boulevard <script>"),
+        creationTime,
+        registrar,
+        null);
   }
 
   public static ContactResource makeAndPersistContactResource(
@@ -203,11 +268,51 @@ public final class FullFieldsTestEntityHelper {
       @Nullable String email,
       @Nullable List<String> street,
       @Nullable DateTime creationTime) {
-    ContactResource contactResource = persistResource(makeContactResource(id, name, email, street));
+    return makeAndPersistContactResource(id, name, email, street, creationTime, null, null);
+  }
+
+  public static ContactResource makeAndPersistContactResource(
+      String id,
+      String name,
+      @Nullable String email,
+      @Nullable List<String> street,
+      @Nullable DateTime creationTime,
+      @Nullable Registrar registrar) {
+    return makeAndPersistContactResource(id, name, email, street, creationTime, registrar, null);
+  }
+
+  public static ContactResource makeAndPersistContactResource(
+      String id,
+      String name,
+      @Nullable String email,
+      @Nullable List<String> street,
+      @Nullable DateTime creationTime,
+      @Nullable Registrar registrar,
+      @Nullable DateTime deletionTime) {
+    ContactResource contactResource =
+        persistResource(makeContactResource(id, name, email, street, registrar, deletionTime));
     if (creationTime != null) {
       persistResource(makeHistoryEntry(
           contactResource, HistoryEntry.Type.CONTACT_CREATE, null, "created", creationTime));
     }
+    if (deletionTime != null) {
+      persistResource(makeHistoryEntry(
+          contactResource, HistoryEntry.Type.CONTACT_DELETE, null, "deleted", deletionTime));
+    }
+    return contactResource;
+  }
+
+  public static ContactResource makeAndPersistDeletedContactResource(
+      String id,
+      DateTime creationTime,
+      Registrar registrar,
+      DateTime deletionTime) {
+    ContactResource contactResource =
+        persistResource(makeWipedOutContactResource(id, registrar, deletionTime));
+    persistResource(makeHistoryEntry(
+        contactResource, HistoryEntry.Type.CONTACT_CREATE, null, "created", creationTime));
+    persistResource(makeHistoryEntry(
+        contactResource, HistoryEntry.Type.CONTACT_DELETE, null, "deleted", deletionTime));
     return contactResource;
   }
 
@@ -225,7 +330,7 @@ public final class FullFieldsTestEntityHelper {
         .setLastEppUpdateTime(DateTime.parse("2009-05-29T20:13:00Z"))
         .setCreationTimeForTest(DateTime.parse("2000-10-08T00:45:00Z"))
         .setRegistrationExpirationTime(DateTime.parse("2110-10-08T00:44:59Z"))
-        .setCurrentSponsorClientId(registrar.getClientId())
+        .setPersistedCurrentSponsorClientId(registrar.getClientId())
         .setStatusValues(ImmutableSet.of(
             StatusValue.CLIENT_DELETE_PROHIBITED,
             StatusValue.CLIENT_RENEW_PROHIBITED,
@@ -273,7 +378,7 @@ public final class FullFieldsTestEntityHelper {
         .setXmlBytes("<xml></xml>".getBytes(UTF_8))
         .setModificationTime(modificationTime)
         .setClientId("foo")
-        .setTrid(Trid.create("ABC-123"))
+        .setTrid(Trid.create("ABC-123", "server-trid"))
         .setBySuperuser(false)
         .setReason(reason)
         .setRequestedByRegistrar(false);

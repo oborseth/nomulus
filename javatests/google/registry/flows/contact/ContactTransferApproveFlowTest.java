@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 package google.registry.flows.contact;
 
+import static com.google.common.collect.MoreCollectors.onlyElement;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.ContactResourceSubject.assertAboutContacts;
 import static google.registry.testing.DatastoreHelper.assertNoBillingEvents;
@@ -22,9 +23,10 @@ import static google.registry.testing.DatastoreHelper.deleteResource;
 import static google.registry.testing.DatastoreHelper.getOnlyPollMessage;
 import static google.registry.testing.DatastoreHelper.getPollMessages;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
-import com.google.common.collect.FluentIterable;
-import com.google.common.collect.Iterables;
+import google.registry.flows.EppException;
 import google.registry.flows.ResourceFlowUtils.BadAuthInfoForResourceException;
 import google.registry.flows.ResourceFlowUtils.ResourceDoesNotExistException;
 import google.registry.flows.ResourceFlowUtils.ResourceNotOwnedException;
@@ -36,6 +38,7 @@ import google.registry.model.eppcommon.Trid;
 import google.registry.model.poll.PendingActionNotificationResponse;
 import google.registry.model.poll.PollMessage;
 import google.registry.model.reporting.HistoryEntry;
+import google.registry.model.transfer.TransferData;
 import google.registry.model.transfer.TransferResponse;
 import google.registry.model.transfer.TransferStatus;
 import org.junit.Before;
@@ -64,19 +67,25 @@ public class ContactTransferApproveFlowTest
         .hasSize(1);
 
     // Setup done; run the test.
+    contact = reloadResourceByForeignKey();
+    TransferData originalTransferData = contact.getTransferData();
     assertTransactionalFlow(true);
-    runFlowAssertResponse(readFile(expectedXmlFilename));
+    runFlowAssertResponse(loadFile(expectedXmlFilename));
 
     // Transfer should have succeeded. Verify correct fields were set.
     contact = reloadResourceByForeignKey();
     assertAboutContacts().that(contact)
         .hasCurrentSponsorClientId("NewRegistrar").and()
         .hasLastTransferTime(clock.nowUtc()).and()
-        .hasTransferStatus(TransferStatus.CLIENT_APPROVED).and()
-        .hasPendingTransferExpirationTime(clock.nowUtc()).and()
         .hasOneHistoryEntryEachOfTypes(
             HistoryEntry.Type.CONTACT_TRANSFER_REQUEST,
             HistoryEntry.Type.CONTACT_TRANSFER_APPROVE);
+    assertThat(contact.getTransferData())
+        .isEqualTo(
+            originalTransferData.copyConstantFieldsToBuilder()
+                .setTransferStatus(TransferStatus.CLIENT_APPROVED)
+                .setPendingTransferExpirationTime(clock.nowUtc())
+                .build());
     assertNoBillingEvents();
     // The poll message (in the future) to the losing registrar for implicit ack should be gone.
     assertThat(getPollMessages("TheRegistrar", clock.nowUtc().plusMonths(1))).isEmpty();
@@ -85,14 +94,21 @@ public class ContactTransferApproveFlowTest
     PollMessage gainingPollMessage = getOnlyPollMessage("NewRegistrar");
     assertThat(gainingPollMessage.getEventTime()).isEqualTo(clock.nowUtc());
     assertThat(
-        Iterables.getOnlyElement(FluentIterable
-            .from(gainingPollMessage.getResponseData())
-            .filter(TransferResponse.class))
+            gainingPollMessage
+                .getResponseData()
+                .stream()
+                .filter(TransferResponse.class::isInstance)
+                .map(TransferResponse.class::cast)
+                .collect(onlyElement())
                 .getTransferStatus())
-                .isEqualTo(TransferStatus.CLIENT_APPROVED);
-    PendingActionNotificationResponse panData = Iterables.getOnlyElement(FluentIterable
-        .from(gainingPollMessage.getResponseData())
-        .filter(PendingActionNotificationResponse.class));
+        .isEqualTo(TransferStatus.CLIENT_APPROVED);
+    PendingActionNotificationResponse panData =
+        gainingPollMessage
+            .getResponseData()
+            .stream()
+            .filter(PendingActionNotificationResponse.class::isInstance)
+            .map(PendingActionNotificationResponse.class::cast)
+            .collect(onlyElement());
     assertThat(panData.getTrid())
         .isEqualTo(Trid.create("transferClient-trid", "transferServer-trid"));
     assertThat(panData.getActionResult()).isTrue();
@@ -108,7 +124,7 @@ public class ContactTransferApproveFlowTest
   @Test
   public void testDryRun() throws Exception {
     setEppInput("contact_transfer_approve.xml");
-    dryRunFlowAssertResponse(readFile("contact_transfer_approve_response.xml"));
+    dryRunFlowAssertResponse(loadFile("contact_transfer_approve_response.xml"));
   }
 
   @Test
@@ -129,74 +145,94 @@ public class ContactTransferApproveFlowTest
         contact.asBuilder()
             .setAuthInfo(ContactAuthInfo.create(PasswordAuth.create("badpassword")))
             .build());
-    thrown.expect(BadAuthInfoForResourceException.class);
-    doFailingTest("contact_transfer_approve_with_authinfo.xml");
+    EppException thrown = expectThrows(
+        BadAuthInfoForResourceException.class,
+        () -> doFailingTest("contact_transfer_approve_with_authinfo.xml"));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_neverBeenTransferred() throws Exception {
     changeTransferStatus(null);
-    thrown.expect(NotPendingTransferException.class);
-    doFailingTest("contact_transfer_approve.xml");
+    EppException thrown =
+        expectThrows(
+            NotPendingTransferException.class, () -> doFailingTest("contact_transfer_approve.xml"));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_clientApproved() throws Exception {
     changeTransferStatus(TransferStatus.CLIENT_APPROVED);
-    thrown.expect(NotPendingTransferException.class);
-    doFailingTest("contact_transfer_approve.xml");
+    EppException thrown =
+        expectThrows(
+            NotPendingTransferException.class, () -> doFailingTest("contact_transfer_approve.xml"));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
- @Test
+  @Test
   public void testFailure_clientRejected() throws Exception {
     changeTransferStatus(TransferStatus.CLIENT_REJECTED);
-    thrown.expect(NotPendingTransferException.class);
-    doFailingTest("contact_transfer_approve.xml");
+    EppException thrown =
+        expectThrows(
+            NotPendingTransferException.class, () -> doFailingTest("contact_transfer_approve.xml"));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
- @Test
+  @Test
   public void testFailure_clientCancelled() throws Exception {
     changeTransferStatus(TransferStatus.CLIENT_CANCELLED);
-    thrown.expect(NotPendingTransferException.class);
-    doFailingTest("contact_transfer_approve.xml");
+    EppException thrown =
+        expectThrows(
+            NotPendingTransferException.class, () -> doFailingTest("contact_transfer_approve.xml"));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_serverApproved() throws Exception {
     changeTransferStatus(TransferStatus.SERVER_APPROVED);
-    thrown.expect(NotPendingTransferException.class);
-    doFailingTest("contact_transfer_approve.xml");
+    EppException thrown =
+        expectThrows(
+            NotPendingTransferException.class, () -> doFailingTest("contact_transfer_approve.xml"));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_serverCancelled() throws Exception {
     changeTransferStatus(TransferStatus.SERVER_CANCELLED);
-    thrown.expect(NotPendingTransferException.class);
-    doFailingTest("contact_transfer_approve.xml");
+    EppException thrown =
+        expectThrows(
+            NotPendingTransferException.class, () -> doFailingTest("contact_transfer_approve.xml"));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_gainingClient() throws Exception {
     setClientIdForFlow("NewRegistrar");
-    thrown.expect(ResourceNotOwnedException.class);
-    doFailingTest("contact_transfer_approve.xml");
+    EppException thrown =
+        expectThrows(
+            ResourceNotOwnedException.class, () -> doFailingTest("contact_transfer_approve.xml"));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_unrelatedClient() throws Exception {
     setClientIdForFlow("ClientZ");
-    thrown.expect(ResourceNotOwnedException.class);
-    doFailingTest("contact_transfer_approve.xml");
+    EppException thrown =
+        expectThrows(
+            ResourceNotOwnedException.class, () -> doFailingTest("contact_transfer_approve.xml"));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_deletedContact() throws Exception {
     contact = persistResource(
         contact.asBuilder().setDeletionTime(clock.nowUtc().minusDays(1)).build());
-    thrown.expect(
-        ResourceDoesNotExistException.class,
-        String.format("(%s)", getUniqueIdFromCommand()));
-    doFailingTest("contact_transfer_approve.xml");
+    ResourceDoesNotExistException thrown =
+        expectThrows(
+            ResourceDoesNotExistException.class,
+            () -> doFailingTest("contact_transfer_approve.xml"));
+    assertThat(thrown).hasMessageThat().contains(String.format("(%s)", getUniqueIdFromCommand()));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -204,9 +240,17 @@ public class ContactTransferApproveFlowTest
     deleteResource(contact);
     contact = persistResource(
         contact.asBuilder().setDeletionTime(clock.nowUtc().minusDays(1)).build());
-    thrown.expect(
-        ResourceDoesNotExistException.class,
-        String.format("(%s)", getUniqueIdFromCommand()));
-    doFailingTest("contact_transfer_approve.xml");
+    ResourceDoesNotExistException thrown =
+        expectThrows(
+            ResourceDoesNotExistException.class,
+            () -> doFailingTest("contact_transfer_approve.xml"));
+    assertThat(thrown).hasMessageThat().contains(String.format("(%s)", getUniqueIdFromCommand()));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testIcannActivityReportField_getsLogged() throws Exception {
+    runFlow();
+    assertIcannReportingActivityFieldLogged("srs-cont-transfer-approve");
   }
 }

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
+  <command>
+    <update>
+      <domain:update
+       xmlns:domain="urn:ietf:params:xml:ns:domain-1.0">
+        <domain:name>example.abc</domain:name>
+        <domain:add>
+          <domain:ns>
+            <domain:hostObj>ns2.zdns.google</domain:hostObj>
+            <domain:hostObj>ns3.zdns.google</domain:hostObj>
+          </domain:ns>
+          <domain:contact type="admin">crr-admin2</domain:contact>
+          <domain:contact type="tech">crr-tech2</domain:contact>
+          <domain:status s="serverDeleteProhibited"/>
+        </domain:add>
+        <domain:rem>
+          <domain:ns>
+            <domain:hostObj>ns4.zdns.google</domain:hostObj>
+          </domain:ns>
+          <domain:contact type="admin">crr-admin1</domain:contact>
+          <domain:contact type="tech">crr-tech1</domain:contact>
+          <domain:status s="serverHold"/>
+        </domain:rem>
+        <domain:chg>
+          <domain:registrant>crr-admin</domain:registrant>
+          <domain:authInfo>
+            <domain:pw>2fooBAR</domain:pw>
+          </domain:authInfo>
+        </domain:chg>
+      </domain:update>
+    </update>
+    <extension>
+      <secDNS:update xmlns:secDNS="urn:ietf:params:xml:ns:secDNS-1.1">
+        <secDNS:rem>
+          <secDNS:dsData>
+            <secDNS:keyTag>7</secDNS:keyTag>
+            <secDNS:alg>8</secDNS:alg>
+            <secDNS:digestType>9</secDNS:digestType>
+            <secDNS:digest>12AB</secDNS:digest>
+          </secDNS:dsData>
+          <secDNS:dsData>
+            <secDNS:keyTag>6</secDNS:keyTag>
+            <secDNS:alg>5</secDNS:alg>
+            <secDNS:digestType>4</secDNS:digestType>
+            <secDNS:digest>34CD</secDNS:digest>
+          </secDNS:dsData>
+        </secDNS:rem>
+        <secDNS:add>
+          <secDNS:dsData>
+            <secDNS:keyTag>1</secDNS:keyTag>
+            <secDNS:alg>2</secDNS:alg>
+            <secDNS:digestType>3</secDNS:digestType>
+            <secDNS:digest>ABCD</secDNS:digest>
+          </secDNS:dsData>
+          <secDNS:dsData>
+            <secDNS:keyTag>4</secDNS:keyTag>
+            <secDNS:alg>5</secDNS:alg>
+            <secDNS:digestType>6</secDNS:digestType>
+            <secDNS:digest>EF01</secDNS:digest>
+          </secDNS:dsData>
+        </secDNS:add>
+      </secDNS:update>
+    </extension>
+    <clTRID>RegistryTool</clTRID>
+  </command>
+</epp>

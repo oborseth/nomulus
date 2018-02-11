@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,10 +22,10 @@ import com.braintreegateway.Customer;
 import com.braintreegateway.CustomerRequest;
 import com.braintreegateway.Result;
 import com.braintreegateway.exceptions.NotFoundException;
-import com.google.common.base.Optional;
 import com.google.common.base.VerifyException;
 import google.registry.model.registrar.Registrar;
 import google.registry.model.registrar.RegistrarContact;
+import java.util.Optional;
 import javax.inject.Inject;
 
 /** Helper for creating Braintree customer entries for registrars. */
@@ -89,7 +89,7 @@ public class BraintreeRegistrarSyncer {
         return Optional.of(contact);
       }
     }
-    return Optional.absent();
+    return Optional.empty();
   }
 
   private boolean doesCustomerExist(String id) {

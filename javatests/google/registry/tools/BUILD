@@ -7,7 +7,6 @@ licenses(["notice"])  # Apache 2.0
 
 load("//java/com/google/testing/builddefs:GenTestRules.bzl", "GenTestRules")
 
-
 java_library(
     name = "tools",
     srcs = glob([
@@ -15,26 +14,10 @@ java_library(
     ]),
     resources = glob([
         "testdata/*.*",
+        "server/testdata/*.*",
     ]),
     deps = [
-        "//java/com/google/common/annotations",
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//java/com/google/common/io",
-        "//java/com/google/common/net",
-        "//java/com/google/common/reflect",
-        "//third_party/java/appengine:appengine-api-testonly",
-        "//third_party/java/jcommander",
-        "//third_party/java/joda_money",
-        "//third_party/java/joda_time",
-        "//third_party/java/json_simple",
-        "//third_party/java/jsr305_annotations",
-        "//third_party/java/jsr330_inject",
-        "//third_party/java/junit",
-        "//third_party/java/mockito",
-        "//third_party/java/objectify:objectify-v4_1",
-        "//third_party/java/re2j",
-        "//third_party/java/truth",
+        "//java/google/registry/backup",
         "//java/google/registry/config",
         "//java/google/registry/flows",
         "//java/google/registry/keyring/api",
@@ -51,7 +34,30 @@ java_library(
         "//javatests/google/registry/model",
         "//javatests/google/registry/rde",
         "//javatests/google/registry/testing",
+        "//javatests/google/registry/tools/server",
         "//javatests/google/registry/xml",
+        "//third_party/jaxb",
+        "//third_party/objectify:objectify-v4_1",
+        "@com_beust_jcommander",
+        "@com_google_api_client",
+        "@com_google_apis_google_api_services_dns",
+        "@com_google_appengine_api_1_0_sdk//:testonly",
+        "@com_google_appengine_remote_api//:link",
+        "@com_google_auto_value",
+        "@com_google_code_findbugs_jsr305",
+        "@com_google_guava",
+        "@com_google_http_client",
+        "@com_google_http_client_jackson2",
+        "@com_google_oauth_client",
+        "@com_google_re2j",
+        "@com_google_truth",
+        "@com_google_truth_extensions_truth_java8_extension",
+        "@com_googlecode_json_simple",
+        "@javax_inject",
+        "@joda_time",
+        "@junit",
+        "@org_joda_money",
+        "@org_mockito_all",
     ],
 )
 

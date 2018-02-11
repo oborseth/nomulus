@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,35 +23,35 @@ import com.google.appengine.api.datastore.Text;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Ascii;
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableSet;
 import google.registry.util.Clock;
 import google.registry.util.NonFinalForTesting;
 import google.registry.util.SystemClock;
 import java.util.Date;
 import java.util.List;
+import java.util.Optional;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 
-/** Container for information about a datastore backup. */
+/** Container for information about a Datastore backup. */
 public class DatastoreBackupInfo {
 
   @NonFinalForTesting
   private static Clock clock = new SystemClock();
 
-  /** The possible status values for a datastore backup. */
+  /** The possible status values for a Datastore backup. */
   public enum BackupStatus { PENDING, COMPLETE }
 
-  /** The name of the datastore backup. */
+  /** The name of the Datastore backup. */
   private final String backupName;
 
-  /** The entity kinds included in this datastore backup. */
+  /** The entity kinds included in this Datastore backup. */
   private final ImmutableSet<String> kinds;
 
-  /** The start time of the datastore backup. */
+  /** The start time of the Datastore backup. */
   private final DateTime startTime;
 
-  /** The completion time of the datastore backup, present if it has completed. */
+  /** The completion time of the Datastore backup, present if it has completed. */
   private final Optional<DateTime> completeTime;
 
   /**
@@ -71,9 +71,9 @@ public class DatastoreBackupInfo {
 
     kinds = ImmutableSet.copyOf(rawKinds);
     startTime = new DateTime(rawStartTime).withZone(UTC);
-    completeTime = Optional.fromNullable(
+    completeTime = Optional.ofNullable(
         rawCompleteTime == null ? null : new DateTime(rawCompleteTime).withZone(UTC));
-    gcsFilename = Optional.fromNullable(
+    gcsFilename = Optional.ofNullable(
         rawGcsFilename == null ? null : gcsPathToUri(rawGcsFilename.getValue()));
   }
 
@@ -126,7 +126,7 @@ public class DatastoreBackupInfo {
    * backup started (if it has not completed).
    */
   public Duration getRunningTime() {
-    return new Duration(startTime, completeTime.or(clock.nowUtc()));
+    return new Duration(startTime, completeTime.orElse(clock.nowUtc()));
   }
 
   public Optional<String> getGcsFilename() {
@@ -140,9 +140,9 @@ public class DatastoreBackupInfo {
             "Backup name: " + backupName,
             "Status: " + getStatus(),
             "Started: " + startTime,
-            "Ended: " + completeTime.orNull(),
+            "Ended: " + completeTime.orElse(null),
             "Duration: " + Ascii.toLowerCase(getRunningTime().toPeriod().toString().substring(2)),
-            "GCS: " + gcsFilename.orNull(),
+            "GCS: " + gcsFilename.orElse(null),
             "Kinds: " + kinds,
             "");
   }

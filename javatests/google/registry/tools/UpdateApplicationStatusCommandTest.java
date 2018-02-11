@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,21 +21,21 @@ import static google.registry.model.domain.launch.ApplicationStatus.PENDING_ALLO
 import static google.registry.model.domain.launch.ApplicationStatus.REJECTED;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.newContactResourceWithRoid;
 import static google.registry.testing.DatastoreHelper.newDomainApplication;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.DomainApplicationSubject.assertAboutApplications;
 import static google.registry.testing.HistoryEntrySubject.assertAboutHistoryEntries;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static org.joda.time.DateTimeZone.UTC;
-import static org.junit.Assert.fail;
 
-import com.google.common.collect.FluentIterable;
 import google.registry.model.domain.DomainApplication;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.eppcommon.Trid;
 import google.registry.model.poll.PendingActionNotificationResponse.DomainPendingActionNotificationResponse;
 import google.registry.model.poll.PollMessage;
-import google.registry.model.registrar.Registrar;
 import google.registry.model.reporting.HistoryEntry;
 import org.joda.time.DateTime;
 import org.junit.Before;
@@ -45,7 +45,6 @@ import org.junit.Test;
 public class UpdateApplicationStatusCommandTest
     extends CommandTestCase<UpdateApplicationStatusCommand> {
 
-  private Trid trid = Trid.create("ABC123");
   private DomainApplication domainApplication;
   private DateTime creationTime;
 
@@ -53,15 +52,14 @@ public class UpdateApplicationStatusCommandTest
   public void init() {
     // Since the command's history client ID defaults to CharlestonRoad, resave TheRegistrar as
     // CharlestonRoad so we don't have to pass in --history_client_id everywhere below.
-    persistResource(Registrar.loadByClientId("TheRegistrar").asBuilder()
-        .setClientId("CharlestonRoad")
-        .build());
+    persistResource(
+        loadRegistrar("TheRegistrar").asBuilder().setClientId("CharlestonRoad").build());
 
     createTld("xn--q9jyb4c");
     domainApplication = persistResource(newDomainApplication(
         "label.xn--q9jyb4c", persistResource(newContactResourceWithRoid("contact1", "C1-ROID")))
             .asBuilder()
-            .setCurrentSponsorClientId("TheRegistrar")
+            .setPersistedCurrentSponsorClientId("TheRegistrar")
             .build());
 
     this.creationTime = domainApplication.getCreationTime();
@@ -71,7 +69,7 @@ public class UpdateApplicationStatusCommandTest
         new HistoryEntry.Builder()
             .setParent(domainApplication)
             .setModificationTime(creationTime)
-            .setTrid(trid)
+            .setTrid(Trid.create("ABC123", "server-trid"))
             .setType(HistoryEntry.Type.DOMAIN_APPLICATION_CREATE)
             .build());
 
@@ -81,7 +79,7 @@ public class UpdateApplicationStatusCommandTest
         new HistoryEntry.Builder()
             .setParent(domainApplication)
             .setModificationTime(creationTime)
-            .setTrid(Trid.create("ABC124"))
+            .setTrid(Trid.create("ABC124", "server-trid"))
             .setType(HistoryEntry.Type.DOMAIN_APPLICATION_CREATE)
             .build());
   }
@@ -106,7 +104,7 @@ public class UpdateApplicationStatusCommandTest
         .doesNotHaveApplicationStatus(REJECTED);
     assertThat(getPollMessageCount()).isEqualTo(0);
 
-    Trid creationTrid = Trid.create("DEF456");
+    Trid creationTrid = Trid.create("DEF456", "server-trid");
     persistResource(reloadResource(domainApplication).asBuilder()
         .setCreationTrid(creationTrid)
         .build());
@@ -125,8 +123,9 @@ public class UpdateApplicationStatusCommandTest
 
     PollMessage pollMessage = getFirstPollMessage();
     assertThat(pollMessage.getMsg()).isEqualTo("Application rejected");
-    DomainPendingActionNotificationResponse response = (DomainPendingActionNotificationResponse)
-        FluentIterable.from(pollMessage.getResponseData()).first().get();
+    DomainPendingActionNotificationResponse response =
+        (DomainPendingActionNotificationResponse)
+            pollMessage.getResponseData().stream().findFirst().get();
     assertThat(response.getTrid()).isEqualTo(creationTrid);
     assertThat(response.getActionResult()).isFalse();
   }
@@ -144,7 +143,7 @@ public class UpdateApplicationStatusCommandTest
         .doesNotHaveApplicationStatus(ALLOCATED);
     assertThat(getPollMessageCount()).isEqualTo(0);
 
-    Trid creationTrid = Trid.create("DEF456");
+    Trid creationTrid = Trid.create("DEF456", "server-trid");
     persistResource(reloadResource(domainApplication).asBuilder()
         .setCreationTrid(creationTrid)
         .build());
@@ -163,8 +162,9 @@ public class UpdateApplicationStatusCommandTest
 
     PollMessage pollMessage = getFirstPollMessage();
     assertThat(pollMessage.getMsg()).isEqualTo("Application allocated");
-    DomainPendingActionNotificationResponse response = (DomainPendingActionNotificationResponse)
-        FluentIterable.from(pollMessage.getResponseData()).first().get();
+    DomainPendingActionNotificationResponse response =
+        (DomainPendingActionNotificationResponse)
+            pollMessage.getResponseData().stream().findFirst().get();
     assertThat(response.getTrid()).isEqualTo(creationTrid);
     assertThat(response.getActionResult()).isTrue();
   }
@@ -178,7 +178,7 @@ public class UpdateApplicationStatusCommandTest
         .hasStatusValue(StatusValue.PENDING_CREATE);
     assertThat(getPollMessageCount()).isEqualTo(0);
 
-    Trid creationTrid = Trid.create("DEF456");
+    Trid creationTrid = Trid.create("DEF456", "server-trid");
     persistResource(reloadResource(domainApplication).asBuilder()
         .setCreationTrid(creationTrid)
         .build());
@@ -227,9 +227,10 @@ public class UpdateApplicationStatusCommandTest
     assertThat(getPollMessageCount()).isEqualTo(1);
 
     PollMessage pollMessage = getFirstPollMessage();
-    DomainPendingActionNotificationResponse response = (DomainPendingActionNotificationResponse)
-        FluentIterable.from(pollMessage.getResponseData()).first().get();
-    assertThat(response.getTrid()).isEqualTo(trid);
+    DomainPendingActionNotificationResponse response =
+        (DomainPendingActionNotificationResponse)
+            pollMessage.getResponseData().stream().findFirst().get();
+    assertThat(response.getTrid()).isEqualTo(Trid.create("ABC123", "server-trid"));
   }
 
   @Test
@@ -254,30 +255,41 @@ public class UpdateApplicationStatusCommandTest
         .setApplicationStatus(ALLOCATED)
         .build());
 
-    try {
-      runCommandForced("--ids=2-Q9JYB4C", "--msg=\"Application rejected\"", "--status=REJECTED");
-      fail("Expected IllegalStateException \"Domain application has final status ALLOCATED\"");
-    } catch (IllegalStateException e) {
-      assertThat(e.getMessage()).contains("Domain application has final status ALLOCATED");
-      assertAboutApplications().that(ofy().load().entity(domainApplication).now())
-          .hasApplicationStatus(ALLOCATED);
-      assertThat(getPollMessageCount()).isEqualTo(0);
-      assertAboutHistoryEntries().that(loadLastHistoryEntry())
-          .hasType(HistoryEntry.Type.DOMAIN_APPLICATION_CREATE);
-    }
+    IllegalStateException e =
+        expectThrows(
+            IllegalStateException.class,
+            () ->
+                runCommandForced(
+                    "--ids=2-Q9JYB4C", "--msg=\"Application rejected\"", "--status=REJECTED"));
+    assertThat(e).hasMessageThat().contains("Domain application has final status ALLOCATED");
+    assertAboutApplications().that(ofy().load().entity(domainApplication).now())
+        .hasApplicationStatus(ALLOCATED);
+    assertThat(getPollMessageCount()).isEqualTo(0);
+    assertAboutHistoryEntries().that(loadLastHistoryEntry())
+        .hasType(HistoryEntry.Type.DOMAIN_APPLICATION_CREATE);
   }
 
   @Test
   public void testFailure_applicationDoesNotExist() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced("--ids=555-Q9JYB4C", "--msg=\"Application rejected\"", "--status=REJECTED");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--ids=555-Q9JYB4C", "--msg=\"Application rejected\"", "--status=REJECTED"));
   }
 
   @Test
   public void testFailure_historyClientIdDoesNotExist() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "fakeclient");
-    runCommandForced(
-        "--history_client_id=fakeclient", "--ids=2-Q9JYB4C", "--msg=Ignored", "--status=REJECTED");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--history_client_id=fakeclient",
+                    "--ids=2-Q9JYB4C",
+                    "--msg=Ignored",
+                    "--status=REJECTED"));
+    assertThat(thrown).hasMessageThat().contains("fakeclient");
   }
 }
 

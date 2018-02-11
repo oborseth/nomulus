@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,13 +16,12 @@ package google.registry.util;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Throwables.propagateIfInstanceOf;
+import static com.google.common.base.Throwables.throwIfInstanceOf;
+import static com.google.common.collect.MoreCollectors.onlyElement;
 import static com.google.common.io.BaseEncoding.base64;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Iterables;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -36,7 +35,6 @@ import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.CertificateParsingException;
 import java.security.cert.CertificateRevokedException;
-import java.security.cert.Extension;
 import java.security.cert.X509CRL;
 import java.security.cert.X509CRLEntry;
 import java.security.cert.X509Certificate;
@@ -72,11 +70,14 @@ public final class X509Utils {
   public static X509Certificate loadCertificate(InputStream input)
       throws CertificateParsingException {
     try {
-      return Iterables.getOnlyElement(FluentIterable
-          .from(CertificateFactory.getInstance("X.509").generateCertificates(input))
-          .filter(X509Certificate.class));
+      return CertificateFactory.getInstance("X.509")
+          .generateCertificates(input)
+          .stream()
+          .filter(X509Certificate.class::isInstance)
+          .map(X509Certificate.class::cast)
+          .collect(onlyElement());
     } catch (CertificateException e) {  // CertificateParsingException by specification.
-      propagateIfInstanceOf(e, CertificateParsingException.class);
+      throwIfInstanceOf(e, CertificateParsingException.class);
       throw new CertificateParsingException(e);
     } catch (NoSuchElementException e) {
       throw new CertificateParsingException("No X509Certificate found.");
@@ -114,9 +115,12 @@ public final class X509Utils {
   public static X509CRL loadCrl(String asciiCrl) throws GeneralSecurityException {
     ByteArrayInputStream input = new ByteArrayInputStream(asciiCrl.getBytes(US_ASCII));
     try {
-      return Iterables.getOnlyElement(FluentIterable
-          .from(CertificateFactory.getInstance("X.509").generateCRLs(input))
-          .filter(X509CRL.class));
+      return CertificateFactory.getInstance("X.509")
+          .generateCRLs(input)
+          .stream()
+          .filter(X509CRL.class::isInstance)
+          .map(X509CRL.class::cast)
+          .collect(onlyElement());
     } catch (NoSuchElementException e) {
       throw new CRLException("No X509CRL found.");
     } catch (IllegalArgumentException e) {
@@ -144,7 +148,7 @@ public final class X509Utils {
           checkNotNull(entry.getRevocationDate(), "revocationDate"),
           checkNotNull(entry.getRevocationReason(), "revocationReason"),
           firstNonNull(entry.getCertificateIssuer(), crl.getIssuerX500Principal()),
-          ImmutableMap.<String, Extension>of());
+          ImmutableMap.of());
     }
   }
 

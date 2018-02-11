@@ -4,32 +4,32 @@ package(
 
 licenses(["notice"])  # Apache 2.0
 
-
 java_library(
     name = "frontend",
     srcs = glob(["*.java"]),
     deps = [
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//third_party/java/bouncycastle",
-        "//third_party/java/dagger",
-        "//third_party/java/jsr305_annotations",
-        "//third_party/java/jsr330_inject",
-        "//third_party/java/servlet/servlet_api",
         "//java/google/registry/braintree",
         "//java/google/registry/config",
         "//java/google/registry/dns",
         "//java/google/registry/flows",
         "//java/google/registry/keyring/api",
-        "//java/google/registry/monitoring/metrics",
+        "//java/google/registry/keyring/kms",
         "//java/google/registry/monitoring/whitebox",
         "//java/google/registry/rdap",
         "//java/google/registry/request",
         "//java/google/registry/request:modules",
+        "//java/google/registry/request/auth",
         "//java/google/registry/ui",
         "//java/google/registry/ui/server/registrar",
         "//java/google/registry/util",
         "//java/google/registry/whois",
+        "@com_google_appengine_api_1_0_sdk",
+        "@com_google_code_findbugs_jsr305",
+        "@com_google_dagger",
+        "@com_google_guava",
+        "@com_google_monitoring_client_metrics",
+        "@javax_servlet_api",
+        "@org_bouncycastle_bcpkix_jdk15on",
     ],
 )
 

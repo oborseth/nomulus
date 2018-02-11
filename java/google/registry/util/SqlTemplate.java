@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ public final class SqlTemplate {
 
   /** Returns a new immutable SQL template builder object, for query parameter substitution. */
   public static SqlTemplate create(String template) {
-    return new SqlTemplate(template, ImmutableMap.<String, String>of());
+    return new SqlTemplate(template, ImmutableMap.of());
   }
 
   /**

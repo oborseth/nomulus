@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,8 +17,7 @@ package google.registry.model.eppinput;
 import static google.registry.util.CollectionUtils.nullSafeImmutableCopy;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
 
-import com.google.common.base.Optional;
-import com.google.common.collect.FluentIterable;
+import com.google.common.base.Ascii;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import google.registry.model.ImmutableObject;
@@ -41,10 +40,6 @@ import google.registry.model.domain.fee12.FeeCreateCommandExtensionV12;
 import google.registry.model.domain.fee12.FeeRenewCommandExtensionV12;
 import google.registry.model.domain.fee12.FeeTransferCommandExtensionV12;
 import google.registry.model.domain.fee12.FeeUpdateCommandExtensionV12;
-import google.registry.model.domain.flags.FlagsCheckCommandExtension;
-import google.registry.model.domain.flags.FlagsCreateCommandExtension;
-import google.registry.model.domain.flags.FlagsTransferCommandExtension;
-import google.registry.model.domain.flags.FlagsUpdateCommandExtension;
 import google.registry.model.domain.launch.LaunchCheckExtension;
 import google.registry.model.domain.launch.LaunchCreateExtension;
 import google.registry.model.domain.launch.LaunchDeleteExtension;
@@ -54,10 +49,14 @@ import google.registry.model.domain.metadata.MetadataExtension;
 import google.registry.model.domain.rgp.RgpUpdateExtension;
 import google.registry.model.domain.secdns.SecDnsCreateExtension;
 import google.registry.model.domain.secdns.SecDnsUpdateExtension;
+import google.registry.model.domain.superuser.DomainDeleteSuperuserExtension;
+import google.registry.model.domain.superuser.DomainTransferRequestSuperuserExtension;
+import google.registry.model.domain.token.AllocationTokenExtension;
 import google.registry.model.eppinput.ResourceCommand.ResourceCheck;
 import google.registry.model.eppinput.ResourceCommand.SingleResourceCommand;
 import google.registry.model.host.HostCommand;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
 import javax.xml.bind.annotation.XmlAttribute;
@@ -68,6 +67,7 @@ import javax.xml.bind.annotation.XmlElementWrapper;
 import javax.xml.bind.annotation.XmlElements;
 import javax.xml.bind.annotation.XmlEnumValue;
 import javax.xml.bind.annotation.XmlRootElement;
+import javax.xml.bind.annotation.XmlSchema;
 import javax.xml.bind.annotation.XmlType;
 import javax.xml.bind.annotation.adapters.XmlAdapter;
 import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
@@ -85,17 +85,62 @@ public class EppInput extends ImmutableObject {
     return commandWrapper;
   }
 
-  public String getCommandName() {
-    return (commandWrapper instanceof Hello)
+  /**
+   * Returns the EPP command name, defined as the name of the {@code InnerCommand} element within
+   * the {@code <command>} element (e.g. "create" or "poll"), or "hello" for the hello command.
+   */
+  public String getCommandType() {
+    return Ascii.toLowerCase((commandWrapper instanceof Hello)
         ? Hello.class.getSimpleName()
-        : commandWrapper.getCommand().getClass().getSimpleName();
+        : commandWrapper.getCommand().getClass().getSimpleName());
   }
 
-  public ImmutableList<String> getTargetIds() {
+  /**
+   * Returns the EPP resource type ("domain", "contact", or "host") for commands that operate on
+   * EPP resources, otherwise absent.
+   */
+  public Optional<String> getResourceType() {
+    ResourceCommand resourceCommand = getResourceCommand();
+    if (resourceCommand != null) {
+       XmlSchema xmlSchemaAnnotation =
+           resourceCommand.getClass().getPackage().getAnnotation(XmlSchema.class);
+       if (xmlSchemaAnnotation != null && xmlSchemaAnnotation.xmlns().length > 0) {
+         return Optional.of(xmlSchemaAnnotation.xmlns()[0].prefix());
+       }
+    }
+    return Optional.empty();
+  }
+
+  /** Returns whether this EppInput represents a command that operates on domain resources. */
+  public boolean isDomainResourceType() {
+    return getResourceType().orElse("").equals("domain");
+  }
+
+  @Nullable
+  private ResourceCommand getResourceCommand() {
     InnerCommand innerCommand = commandWrapper.getCommand();
-    ResourceCommand resourceCommand = innerCommand instanceof ResourceCommandWrapper
+    return innerCommand instanceof ResourceCommandWrapper
         ? ((ResourceCommandWrapper) innerCommand).getResourceCommand()
         : null;
+  }
+
+  /**
+   * Returns the target ID (name for domains and hosts, contact ID for contacts) if this command
+   * always acts on a single EPP resource, or absent otherwise (e.g. for "check" or "poll").
+   */
+  public Optional<String> getSingleTargetId() {
+    ResourceCommand resourceCommand = getResourceCommand();
+    return resourceCommand instanceof SingleResourceCommand
+        ? Optional.of(((SingleResourceCommand) resourceCommand).getTargetId())
+        : Optional.empty();
+  }
+
+  /**
+   * Returns all the target IDs (name for domains and hosts, contact ID for contacts) that this
+   * command references if it acts on EPP resources, or the empty list otherwise (e.g. for "poll").
+   */
+  public ImmutableList<String> getTargetIds() {
+    ResourceCommand resourceCommand = getResourceCommand();
     if (resourceCommand instanceof SingleResourceCommand) {
       return ImmutableList.of(((SingleResourceCommand) resourceCommand).getTargetId());
     } else if (resourceCommand instanceof ResourceCheck) {
@@ -106,37 +151,15 @@ public class EppInput extends ImmutableObject {
   }
 
   /** Get the extension based on type, or null. If there are multiple, it chooses the first. */
-  @Nullable
-  public <E extends CommandExtension> E getSingleExtension(Class<E> clazz) {
-    return FluentIterable.from(getCommandWrapper().getExtensions()).filter(clazz).first().orNull();
-  }
-
-  /** Get the extension based on type, or null, chosen from a list of possible extension classes.
-   * If there are extensions matching multiple classes, the first class listed is chosen. If there
-   * are multiple extensions of the same class, the first extension of that class is chosen
-   * (assuming that an extension matching a preceding class was not already chosen). This method is
-   * used to support multiple versions of an extension. Specify all supported versions, starting
-   * with the latest. The first-occurring extension of the latest version will be chosen, or failing
-   * that the first-occurring extension of the previous version, and so on.
-   */
-  @Nullable
-  public <E extends CommandExtension>
-      E getFirstExtensionOfClasses(ImmutableList<Class<? extends E>> classes) {
-    for (Class<? extends E> clazz : classes) {
-      Optional<? extends E> extension = FluentIterable.from(
-          getCommandWrapper().getExtensions()).filter(clazz).first();
-      if (extension.isPresent()) {
-        return extension.get();
-      }
-    }
-    return null;
-  }
-
-  @SafeVarargs
-  @Nullable
-  public final <E extends CommandExtension>
-      E getFirstExtensionOfClasses(Class<? extends E>... classes) {
-    return getFirstExtensionOfClasses(ImmutableList.copyOf(classes));
+  public <E extends CommandExtension> Optional<E> getSingleExtension(Class<E> clazz) {
+    return Optional.ofNullable(
+        getCommandWrapper()
+            .getExtensions()
+            .stream()
+            .filter(clazz::isInstance)
+            .map(clazz::cast)
+            .findFirst()
+            .orElse(null));
   }
 
   /** A tag that goes inside of an EPP {@literal <command>}. */
@@ -307,6 +330,8 @@ public class EppInput extends ImmutableObject {
     @XmlElementRefs({
         // allocate create extension
         @XmlElementRef(type = AllocateCreateExtension.class),
+        // allocation token extension
+        @XmlElementRef(type = AllocationTokenExtension.class),
         // fee extension version 0.6
         @XmlElementRef(type = FeeCheckCommandExtensionV06.class),
         @XmlElementRef(type = FeeInfoCommandExtensionV06.class),
@@ -327,10 +352,6 @@ public class EppInput extends ImmutableObject {
         @XmlElementRef(type = FeeTransferCommandExtensionV12.class),
         @XmlElementRef(type = FeeUpdateCommandExtensionV12.class),
         // other extensions
-        @XmlElementRef(type = FlagsCheckCommandExtension.class),
-        @XmlElementRef(type = FlagsCreateCommandExtension.class),
-        @XmlElementRef(type = FlagsTransferCommandExtension.class),
-        @XmlElementRef(type = FlagsUpdateCommandExtension.class),
         @XmlElementRef(type = LaunchCheckExtension.class),
         @XmlElementRef(type = LaunchCreateExtension.class),
         @XmlElementRef(type = LaunchDeleteExtension.class),
@@ -339,7 +360,9 @@ public class EppInput extends ImmutableObject {
         @XmlElementRef(type = MetadataExtension.class),
         @XmlElementRef(type = RgpUpdateExtension.class),
         @XmlElementRef(type = SecDnsCreateExtension.class),
-        @XmlElementRef(type = SecDnsUpdateExtension.class) })
+        @XmlElementRef(type = SecDnsUpdateExtension.class),
+        @XmlElementRef(type = DomainTransferRequestSuperuserExtension.class),
+        @XmlElementRef(type = DomainDeleteSuperuserExtension.class) })
     @XmlElementWrapper
     List<CommandExtension> extension;
 
@@ -398,7 +421,8 @@ public class EppInput extends ImmutableObject {
    * any other version doesn't validate. As a result, if we didn't do this here it would throw a
    * {@code SyntaxErrorException} when it failed to validate.
    *
-   * @see "http://tools.ietf.org/html/rfc5730#page-41"
+   * @see <a href="http://tools.ietf.org/html/rfc5730#page-41">
+   *     RFC 5730 - EPP - Command error responses</a>
    */
   public static class VersionAdapter extends XmlAdapter<String, String>  {
     @Override

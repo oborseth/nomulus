@@ -7,32 +7,11 @@ licenses(["notice"])  # Apache 2.0
 
 load("//java/com/google/testing/builddefs:GenTestRules.bzl", "GenTestRules")
 
-
 java_library(
     name = "rde",
     srcs = glob(["*.java"]),
     resources = glob(["testdata/*"]),
     deps = [
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//java/com/google/common/io",
-        "//java/com/google/common/net",
-        "//third_party/java/appengine:appengine-api-testonly",
-        "//third_party/java/appengine_gcs_client",
-        "//third_party/java/bouncycastle",
-        "//third_party/java/bouncycastle_bcpg",
-        "//third_party/java/dagger",
-        "//third_party/java/ftpserver",
-        "//third_party/java/hamcrest",
-        "//third_party/java/joda_money",
-        "//third_party/java/joda_time",
-        "//third_party/java/jsr305_annotations",
-        "//third_party/java/jsr330_inject",
-        "//third_party/java/junit",
-        "//third_party/java/mockito",
-        "//third_party/java/objectify:objectify-v4_1",
-        "//third_party/java/servlet/servlet_api",
-        "//third_party/java/truth",
         "//java/google/registry/config",
         "//java/google/registry/gcs",
         "//java/google/registry/keyring/api",
@@ -48,13 +27,37 @@ java_library(
         "//javatests/google/registry/testing/mapreduce",
         "//javatests/google/registry/testing/sftp",
         "//javatests/google/registry/xml",
+        "//third_party/jaxb",
+        "//third_party/jsch/v0_1_53",
+        "//third_party/objectify:objectify-v4_1",
+        "@com_google_appengine_api_1_0_sdk//:testonly",
+        "@com_google_appengine_tools_appengine_gcs_client",
+        "@com_google_code_findbugs_jsr305",
+        "@com_google_dagger",
+        "@com_google_guava",
+        "@com_google_truth",
+        "@com_google_truth_extensions_truth_java8_extension",
+        "@javax_servlet_api",
+        "@joda_time",
+        "@junit",
+        "@org_apache_ftpserver_core",
+        "@org_bouncycastle_bcpg_jdk15on",
+        "@org_bouncycastle_bcpkix_jdk15on",
+        "@org_joda_money",
+        "@org_mockito_all",
     ],
 )
 
 GenTestRules(
     name = "GeneratedTestRules",
-    default_test_size = "medium",
-    shard_count = 3,
-    test_files = glob(["*Test.java"]),
+    default_test_size = "large",
+    # TODO (b/63619837): stop using hardcoded /tmp once
+    # https://github.com/bazelbuild/bazel/issues/3215 is resolved.
+    # If /tmp is not accessible, try changing it to one that is.
+    jvm_flags = ["-Djava.io.tmpdir=/tmp"],
+    test_files = glob(
+        ["*Test.java"],
+        exclude = ["RdeUploadActionTest.java"],
+    ),
     deps = [":rde"],
 )

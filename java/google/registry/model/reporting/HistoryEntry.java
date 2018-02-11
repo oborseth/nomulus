@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,9 @@
 
 package google.registry.model.reporting;
 
+import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
+
+import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.annotation.Entity;
 import com.googlecode.objectify.annotation.Id;
@@ -24,11 +27,15 @@ import com.googlecode.objectify.condition.IfNull;
 import google.registry.model.Buildable;
 import google.registry.model.EppResource;
 import google.registry.model.ImmutableObject;
+import google.registry.model.annotations.ReportedOn;
 import google.registry.model.domain.Period;
 import google.registry.model.eppcommon.Trid;
+import java.util.Set;
+import javax.annotation.Nullable;
 import org.joda.time.DateTime;
 
 /** A record of an EPP command that mutated a resource. */
+@ReportedOn
 @Entity
 public class HistoryEntry extends ImmutableObject implements Buildable {
 
@@ -48,6 +55,11 @@ public class HistoryEntry extends ImmutableObject implements Buildable {
     DOMAIN_APPLICATION_DELETE,
     DOMAIN_APPLICATION_UPDATE,
     DOMAIN_APPLICATION_STATUS_UPDATE,
+    /**
+     * Used for domain registration autorenews explicitly logged by
+     * {@link google.registry.batch.ExpandRecurringBillingEventsAction}.
+     */
+    DOMAIN_AUTORENEW,
     DOMAIN_CREATE,
     DOMAIN_DELETE,
     DOMAIN_RENEW,
@@ -62,6 +74,8 @@ public class HistoryEntry extends ImmutableObject implements Buildable {
     HOST_DELETE_FAILURE,
     HOST_PENDING_DELETE,
     HOST_UPDATE,
+    /** Resource was created by an escrow file import. */
+    RDE_IMPORT,
     /**
      * A synthetic history entry created by a tool or back-end migration script outside of the scope
      * of usual EPP flows. These are sometimes needed to serve as parents for billing events or poll
@@ -91,7 +105,7 @@ public class HistoryEntry extends ImmutableObject implements Buildable {
   /** The actual EPP xml of the command, stored as bytes to be agnostic of encoding. */
   byte[] xmlBytes;
 
-  /** The time the command occurred. */
+  /** The time the command occurred, represented by the ofy transaction time.*/
   @Index
   DateTime modificationTime;
 
@@ -99,8 +113,17 @@ public class HistoryEntry extends ImmutableObject implements Buildable {
   @Index
   String clientId;
 
-  /** Transaction id that made this change. */
-  Trid trid;
+  /**
+   * For transfers, the id of the other registrar.
+   *
+   * <p>For requests and cancels, the other registrar is the losing party (because the registrar
+   * sending the EPP transfer command is the gaining party). For approves and rejects, the other
+   * registrar is the gaining party.
+   */
+  String otherClientId;
+
+  /** Transaction id that made this change, or null if the entry was not created by a flow. */
+  @Nullable Trid trid;
 
   /** Whether this change was created by a superuser. */
   boolean bySuperuser;
@@ -110,6 +133,15 @@ public class HistoryEntry extends ImmutableObject implements Buildable {
 
   /** Whether this change was requested by a registrar. */
   Boolean requestedByRegistrar;
+
+  /**
+   * Logging field for transaction reporting.
+   *
+   * <p>This will be empty for any HistoryEntry generated before this field was added. This will
+   * also be empty if the HistoryEntry refers to an EPP mutation that does not affect domain
+   * transaction counts (such as contact or host mutations).
+   */
+  Set<DomainTransactionRecord> domainTransactionRecords;
 
   public Key<? extends EppResource> getParent() {
     return parent;
@@ -135,7 +167,12 @@ public class HistoryEntry extends ImmutableObject implements Buildable {
     return clientId;
   }
 
-  public Trid getTrid() {
+  public String getOtherClientId() {
+    return otherClientId;
+  }
+
+  /** Returns the TRID, which may be null if the entry was not created by a normal flow. */
+  @Nullable public Trid getTrid() {
     return trid;
   }
 
@@ -149,6 +186,10 @@ public class HistoryEntry extends ImmutableObject implements Buildable {
 
   public Boolean getRequestedByRegistrar() {
     return requestedByRegistrar;
+  }
+
+  public ImmutableSet<DomainTransactionRecord> getDomainTransactionRecords() {
+    return nullToEmptyImmutableCopy(domainTransactionRecords);
   }
 
   @Override
@@ -199,6 +240,11 @@ public class HistoryEntry extends ImmutableObject implements Buildable {
       return this;
     }
 
+    public Builder setOtherClientId(String otherClientId) {
+      getInstance().otherClientId = otherClientId;
+      return this;
+    }
+
     public Builder setTrid(Trid trid) {
       getInstance().trid = trid;
       return this;
@@ -216,6 +262,12 @@ public class HistoryEntry extends ImmutableObject implements Buildable {
 
     public Builder setRequestedByRegistrar(Boolean requestedByRegistrar) {
       getInstance().requestedByRegistrar = requestedByRegistrar;
+      return this;
+    }
+
+    public Builder setDomainTransactionRecords(
+        ImmutableSet<DomainTransactionRecord> domainTransactionRecords) {
+      getInstance().domainTransactionRecords = domainTransactionRecords;
       return this;
     }
   }

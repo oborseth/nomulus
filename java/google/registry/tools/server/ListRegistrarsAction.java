@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,10 +22,15 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import google.registry.model.registrar.Registrar;
 import google.registry.request.Action;
+import google.registry.request.auth.Auth;
 import javax.inject.Inject;
 
 /** An action that lists registrars, for use by the {@code nomulus list_registrars} command. */
-@Action(path = ListRegistrarsAction.PATH, method = {GET, POST})
+@Action(
+  path = ListRegistrarsAction.PATH,
+  method = {GET, POST},
+  auth = Auth.AUTH_INTERNAL_OR_ADMIN
+)
 public final class ListRegistrarsAction extends ListObjectsAction<Registrar> {
 
   public static final String PATH = "/_dr/admin/list/registrars";
@@ -45,6 +50,7 @@ public final class ListRegistrarsAction extends ListObjectsAction<Registrar> {
   @Override
   public ImmutableBiMap<String, String> getFieldAliases() {
     return ImmutableBiMap.of(
+        "billingId", "billingIdentifier",
         "clientId", "clientIdentifier",
         "premiumNames", "blockPremiumNames");
   }

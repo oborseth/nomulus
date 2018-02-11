@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-{namespace domain.registry.tools autoescape="strict"}
+{namespace domain.registry.tools}
 /**
  * Domain application info request
  */
-{template .domainapplicationinfo}
+{template .domainapplicationinfo stricthtml="false"}
 {@param domainName: string}
 {@param id: string}
 {@param phase: string}
@@ -33,7 +33,7 @@
    <extension>
     <launch:info
      xmlns:launch="urn:ietf:params:xml:ns:launch-1.0">
-      <launch:phase{if $subphase} name="{$subphase}"{/if}>{$phase}</launch:phase>
+      <launch:phase {if $subphase}name="{$subphase}"{/if}>{$phase}</launch:phase>
       <launch:applicationID>{$id}</launch:applicationID>
     </launch:info>
    </extension>

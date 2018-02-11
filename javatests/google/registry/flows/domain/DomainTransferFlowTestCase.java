@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import static google.registry.testing.DatastoreHelper.getOnlyHistoryEntryOfType;
 import static google.registry.testing.DatastoreHelper.persistActiveContact;
 import static google.registry.testing.DatastoreHelper.persistDomainWithPendingTransfer;
 import static google.registry.testing.DatastoreHelper.persistResource;
-import static google.registry.testing.GenericEppResourceSubject.assertAboutEppResources;
+import static google.registry.testing.DomainResourceSubject.assertAboutDomains;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 
 import com.google.common.base.Ascii;
@@ -101,12 +101,7 @@ public class DomainTransferFlowTestCase<F extends Flow, R extends EppResource>
         TRANSFER_REQUEST_TIME,
         TRANSFER_EXPIRATION_TIME,
         EXTENDED_REGISTRATION_EXPIRATION_TIME,
-        EXTENDED_REGISTRATION_YEARS,
         TRANSFER_REQUEST_TIME);
-  }
-
-  protected void setupDomain(String tld) throws Exception {
-    setupDomain("example", tld);
   }
 
   /** Adds a domain with no pending transfer on it. */
@@ -116,7 +111,7 @@ public class DomainTransferFlowTestCase<F extends Flow, R extends EppResource>
     domain = new DomainResource.Builder()
         .setRepoId("1-".concat(Ascii.toUpperCase(tld)))
         .setFullyQualifiedDomainName(label + "." + tld)
-        .setCurrentSponsorClientId("TheRegistrar")
+        .setPersistedCurrentSponsorClientId("TheRegistrar")
         .setCreationClientId("TheRegistrar")
         .setCreationTimeForTest(DateTime.parse("1999-04-03T22:00:00.0Z"))
         .setRegistrationExpirationTime(REGISTRATION_EXPIRATION_TIME)
@@ -161,7 +156,7 @@ public class DomainTransferFlowTestCase<F extends Flow, R extends EppResource>
         new HostResource.Builder()
             .setRepoId("2-".concat(Ascii.toUpperCase(tld)))
             .setFullyQualifiedHostName("ns1." + label + "." + tld)
-            .setCurrentSponsorClientId("TheRegistrar")
+            .setPersistedCurrentSponsorClientId("TheRegistrar")
             .setCreationClientId("TheRegistrar")
             .setCreationTimeForTest(DateTime.parse("1999-04-03T22:00:00.0Z"))
             .setSuperordinateDomain(Key.create(domain))
@@ -180,8 +175,7 @@ public class DomainTransferFlowTestCase<F extends Flow, R extends EppResource>
         domain,
         historyEntry,
         TRANSFER_REQUEST_TIME,
-        TRANSFER_EXPIRATION_TIME,
-        EXTENDED_REGISTRATION_YEARS);
+        TRANSFER_EXPIRATION_TIME);
   }
 
   /** Get the autorenew event that the losing client will have after a SERVER_APPROVED transfer. */
@@ -210,27 +204,24 @@ public class DomainTransferFlowTestCase<F extends Flow, R extends EppResource>
         .build();
   }
 
-  protected void assertTransferFailed(EppResource resource, TransferStatus status) {
-    assertAboutEppResources().that(resource)
-        .hasTransferStatus(status).and()
-        .hasPendingTransferExpirationTime(clock.nowUtc()).and()
+  protected void assertTransferFailed(
+      DomainResource domain, TransferStatus status, TransferData oldTransferData) {
+    assertAboutDomains().that(domain)
         .doesNotHaveStatusValue(StatusValue.PENDING_TRANSFER).and()
         .hasCurrentSponsorClientId("TheRegistrar");
-    TransferData transferData = resource.getTransferData();
-    assertThat(transferData.getServerApproveBillingEvent()).isNull();
-    assertThat(transferData.getServerApproveAutorenewEvent()).isNull();
-    assertThat(transferData.getServerApproveAutorenewPollMessage()).isNull();
-    assertThat(transferData.getServerApproveEntities()).isEmpty();
-  }
-
-  /** Adds a .tld domain that has a pending transfer on it from TheRegistrar to NewRegistrar. */
-  protected void setupDomainWithPendingTransfer() throws Exception {
-    setupDomainWithPendingTransfer("tld");
+    // The domain TransferData should reflect the failed transfer as we expect, with
+    // all the speculative server-approve fields nulled out.
+    assertThat(domain.getTransferData())
+        .isEqualTo(
+            oldTransferData.copyConstantFieldsToBuilder()
+                .setTransferStatus(status)
+                .setPendingTransferExpirationTime(clock.nowUtc())
+                .build());
   }
 
   /** Adds a domain that has a pending transfer on it from TheRegistrar to NewRegistrar. */
-  protected void setupDomainWithPendingTransfer(String tld) throws Exception {
-    setupDomain(tld);
+  protected void setupDomainWithPendingTransfer(String label, String tld) throws Exception {
+    setupDomain(label, tld);
     domain = persistWithPendingTransfer(domain);
   }
 

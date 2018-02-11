@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,15 +17,14 @@ package google.registry.model.ofy;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Predicates.in;
 import static com.google.common.base.Predicates.not;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Maps.filterKeys;
 import static com.google.common.collect.Sets.difference;
 import static com.google.common.collect.Sets.union;
-import static com.googlecode.objectify.ObjectifyService.ofy;
 import static google.registry.model.ofy.CommitLogBucket.loadBucket;
+import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.util.DateTimeUtils.isBeforeOrAt;
 
-import com.google.common.base.Function;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
@@ -132,10 +131,15 @@ class CommitLoggedWork<R> extends VoidWork {
     if (isBeforeOrAt(info.transactionTime, bucket.getLastWrittenTime())) {
       throw new TimestampInversionException(info.transactionTime, bucket.getLastWrittenTime());
     }
+    // The keys read by Objectify during this transaction. This won't include the keys of
+    // asynchronous save and delete operations that haven't been reaped, but that's ok because we
+    // already logged all of those keys in {@link TransactionInfo} and now just need to figure out
+    // what was loaded.
+    ImmutableSet<Key<?>> keysInSessionCache = ofy().getSessionKeys();
     Map<Key<BackupGroupRoot>, BackupGroupRoot> rootsForTouchedKeys =
         getBackupGroupRoots(touchedKeys);
     Map<Key<BackupGroupRoot>, BackupGroupRoot> rootsForUntouchedKeys =
-        getBackupGroupRoots(difference(getObjectifySessionCacheKeys(), touchedKeys));
+        getBackupGroupRoots(difference(keysInSessionCache, touchedKeys));
     // Check the update timestamps of all keys in the transaction, whether touched or merely read.
     checkBackupGroupRootTimestamps(
         info.transactionTime,
@@ -145,15 +149,12 @@ class CommitLoggedWork<R> extends VoidWork {
         ImmutableSet.copyOf(filterKeys(rootsForTouchedKeys, not(in(touchedKeys))).values());
     manifest = CommitLogManifest.create(info.bucketKey, info.transactionTime, info.getDeletes());
     final Key<CommitLogManifest> manifestKey = Key.create(manifest);
-    mutations = FluentIterable
-        .from(union(info.getSaves(), untouchedRootsWithTouchedChildren))
-        .transform(new Function<Object, ImmutableObject>() {
-            @Override
-            public CommitLogMutation apply(Object saveEntity) {
-              return CommitLogMutation.create(manifestKey, saveEntity);
-            }})
-        .toSet();
-    ofy().save()
+    mutations =
+        union(info.getSaves(), untouchedRootsWithTouchedChildren)
+            .stream()
+            .map(entity -> (ImmutableObject) CommitLogMutation.create(manifestKey, entity))
+            .collect(toImmutableSet());
+    ofy().saveWithoutBackup()
       .entities(new ImmutableSet.Builder<>()
           .add(manifest)
           .add(bucket.asBuilder().setLastWrittenTime(info.transactionTime).build())
@@ -161,17 +162,6 @@ class CommitLoggedWork<R> extends VoidWork {
           .addAll(untouchedRootsWithTouchedChildren)
           .build())
       .now();
-  }
-
-  /**
-   * Returns keys read by Objectify during this transaction.
-   *
-   * <p>This won't include the keys of asynchronous save and delete operations that haven't been
-   * reaped. But that's ok because we already logged all of those keys in {@link TransactionInfo}
-   * and only need this method to figure out what was loaded.
-   */
-  private ImmutableSet<Key<?>> getObjectifySessionCacheKeys() {
-    return ((SessionKeyExposingObjectify) ofy()).getSessionKeys();
   }
 
   /** Check that the timestamp of each BackupGroupRoot is in the past. */

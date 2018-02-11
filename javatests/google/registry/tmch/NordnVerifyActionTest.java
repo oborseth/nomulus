@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,8 +16,11 @@ package google.registry.tmch;
 
 import static com.google.common.net.HttpHeaders.AUTHORIZATION;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.UrlFetchUtils.getHeaderFirst;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static javax.servlet.http.HttpServletResponse.SC_NO_CONTENT;
@@ -30,13 +33,12 @@ import static org.mockito.Mockito.when;
 import com.google.appengine.api.urlfetch.HTTPRequest;
 import com.google.appengine.api.urlfetch.HTTPResponse;
 import com.google.appengine.api.urlfetch.URLFetchService;
-import com.google.common.base.Optional;
 import google.registry.model.registry.Registry;
 import google.registry.request.HttpException.ConflictException;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeResponse;
 import java.net.URL;
+import java.util.Optional;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -85,10 +87,6 @@ public class NordnVerifyActionTest {
       .withDatastore()
       .withTaskQueue()
       .build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   @Mock
   private URLFetchService fetchService;
 
@@ -138,9 +136,9 @@ public class NordnVerifyActionTest {
 
   @Test
   public void testSuccess_noLordnPassword_doesntSetAuthorizationHeader() throws Exception {
-    lordnRequestInitializer.marksdbLordnPassword = Optional.absent();
+    lordnRequestInitializer.marksdbLordnPassword = Optional.empty();
     action.run();
-    assertThat(getHeaderFirst(getCapturedHttpRequest(), AUTHORIZATION)).isAbsent();
+    assertThat(getHeaderFirst(getCapturedHttpRequest(), AUTHORIZATION)).isEmpty();
   }
 
   @Test
@@ -167,14 +165,13 @@ public class NordnVerifyActionTest {
   @Test
   public void failureVerifyUnauthorized() throws Exception {
     when(httpResponse.getResponseCode()).thenReturn(SC_UNAUTHORIZED);
-    thrown.expect(Exception.class);
-    action.run();
+    assertThrows(Exception.class, action::run);
   }
 
   @Test
   public void failureVerifyNotReady() throws Exception {
     when(httpResponse.getResponseCode()).thenReturn(SC_NO_CONTENT);
-    thrown.expect(ConflictException.class, "Not ready");
-    action.run();
+    ConflictException thrown = expectThrows(ConflictException.class, action::run);
+    assertThat(thrown).hasMessageThat().contains("Not ready");
   }
 }

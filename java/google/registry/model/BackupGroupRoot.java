@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ import javax.xml.bind.annotation.XmlTransient;
  */
 public abstract class BackupGroupRoot extends ImmutableObject {
   /**
-   * An automatically managed timestamp of when this object was last written to datastore.
+   * An automatically managed timestamp of when this object was last written to Datastore.
    *
    * <p>Note that this is distinct from the EPP-specified {@link EppResource#lastEppUpdateTime}, in
    * that this is updated on every save, rather than only in response to an {@code <update>} command

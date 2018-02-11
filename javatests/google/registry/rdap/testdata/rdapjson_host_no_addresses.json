@@ -1,15 +1,15 @@
 {
   "objectClassName" : "nameserver",
-  "handle" : "E-ROID",
+  "handle" : "10-ROID",
   "ldhName" : "ns4.cat.xn--q9jyb4c",
   "unicodeName" : "ns4.cat.みんな",
-  "status" : ["active"],
+  "status" : ["active", "associated"],
   "links" :
   [
     {
-      "value" : "http://myserver.google.com/nameserver/ns4.cat.xn--q9jyb4c",
+      "value" : "http://myserver.example.com/nameserver/ns4.cat.xn--q9jyb4c",
       "rel" : "self",
-      "href" : "http://myserver.google.com/nameserver/ns4.cat.xn--q9jyb4c",
+      "href" : "http://myserver.example.com/nameserver/ns4.cat.xn--q9jyb4c",
       "type" : "application/rdap+json"
     }
   ],

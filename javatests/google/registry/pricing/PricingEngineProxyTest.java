@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,10 +17,11 @@ package google.registry.pricing;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.pricing.PricingEngineProxy.getDomainCreateCost;
 import static google.registry.pricing.PricingEngineProxy.getDomainRenewCost;
-import static google.registry.pricing.PricingEngineProxy.getPricesForDomainName;
+import static google.registry.pricing.PricingEngineProxy.isDomainPremium;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistPremiumList;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static org.joda.money.CurrencyUnit.USD;
 
@@ -28,7 +29,6 @@ import com.google.common.collect.ImmutableSortedMap;
 import google.registry.model.registry.Registry;
 import google.registry.model.registry.label.PremiumList;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.util.Clock;
 import org.joda.money.Money;
@@ -42,10 +42,6 @@ import org.junit.runners.JUnit4;
 /** Tests for {@link PricingEngineProxy}. */
 @RunWith(JUnit4.class)
 public class PricingEngineProxyTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder()
       .withDatastore()
@@ -91,9 +87,9 @@ public class PricingEngineProxyTest {
   @Test
   public void testIsPremiumDomain() throws Exception {
     createTld("example");
-    assertThat(getPricesForDomainName("poor.example", clock.nowUtc()).isPremium()).isFalse();
-    assertThat(getPricesForDomainName("rich.example", clock.nowUtc()).isPremium()).isTrue();
-    assertThat(getPricesForDomainName("richer.example", clock.nowUtc()).isPremium()).isTrue();
+    assertThat(isDomainPremium("poor.example", clock.nowUtc())).isFalse();
+    assertThat(isDomainPremium("rich.example", clock.nowUtc())).isTrue();
+    assertThat(isDomainPremium("richer.example", clock.nowUtc())).isTrue();
   }
 
   @Test
@@ -148,8 +144,12 @@ public class PricingEngineProxyTest {
             .asBuilder()
             .setPremiumPricingEngine("fake")
             .build());
-    thrown.expect(
-        IllegalStateException.class, "Could not load pricing engine fake for TLD example");
-    getDomainCreateCost("bad.example", clock.nowUtc(), 1);
+    IllegalStateException thrown =
+        expectThrows(
+            IllegalStateException.class,
+            () -> getDomainCreateCost("bad.example", clock.nowUtc(), 1));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Could not load pricing engine fake for TLD example");
   }
 }

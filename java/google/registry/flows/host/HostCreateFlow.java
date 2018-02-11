@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,33 +14,35 @@
 
 package google.registry.flows.host;
 
+import static google.registry.flows.FlowUtils.validateClientIsLoggedIn;
 import static google.registry.flows.ResourceFlowUtils.verifyResourceDoesNotExist;
 import static google.registry.flows.host.HostFlowUtils.lookupSuperordinateDomain;
 import static google.registry.flows.host.HostFlowUtils.validateHostName;
-import static google.registry.flows.host.HostFlowUtils.verifyDomainIsSameRegistrar;
-import static google.registry.model.EppResourceUtils.createContactHostRoid;
-import static google.registry.model.eppoutput.Result.Code.SUCCESS;
+import static google.registry.flows.host.HostFlowUtils.verifySuperordinateDomainNotInPendingDelete;
+import static google.registry.flows.host.HostFlowUtils.verifySuperordinateDomainOwnership;
+import static google.registry.model.EppResourceUtils.createRepoId;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.util.CollectionUtils.isNullOrEmpty;
 import static google.registry.util.CollectionUtils.union;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.dns.DnsQueue;
 import google.registry.flows.EppException;
 import google.registry.flows.EppException.ParameterValueRangeErrorException;
 import google.registry.flows.EppException.RequiredParameterMissingException;
+import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.ClientId;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.LoggedInFlow;
 import google.registry.flows.TransactionalFlow;
+import google.registry.flows.annotations.ReportingSpec;
 import google.registry.model.ImmutableObject;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.metadata.MetadataExtension;
 import google.registry.model.eppinput.ResourceCommand;
 import google.registry.model.eppoutput.CreateData.HostCreateData;
-import google.registry.model.eppoutput.EppOutput;
+import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.host.HostCommand.Create;
 import google.registry.model.host.HostResource;
 import google.registry.model.host.HostResource.Builder;
@@ -48,7 +50,10 @@ import google.registry.model.index.EppResourceIndex;
 import google.registry.model.index.ForeignKeyIndex;
 import google.registry.model.ofy.ObjectifyService;
 import google.registry.model.reporting.HistoryEntry;
+import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
+import java.util.Optional;
 import javax.inject.Inject;
+import org.joda.time.DateTime;
 
 /**
  * An EPP flow that creates a new host.
@@ -64,35 +69,42 @@ import javax.inject.Inject;
  * @error {@link HostFlowUtils.HostNameTooLongException}
  * @error {@link HostFlowUtils.HostNameTooShallowException}
  * @error {@link HostFlowUtils.InvalidHostNameException}
+ * @error {@link HostFlowUtils.HostNameNotLowerCaseException}
+ * @error {@link HostFlowUtils.HostNameNotNormalizedException}
+ * @error {@link HostFlowUtils.HostNameNotPunyCodedException}
  * @error {@link HostFlowUtils.SuperordinateDomainDoesNotExistException}
+ * @error {@link HostFlowUtils.SuperordinateDomainInPendingDeleteException}
  * @error {@link SubordinateHostMustHaveIpException}
  * @error {@link UnexpectedExternalHostIpException}
  */
-public final class HostCreateFlow extends LoggedInFlow implements TransactionalFlow {
+@ReportingSpec(ActivityReportField.HOST_CREATE)
+public final class HostCreateFlow implements TransactionalFlow {
 
   @Inject ResourceCommand resourceCommand;
+  @Inject ExtensionManager extensionManager;
   @Inject @ClientId String clientId;
   @Inject @TargetId String targetId;
   @Inject HistoryEntry.Builder historyBuilder;
   @Inject DnsQueue dnsQueue;
+  @Inject EppResponse.Builder responseBuilder;
+  @Inject @Config("contactAndHostRoidSuffix") String roidSuffix;
   @Inject HostCreateFlow() {}
 
   @Override
-  @SuppressWarnings("unchecked")
-  protected final void initLoggedInFlow() throws EppException {
-    registerExtensions(MetadataExtension.class);
-  }
-
-  @Override
-  protected final EppOutput run() throws EppException {
+  public final EppResponse run() throws EppException {
+    extensionManager.register(MetadataExtension.class);
+    extensionManager.validate();
+    validateClientIsLoggedIn(clientId);
     Create command = (Create) resourceCommand;
+    DateTime now = ofy().getTransactionTime();
     verifyResourceDoesNotExist(HostResource.class, targetId, now);
     // The superordinate domain of the host object if creating an in-bailiwick host, or null if
     // creating an external host. This is looked up before we actually create the Host object so
     // we can detect error conditions earlier.
-    Optional<DomainResource> superordinateDomain = Optional.fromNullable(
-        lookupSuperordinateDomain(validateHostName(targetId), now));
-    verifyDomainIsSameRegistrar(superordinateDomain.orNull(), clientId);
+    Optional<DomainResource> superordinateDomain =
+        lookupSuperordinateDomain(validateHostName(targetId), now);
+    verifySuperordinateDomainNotInPendingDelete(superordinateDomain.orElse(null));
+    verifySuperordinateDomainOwnership(clientId, superordinateDomain.orElse(null));
     boolean willBeSubordinate = superordinateDomain.isPresent();
     boolean hasIpAddresses = !isNullOrEmpty(command.getInetAddresses());
     if (willBeSubordinate != hasIpAddresses) {
@@ -101,15 +113,15 @@ public final class HostCreateFlow extends LoggedInFlow implements TransactionalF
           ? new SubordinateHostMustHaveIpException()
           : new UnexpectedExternalHostIpException();
     }
-    Builder builder = new Builder();
-    command.applyTo(builder);
-    HostResource newHost = builder
-        .setCreationClientId(clientId)
-        .setCurrentSponsorClientId(clientId)
-        .setRepoId(createContactHostRoid(ObjectifyService.allocateId()))
-        .setSuperordinateDomain(
-            superordinateDomain.isPresent() ? Key.create(superordinateDomain.get()) : null)
-        .build();
+    HostResource newHost =
+        new Builder()
+            .setCreationClientId(clientId)
+            .setPersistedCurrentSponsorClientId(clientId)
+            .setFullyQualifiedHostName(targetId)
+            .setInetAddresses(command.getInetAddresses())
+            .setRepoId(createRepoId(ObjectifyService.allocateId(), roidSuffix))
+            .setSuperordinateDomain(superordinateDomain.map(Key::create).orElse(null))
+            .build();
     historyBuilder
         .setType(HistoryEntry.Type.HOST_CREATE)
         .setModificationTime(now)
@@ -130,7 +142,7 @@ public final class HostCreateFlow extends LoggedInFlow implements TransactionalF
       dnsQueue.addHostRefreshTask(targetId);
     }
     ofy().save().entities(entitiesToSave);
-    return createOutput(SUCCESS, HostCreateData.create(targetId, now));
+    return responseBuilder.setResData(HostCreateData.create(targetId, now)).build();
   }
 
   /** Subordinate hosts must have an ip address. */

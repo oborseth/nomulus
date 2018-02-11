@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ public enum TransferStatus {
 
   private final String message;
 
-  private TransferStatus(String message) {
+  TransferStatus(String message) {
     this.message = message;
   }
 
@@ -53,5 +53,11 @@ public enum TransferStatus {
 
   public boolean isApproved() {
     return this.equals(CLIENT_APPROVED) || this.equals(SERVER_APPROVED);
+  }
+
+  public boolean isDenied() {
+    return this.equals(CLIENT_CANCELLED)
+        || this.equals(CLIENT_REJECTED)
+        || this.equals(SERVER_CANCELLED);
   }
 }

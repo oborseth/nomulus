@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,15 @@
 
 package google.registry.flows.contact;
 
+import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.ContactResourceSubject.assertAboutContacts;
 import static google.registry.testing.DatastoreHelper.assertNoBillingEvents;
 import static google.registry.testing.DatastoreHelper.persistActiveContact;
 import static google.registry.testing.DatastoreHelper.persistDeletedContact;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
+import google.registry.flows.EppException;
 import google.registry.flows.ResourceFlowTestCase;
 import google.registry.flows.contact.ContactFlowUtils.BadInternationalizedPostalInfoException;
 import google.registry.flows.contact.ContactFlowUtils.DeclineContactDisclosureFieldDisallowedPolicyException;
@@ -38,7 +42,7 @@ public class ContactCreateFlowTest
 
   private void doSuccessfulTest() throws Exception {
     assertTransactionalFlow(true);
-    runFlowAssertResponse(readFile("contact_create_response.xml"));
+    runFlowAssertResponse(loadFile("contact_create_response.xml"));
     // Check that the contact was created and persisted with a history entry.
     assertAboutContacts().that(reloadResourceByForeignKey())
         .hasOnlyOneHistoryEntryWhich().hasNoXml();
@@ -48,7 +52,7 @@ public class ContactCreateFlowTest
 
   @Test
   public void testDryRun() throws Exception {
-    dryRunFlowAssertResponse(readFile("contact_create_response.xml"));
+    dryRunFlowAssertResponse(loadFile("contact_create_response.xml"));
   }
 
   @Test
@@ -66,10 +70,13 @@ public class ContactCreateFlowTest
   @Test
   public void testFailure_alreadyExists() throws Exception {
     persistActiveContact(getUniqueIdFromCommand());
-    thrown.expect(
-        ResourceAlreadyExistsException.class,
-        String.format("Object with given ID (%s) already exists", getUniqueIdFromCommand()));
-    runFlow();
+    ResourceAlreadyExistsException thrown =
+        expectThrows(ResourceAlreadyExistsException.class, this::runFlow);
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains(
+            String.format("Object with given ID (%s) already exists", getUniqueIdFromCommand()));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -81,14 +88,22 @@ public class ContactCreateFlowTest
   @Test
   public void testFailure_nonAsciiInIntAddress() throws Exception {
     setEppInput("contact_create_hebrew_int.xml");
-    thrown.expect(BadInternationalizedPostalInfoException.class);
-    runFlow();
+    EppException thrown =
+        expectThrows(BadInternationalizedPostalInfoException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_declineDisclosure() throws Exception {
     setEppInput("contact_create_decline_disclosure.xml");
-    thrown.expect(DeclineContactDisclosureFieldDisallowedPolicyException.class);
+    EppException thrown =
+        expectThrows(DeclineContactDisclosureFieldDisallowedPolicyException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testIcannActivityReportField_getsLogged() throws Exception {
     runFlow();
+    assertIcannReportingActivityFieldLogged("srs-cont-create");
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,50 +14,22 @@
 
 package google.registry.tools;
 
+import static com.google.appengine.api.taskqueue.QueueFactory.getQueue;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
-import static google.registry.testing.DatastoreHelper.createTlds;
-import static google.registry.testing.DatastoreHelper.generateNewContactHostRoid;
-import static google.registry.testing.DatastoreHelper.persistResourceWithCommitLog;
-import static google.registry.util.ResourceUtils.readResourceUtf8;
-import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Arrays.asList;
+import static google.registry.testing.JUnitBackports.expectThrows;
+import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
+import static org.mockito.Mockito.when;
 
 import com.beust.jcommander.ParameterException;
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
-import com.google.common.net.InetAddresses;
-import google.registry.config.TestRegistryConfig;
-import google.registry.model.eppcommon.StatusValue;
-import google.registry.model.host.HostResource;
-import google.registry.model.ofy.Ofy;
-import google.registry.rde.RdeCounter;
-import google.registry.rde.RdeResourceType;
-import google.registry.rde.RdeUtil;
-import google.registry.testing.BouncyCastleProviderRule;
-import google.registry.testing.FakeClock;
+import com.google.appengine.api.modules.ModulesService;
 import google.registry.testing.InjectRule;
-import google.registry.util.Idn;
-import google.registry.xjc.XjcXmlTransformer;
-import google.registry.xjc.rde.XjcRdeContentType;
-import google.registry.xjc.rde.XjcRdeDeposit;
-import google.registry.xjc.rde.XjcRdeDepositTypeType;
-import google.registry.xjc.rdeheader.XjcRdeHeader;
-import google.registry.xjc.rdeheader.XjcRdeHeaderCount;
-import google.registry.xjc.rdehost.XjcRdeHost;
-import google.registry.xjc.rderegistrar.XjcRdeRegistrar;
-import google.registry.xml.XmlException;
-import google.registry.xml.XmlTestUtils;
-import java.io.ByteArrayInputStream;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.List;
-import javax.xml.bind.JAXBElement;
-import org.joda.time.DateTime;
+import google.registry.testing.TaskQueueHelper.TaskMatcher;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.mockito.Matchers;
+import org.mockito.Mock;
 
 /** Unit tests for {@link GenerateEscrowDepositCommand}. */
 public class GenerateEscrowDepositCommandTest
@@ -66,171 +38,219 @@ public class GenerateEscrowDepositCommandTest
   @Rule
   public final InjectRule inject = new InjectRule();
 
-  @Rule
-  public final BouncyCastleProviderRule bouncy = new BouncyCastleProviderRule();
-
-  private final FakeClock clock = new FakeClock(DateTime.parse("2010-10-17T04:20:00Z"));
-  private final List<? super XjcRdeContentType> alreadyExtracted = new ArrayList<>();
+  @Mock ModulesService modulesService;
 
   @Before
   public void before() throws Exception {
-    inject.setStaticField(Ofy.class, "clock", clock);
-    command.encryptor = EncryptEscrowDepositCommandTest.createEncryptor();
-    command.counter = new RdeCounter();
-    command.eppResourceIndexBucketCount = new TestRegistryConfig().getEppResourceIndexBucketCount();
+    createTld("tld");
+    createTld("anothertld");
+    command = new GenerateEscrowDepositCommand();
+    command.modulesService = modulesService;
+    command.queue = getQueue("rde-report");
+    when(modulesService.getVersionHostname(Matchers.anyString(), Matchers.anyString()))
+        .thenReturn("1.backend.test.localhost");
   }
 
   @Test
-  public void testRun_randomDomain_generatesXmlAndEncryptsItToo() throws Exception {
-    createTld("xn--q9jyb4c");
-    runCommand(
-        "--outdir=" + tmpDir.getRoot(),
-        "--tld=xn--q9jyb4c",
-        "--watermark=" + clock.nowUtc().withTimeAtStartOfDay());
-    assertThat(tmpDir.getRoot().list()).asList().containsExactly(
-        "xn--q9jyb4c_2010-10-17_full_S1_R0.xml",
-        "xn--q9jyb4c_2010-10-17_full_S1_R0-report.xml",
-        "xn--q9jyb4c_2010-10-17_full_S1_R0.ryde",
-        "xn--q9jyb4c_2010-10-17_full_S1_R0.sig",
-        "xn--q9jyb4c.pub");
+  public void testCommand_missingTld() throws Exception {
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommand("--watermark=2017-01-01T00:00:00Z", "--mode=thin", "-r 42", "-o test"));
+    assertThat(thrown).hasMessageThat().contains("The following option is required: -t, --tld");
   }
 
   @Test
-  public void testRun_missingTldName_fails() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand(
-        "--outdir=" + tmpDir.getRoot(),
-        "--watermark=" + clock.nowUtc());
+  public void testCommand_emptyTld() throws Exception {
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommand(
+                    "--tld=",
+                    "--watermark=2017-01-01T00:00:00Z",
+                    "--mode=thin",
+                    "-r 42",
+                    "-o test"));
+    assertThat(thrown).hasMessageThat().contains("Null or empty TLD specified");
   }
 
   @Test
-  public void testRun_nonexistentTld_fails() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand(
-        "--outdir=" + tmpDir.getRoot(),
-        "--tld=xn--q9jyb4c",
-        "--watermark=" + clock.nowUtc());
+  public void testCommand_invalidTld() throws Exception {
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommand(
+                    "--tld=invalid",
+                    "--watermark=2017-01-01T00:00:00Z",
+                    "--mode=thin",
+                    "-r 42",
+                    "-o test"));
+    assertThat(thrown).hasMessageThat().contains("TLDs do not exist: invalid");
   }
 
   @Test
-  public void testRun_oneHostNotDeletedOrFuture_producesValidDepositXml() throws Exception {
-    createTlds("lol", "ussr", "xn--q9jyb4c");
-    clock.setTo(DateTime.parse("1980-01-01TZ"));
-    persistResourceWithCommitLog(
-        newHostResource("communism.ussr", "dead:beef::cafe").asBuilder()
-            .setDeletionTime(DateTime.parse("1991-12-25TZ"))  // nope you're deleted
-            .build());
-    clock.setTo(DateTime.parse("1999-12-31TZ"));
-    saveHostResource("ns1.cat.lol", "feed::a:bee");  // different tld doesn't matter
-    clock.setTo(DateTime.parse("2020-12-31TZ"));
-    saveHostResource("ns2.cat.lol", "a:fed::acab"); // nope you're from the future
-    clock.setTo(DateTime.parse("2010-10-17TZ"));
-    runCommand(
-        "--outdir=" + tmpDir.getRoot(),
-        "--tld=xn--q9jyb4c",
-        "--watermark=" + clock.nowUtc());
-    XmlTestUtils.assertXmlEquals(
-        readResourceUtf8(getClass(), "testdata/xn--q9jyb4c_2010-10-17_full_S1_R0.xml"),
-        new String(
-            Files.readAllBytes(
-                Paths.get(tmpDir.getRoot().toString(), "xn--q9jyb4c_2010-10-17_full_S1_R0.xml")),
-            UTF_8),
-        "deposit.contents.registrar.crDate",
-        "deposit.contents.registrar.upDate");
+  public void testCommand_missingWatermark() throws Exception {
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () -> runCommand("--tld=tld", "--mode=full", "-r 42", "-o test"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("The following option is required: -w, --watermark");
   }
 
   @Test
-  public void testRun_generatedXml_isSchemaValidAndHasStuffInIt() throws Exception {
-    clock.setTo(DateTime.parse("1984-12-17TZ"));
-    createTld("xn--q9jyb4c");
-    saveHostResource("ns1.cat.lol", "feed::a:bee");
-    clock.setTo(DateTime.parse("1984-12-18TZ"));
-    runCommand(
-        "--outdir=" + tmpDir.getRoot(),
-        "--tld=xn--q9jyb4c",
-        "--watermark=" + clock.nowUtc());
-    XjcRdeDeposit deposit = (XjcRdeDeposit)
-        unmarshal(Files.readAllBytes(
-            Paths.get(tmpDir.getRoot().toString(), "xn--q9jyb4c_1984-12-18_full_S1_R0.xml")));
-    assertThat(deposit.getType()).isEqualTo(XjcRdeDepositTypeType.FULL);
-    assertThat(deposit.getId()).isEqualTo(RdeUtil.timestampToId(DateTime.parse("1984-12-18TZ")));
-    assertThat(deposit.getWatermark()).isEqualTo(DateTime.parse("1984-12-18TZ"));
-    XjcRdeRegistrar registrar1 = extractAndRemoveContentWithType(XjcRdeRegistrar.class, deposit);
-    XjcRdeRegistrar registrar2 = extractAndRemoveContentWithType(XjcRdeRegistrar.class, deposit);
-    XjcRdeHost host = extractAndRemoveContentWithType(XjcRdeHost.class, deposit);
-    XjcRdeHeader header = extractAndRemoveContentWithType(XjcRdeHeader.class, deposit);
-    assertThat(host.getName()).isEqualTo("ns1.cat.lol");
-    assertThat(asList(registrar1.getName(), registrar2.getName()))
-        .containsExactly("New Registrar", "The Registrar");
-    assertThat(mapifyCounts(header)).containsEntry(RdeResourceType.HOST.getUri(), 1L);
-    assertThat(mapifyCounts(header)).containsEntry(RdeResourceType.REGISTRAR.getUri(), 2L);
+  public void testCommand_emptyWatermark() throws Exception {
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommand("--tld=tld", "--watermark=", "--mode=full", "-r 42", "-o test"));
+    assertThat(thrown).hasMessageThat().contains("Invalid format: \"\"");
   }
 
   @Test
-  public void testRun_thinBrdaDeposit_hostsGetExcluded() throws Exception {
-    clock.setTo(DateTime.parse("1984-12-17TZ"));
-    createTld("xn--q9jyb4c");
-    saveHostResource("ns1.cat.lol", "feed::a:bee");
-    clock.setTo(DateTime.parse("1984-12-18TZ"));
+  public void testCommand_missingOutdir() throws Exception {
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommand(
+                    "--tld=tld", "--watermark=2017-01-01T00:00:00Z", "--mode=thin", "-r 42"));
+    assertThat(thrown).hasMessageThat().contains("The following option is required: -o, --outdir");
+  }
+
+  @Test
+  public void testCommand_emptyOutdir() throws Exception {
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommand(
+                    "--tld=tld",
+                    "--watermark=2017-01-01T00:00:00Z",
+                    "--mode=thin",
+                    "--outdir=",
+                    "-r 42"));
+    assertThat(thrown).hasMessageThat().contains("Output subdirectory must not be empty");
+  }
+
+  @Test
+  public void testCommand_invalidWatermark() throws Exception {
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommand(
+                    "--tld=tld",
+                    "--watermark=2017-01-01T10:00:00Z,2017-01-02T00:00:00Z",
+                    "--mode=thin",
+                    "-r 42",
+                    "-o test"));
+    assertThat(thrown).hasMessageThat().contains("Each watermark date must be the start of a day");
+  }
+
+  @Test
+  public void testCommand_invalidMode() throws Exception {
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommand(
+                    "--tld=tld",
+                    "--watermark=2017-01-01T00:00:00Z",
+                    "--mode=thing",
+                    "-r 42",
+                    "-o test"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Invalid value for -m parameter. Allowed values:[FULL, THIN]");
+  }
+
+  @Test
+  public void testCommand_invalidRevision() throws Exception {
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommand(
+                    "--tld=tld",
+                    "--watermark=2017-01-01T00:00:00Z",
+                    "--mode=thin",
+                    "-r -1",
+                    "-o test"));
+    assertThat(thrown).hasMessageThat().contains("Revision must be greater than or equal to zero");
+  }
+
+  @Test
+  public void testCommand_success() throws Exception {
+    runCommand("--tld=tld", "--watermark=2017-01-01T00:00:00Z", "--mode=thin", "-r 42", "-o test");
+
+    assertTasksEnqueued("rde-report",
+        new TaskMatcher()
+            .url("/_dr/task/rdeStaging")
+            .header("Host", "1.backend.test.localhost")
+            .param("mode", "THIN")
+            .param("watermark", "2017-01-01T00:00:00.000Z")
+            .param("tld", "tld")
+            .param("directory", "test")
+            .param("manual", "true")
+            .param("revision", "42"));
+  }
+
+  @Test
+  public void testCommand_successWithDefaultRevision() throws Exception {
+    runCommand("--tld=tld", "--watermark=2017-01-01T00:00:00Z", "--mode=thin", "-o test");
+
+    assertTasksEnqueued("rde-report",
+        new TaskMatcher()
+            .url("/_dr/task/rdeStaging")
+            .header("Host", "1.backend.test.localhost")
+            .param("mode", "THIN")
+            .param("watermark", "2017-01-01T00:00:00.000Z")
+            .param("tld", "tld")
+            .param("directory", "test")
+            .param("manual", "true"));
+  }
+
+  @Test
+  public void testCommand_successWithDefaultMode() throws Exception {
+    runCommand("--tld=tld", "--watermark=2017-01-01T00:00:00Z", "-r=42", "-o test");
+
+    assertTasksEnqueued("rde-report",
+        new TaskMatcher()
+            .url("/_dr/task/rdeStaging")
+            .header("Host", "1.backend.test.localhost")
+            .param("mode", "FULL")
+            .param("watermark", "2017-01-01T00:00:00.000Z")
+            .param("tld", "tld")
+            .param("directory", "test")
+            .param("manual", "true")
+            .param("revision", "42"));
+  }
+
+  @Test
+  public void testCommand_successWithMultipleArgumentValues() throws Exception {
     runCommand(
-        "--outdir=" + tmpDir.getRoot(),
-        "--tld=xn--q9jyb4c",
-        "--watermark=" + clock.nowUtc(),
-        "--mode=THIN");
-    XjcRdeDeposit deposit = (XjcRdeDeposit)
-        unmarshal(Files.readAllBytes(
-            Paths.get(tmpDir.getRoot().toString(), "xn--q9jyb4c_1984-12-18_thin_S1_R0.xml")));
-    assertThat(deposit.getType()).isEqualTo(XjcRdeDepositTypeType.FULL);
-    assertThat(deposit.getId()).isEqualTo(RdeUtil.timestampToId(DateTime.parse("1984-12-18TZ")));
-    assertThat(deposit.getWatermark()).isEqualTo(DateTime.parse("1984-12-18TZ"));
-    XjcRdeHeader header = extractAndRemoveContentWithType(XjcRdeHeader.class, deposit);
-    assertThat(mapifyCounts(header)).doesNotContainKey(RdeResourceType.HOST.getUri());
-    assertThat(mapifyCounts(header)).containsEntry(RdeResourceType.REGISTRAR.getUri(), 2L);
-  }
+        "--tld=tld,anothertld",
+        "--watermark=2017-01-01T00:00:00Z,2017-01-02T00:00:00Z",
+        "--mode=thin",
+        "-r 42",
+        "-o test");
 
-  private HostResource saveHostResource(String fqdn, String ip) {
-    clock.advanceOneMilli();
-    return persistResourceWithCommitLog(newHostResource(fqdn, ip));
-  }
-
-  private HostResource newHostResource(String fqdn, String ip) {
-    return new HostResource.Builder()
-        .setRepoId(generateNewContactHostRoid())
-        .setCreationClientId("LawyerCat")
-        .setCreationTimeForTest(clock.nowUtc())
-        .setCurrentSponsorClientId("BusinessCat")
-        .setFullyQualifiedHostName(Idn.toASCII(fqdn))
-        .setInetAddresses(ImmutableSet.of(InetAddresses.forString(ip)))
-        .setLastTransferTime(DateTime.parse("1910-01-01T00:00:00Z"))
-        .setLastEppUpdateClientId("CeilingCat")
-        .setLastEppUpdateTime(clock.nowUtc())
-        .setStatusValues(ImmutableSet.of(
-            StatusValue.OK,
-            StatusValue.PENDING_UPDATE))
-        .build();
-  }
-
-  public static Object unmarshal(byte[] xml) throws XmlException {
-    return XjcXmlTransformer.unmarshal(Object.class, new ByteArrayInputStream(xml));
-  }
-
-  private static ImmutableMap<String, Long> mapifyCounts(XjcRdeHeader header) {
-    ImmutableMap.Builder<String, Long> builder = new ImmutableMap.Builder<>();
-    for (XjcRdeHeaderCount count : header.getCounts()) {
-      builder.put(count.getUri(), count.getValue());
-    }
-    return builder.build();
-  }
-
-  private <T extends XjcRdeContentType>
-      T extractAndRemoveContentWithType(Class<T> type, XjcRdeDeposit deposit) {
-    for (JAXBElement<? extends XjcRdeContentType> content : deposit.getContents().getContents()) {
-      XjcRdeContentType piece = content.getValue();
-      if (type.isInstance(piece) && !alreadyExtracted.contains(piece)) {
-        alreadyExtracted.add(piece);
-        return type.cast(piece);
-      }
-    }
-    throw new AssertionError("Expected deposit to contain another " + type.getSimpleName());
+    assertTasksEnqueued("rde-report",
+        new TaskMatcher()
+            .url("/_dr/task/rdeStaging")
+            .header("Host", "1.backend.test.localhost")
+            .param("mode", "THIN")
+            .param("watermark", "2017-01-01T00:00:00.000Z")
+            .param("watermark", "2017-01-02T00:00:00.000Z")
+            .param("tld", "tld")
+            .param("tld", "anothertld")
+            .param("directory", "test")
+            .param("manual", "true")
+            .param("revision", "42"));
   }
 }

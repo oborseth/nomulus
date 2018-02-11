@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package google.registry.tools.server;
 
 import static com.google.common.base.Predicates.instanceOf;
 import static com.google.common.base.Predicates.not;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.filter;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.ofy.ObjectifyService.ofy;
@@ -27,10 +28,9 @@ import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static java.util.Arrays.asList;
 
 import com.google.appengine.api.datastore.Entity;
-import com.google.common.base.Predicate;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Streams;
 import google.registry.model.ImmutableObject;
 import google.registry.model.ofy.CommitLogBucket;
 import google.registry.model.ofy.CommitLogCheckpoint;
@@ -39,7 +39,7 @@ import google.registry.model.ofy.CommitLogManifest;
 import google.registry.model.ofy.CommitLogMutation;
 import google.registry.testing.FakeResponse;
 import google.registry.testing.mapreduce.MapreduceTestCase;
-import java.util.List;
+import org.joda.time.DateTime;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -48,12 +48,13 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class KillAllCommitLogsActionTest extends MapreduceTestCase<KillAllCommitLogsAction> {
 
-  static final List<Class<? extends ImmutableObject>> AFFECTED_TYPES = ImmutableList.of(
-      CommitLogBucket.class,
-      CommitLogCheckpoint.class,
-      CommitLogCheckpointRoot.class,
-      CommitLogMutation.class,
-      CommitLogManifest.class);
+  static final ImmutableList<Class<? extends ImmutableObject>> AFFECTED_TYPES =
+      ImmutableList.of(
+          CommitLogBucket.class,
+          CommitLogCheckpoint.class,
+          CommitLogCheckpointRoot.class,
+          CommitLogMutation.class,
+          CommitLogManifest.class);
 
   private void runMapreduce() throws Exception {
     action = new KillAllCommitLogsAction();
@@ -72,20 +73,18 @@ public class KillAllCommitLogsActionTest extends MapreduceTestCase<KillAllCommit
           newContactResource(String.format("abc%d", nextContactId++)));
     }
     persistResource(CommitLogCheckpointRoot.create(START_OF_TIME.plusDays(1)));
+    DateTime bucketTime = START_OF_TIME.plusDays(2);
     persistResource(
         CommitLogCheckpoint.create(
             START_OF_TIME.plusDays(1),
-            ImmutableMap.of(1, START_OF_TIME.plusDays(2))));
+            ImmutableMap.of(1, bucketTime, 2, bucketTime, 3, bucketTime)));
     for (Class<?> clazz : AFFECTED_TYPES) {
       assertThat(ofy().load().type(clazz)).named("entities of type " + clazz).isNotEmpty();
     }
-    ImmutableList<?> otherStuff = FluentIterable.from(ofy().load())
-        .filter(new Predicate<Object>() {
-          @Override
-          public boolean apply(Object obj) {
-            return !AFFECTED_TYPES.contains(obj.getClass());
-          }})
-        .toList();
+    ImmutableList<?> otherStuff =
+        Streams.stream(ofy().load())
+            .filter(obj -> !AFFECTED_TYPES.contains(obj.getClass()))
+            .collect(toImmutableList());
     assertThat(otherStuff).isNotEmpty();
     runMapreduce();
     for (Class<?> clazz : AFFECTED_TYPES) {

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -37,12 +37,13 @@ import com.google.common.collect.ImmutableSet;
 import google.registry.bigquery.BigqueryFactory;
 import google.registry.bigquery.BigqueryUtils.SourceFormat;
 import google.registry.bigquery.BigqueryUtils.WriteDisposition;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.export.BigqueryPollJobAction.BigqueryPollJobEnqueuer;
 import google.registry.request.Action;
 import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.InternalServerErrorException;
 import google.registry.request.Parameter;
+import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
 import google.registry.util.FormattingLogger;
 import java.io.IOException;
@@ -50,7 +51,11 @@ import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /** Action to load a Datastore snapshot from Google Cloud Storage into BigQuery. */
-@Action(path = LoadSnapshotAction.PATH, method = POST)
+@Action(
+  path = LoadSnapshotAction.PATH,
+  method = POST,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public class LoadSnapshotAction implements Runnable {
 
   /** Parameter names for passing parameters into the servlet. */
@@ -108,7 +113,7 @@ public class LoadSnapshotAction implements Runnable {
     Bigquery bigquery = bigqueryFactory.create(projectId, SNAPSHOTS_DATASET);
     DateTime now = clock.nowUtc();
     String loadMessage =
-        String.format("Loading datastore snapshot %s from %s...", snapshotId, gcsFilename);
+        String.format("Loading Datastore snapshot %s from %s...", snapshotId, gcsFilename);
     logger.info(loadMessage);
     StringBuilder builder = new StringBuilder(loadMessage + "\n");
     builder.append("Load jobs:\n");

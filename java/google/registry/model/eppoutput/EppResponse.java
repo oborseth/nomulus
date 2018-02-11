@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,14 +14,15 @@
 
 package google.registry.model.eppoutput;
 
-import com.google.common.collect.FluentIterable;
+import static google.registry.util.CollectionUtils.forceEmptyToNull;
+import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
+
 import com.google.common.collect.ImmutableList;
 import google.registry.model.Buildable;
 import google.registry.model.ImmutableObject;
-import google.registry.model.contact.ContactResource;
-import google.registry.model.domain.DomainApplication;
+import google.registry.model.contact.ContactInfoData;
+import google.registry.model.domain.DomainInfoData;
 import google.registry.model.domain.DomainRenewData;
-import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.fee06.FeeCheckResponseExtensionV06;
 import google.registry.model.domain.fee06.FeeCreateResponseExtensionV06;
 import google.registry.model.domain.fee06.FeeDeleteResponseExtensionV06;
@@ -41,9 +42,6 @@ import google.registry.model.domain.fee12.FeeDeleteResponseExtensionV12;
 import google.registry.model.domain.fee12.FeeRenewResponseExtensionV12;
 import google.registry.model.domain.fee12.FeeTransferResponseExtensionV12;
 import google.registry.model.domain.fee12.FeeUpdateResponseExtensionV12;
-import google.registry.model.domain.flags.FlagsCreateResponseExtension;
-import google.registry.model.domain.flags.FlagsInfoResponseExtension;
-import google.registry.model.domain.flags.FlagsPollResponseExtension;
 import google.registry.model.domain.launch.LaunchCheckResponseExtension;
 import google.registry.model.domain.launch.LaunchCreateResponseExtension;
 import google.registry.model.domain.launch.LaunchInfoResponseExtension;
@@ -57,10 +55,11 @@ import google.registry.model.eppoutput.CreateData.ContactCreateData;
 import google.registry.model.eppoutput.CreateData.DomainCreateData;
 import google.registry.model.eppoutput.CreateData.HostCreateData;
 import google.registry.model.eppoutput.EppOutput.ResponseOrGreeting;
-import google.registry.model.host.HostResource;
+import google.registry.model.host.HostInfoData;
 import google.registry.model.poll.MessageQueueInfo;
 import google.registry.model.poll.PendingActionNotificationResponse.ContactPendingActionNotificationResponse;
 import google.registry.model.poll.PendingActionNotificationResponse.DomainPendingActionNotificationResponse;
+import google.registry.model.poll.PendingActionNotificationResponse.HostPendingActionNotificationResponse;
 import google.registry.model.transfer.TransferResponse.ContactTransferResponse;
 import google.registry.model.transfer.TransferResponse.DomainTransferResponse;
 import javax.annotation.Nullable;
@@ -68,9 +67,7 @@ import javax.xml.bind.annotation.XmlElement;
 import javax.xml.bind.annotation.XmlElementRef;
 import javax.xml.bind.annotation.XmlElementRefs;
 import javax.xml.bind.annotation.XmlElementWrapper;
-import javax.xml.bind.annotation.XmlTransient;
 import javax.xml.bind.annotation.XmlType;
-import org.joda.time.DateTime;
 
 /**
  * The EppResponse class represents an EPP response message.
@@ -79,7 +76,8 @@ import org.joda.time.DateTime;
  * client.  EPP commands are atomic, so a command will either succeed completely or fail completely.
  * Success and failure results MUST NOT be mixed."
  *
- * @see "http://tools.ietf.org/html/rfc5730#section-2.6"
+ * @see <a href="http://tools.ietf.org/html/rfc5730#section-2.6">
+ *     RFC 5730 - EPP - Response Format</a>
  */
 @XmlType(propOrder = {"result", "messageQueueInfo", "resData", "extensions", "trid"})
 public class EppResponse extends ImmutableObject implements ResponseOrGreeting {
@@ -92,14 +90,6 @@ public class EppResponse extends ImmutableObject implements ResponseOrGreeting {
   Result result;
 
   /**
-   * The time the command that created this response was executed.
-   *
-   * <p>This is for logging purposes only and is not returned to the user.
-   */
-  @XmlTransient
-  DateTime executionTime;
-
-  /**
    * Information about messages queued for retrieval. This may appear in response to any EPP message
    * (if messages are queued), but in practice this will only be set in response to a poll request.
    */
@@ -108,21 +98,22 @@ public class EppResponse extends ImmutableObject implements ResponseOrGreeting {
 
   /** Zero or more response "resData" results. */
   @XmlElementRefs({
-      @XmlElementRef(type = ContactResource.class),
-      @XmlElementRef(type = DomainApplication.class),
-      @XmlElementRef(type = DomainResource.class),
-      @XmlElementRef(type = HostResource.class),
-      @XmlElementRef(type = ContactCheckData.class),
-      @XmlElementRef(type = ContactCreateData.class),
-      @XmlElementRef(type = ContactPendingActionNotificationResponse.class),
-      @XmlElementRef(type = ContactTransferResponse.class),
-      @XmlElementRef(type = DomainCheckData.class),
-      @XmlElementRef(type = DomainCreateData.class),
-      @XmlElementRef(type = DomainPendingActionNotificationResponse.class),
-      @XmlElementRef(type = DomainRenewData.class),
-      @XmlElementRef(type = DomainTransferResponse.class),
-      @XmlElementRef(type = HostCheckData.class),
-      @XmlElementRef(type = HostCreateData.class)})
+    @XmlElementRef(type = ContactCheckData.class),
+    @XmlElementRef(type = ContactCreateData.class),
+    @XmlElementRef(type = ContactInfoData.class),
+    @XmlElementRef(type = ContactPendingActionNotificationResponse.class),
+    @XmlElementRef(type = ContactTransferResponse.class),
+    @XmlElementRef(type = DomainCheckData.class),
+    @XmlElementRef(type = DomainCreateData.class),
+    @XmlElementRef(type = DomainInfoData.class),
+    @XmlElementRef(type = DomainPendingActionNotificationResponse.class),
+    @XmlElementRef(type = DomainRenewData.class),
+    @XmlElementRef(type = DomainTransferResponse.class),
+    @XmlElementRef(type = HostCheckData.class),
+    @XmlElementRef(type = HostCreateData.class),
+    @XmlElementRef(type = HostInfoData.class),
+    @XmlElementRef(type = HostPendingActionNotificationResponse.class)
+  })
   @XmlElementWrapper
   ImmutableList<? extends ResponseData> resData;
 
@@ -147,9 +138,6 @@ public class EppResponse extends ImmutableObject implements ResponseOrGreeting {
       @XmlElementRef(type = FeeRenewResponseExtensionV12.class),
       @XmlElementRef(type = FeeTransferResponseExtensionV12.class),
       @XmlElementRef(type = FeeUpdateResponseExtensionV12.class),
-      @XmlElementRef(type = FlagsCreateResponseExtension.class),
-      @XmlElementRef(type = FlagsInfoResponseExtension.class),
-      @XmlElementRef(type = FlagsPollResponseExtension.class),
       @XmlElementRef(type = LaunchCheckResponseExtension.class),
       @XmlElementRef(type = LaunchCreateResponseExtension.class),
       @XmlElementRef(type = LaunchInfoResponseExtension.class),
@@ -158,21 +146,17 @@ public class EppResponse extends ImmutableObject implements ResponseOrGreeting {
   @XmlElementWrapper(name = "extension")
   ImmutableList<? extends ResponseExtension> extensions;
 
-  public DateTime getExecutionTime() {
-    return executionTime;
-  }
-
   public ImmutableList<? extends ResponseData> getResponseData() {
-    return resData;
+    return nullToEmptyImmutableCopy(resData);
   }
 
   public ImmutableList<? extends ResponseExtension> getExtensions() {
-    return extensions;
+    return nullToEmptyImmutableCopy(extensions);
   }
 
   @Nullable
   public ResponseExtension getFirstExtensionOfType(Class<? extends ResponseExtension> clazz) {
-    return FluentIterable.from(extensions).filter(clazz).first().orNull();
+    return extensions.stream().filter(clazz::isInstance).map(clazz::cast).findFirst().orElse(null);
   }
 
   @Nullable
@@ -211,6 +195,10 @@ public class EppResponse extends ImmutableObject implements ResponseOrGreeting {
       return this;
     }
 
+    public Builder setResultFromCode(Result.Code resultCode) {
+      return setResult(Result.create(resultCode));
+    }
+
     public Builder setResult(Result result) {
       getInstance().result = result;
       return this;
@@ -221,18 +209,21 @@ public class EppResponse extends ImmutableObject implements ResponseOrGreeting {
       return this;
     }
 
-    public Builder setExecutionTime(DateTime executionTime) {
-      getInstance().executionTime = executionTime;
+    public Builder setResData(ResponseData onlyResData) {
+      return setMultipleResData(ImmutableList.of(onlyResData));
+    }
+
+    public Builder setMultipleResData(ImmutableList<? extends ResponseData> resData) {
+      getInstance().resData = forceEmptyToNull(resData);
       return this;
     }
 
-    public Builder setResData(@Nullable ImmutableList<? extends ResponseData> resData) {
-      getInstance().resData = resData;
-      return this;
+    public Builder setOnlyExtension(ResponseExtension onlyExtension) {
+      return setExtensions(ImmutableList.of(onlyExtension));
     }
 
-    public Builder setExtensions(@Nullable ImmutableList<? extends ResponseExtension> extensions) {
-      getInstance().extensions = extensions;
+    public Builder setExtensions(ImmutableList<? extends ResponseExtension> extensions) {
+      getInstance().extensions = forceEmptyToNull(extensions);
       return this;
     }
   }

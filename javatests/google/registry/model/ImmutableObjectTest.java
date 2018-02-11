@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ import static com.google.common.collect.Maps.newHashMap;
 import static com.google.common.collect.Sets.newHashSet;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.ImmutableObject.cloneEmptyToNull;
-import static google.registry.testing.DatastoreHelper.persistActiveContact;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 
@@ -31,7 +30,6 @@ import com.googlecode.objectify.Key;
 import com.googlecode.objectify.ObjectifyService;
 import com.googlecode.objectify.annotation.Entity;
 import com.googlecode.objectify.annotation.Id;
-import google.registry.model.domain.ReferenceUnion;
 import google.registry.testing.AppEngineRule;
 import google.registry.util.CidrAddressBlock;
 import java.util.ArrayDeque;
@@ -253,8 +251,30 @@ public class ImmutableObjectTest {
     assertThat(cloned.heterogenousMap).containsEntry("b", "");
   }
 
+  /** Subclass of ImmutableObject with fields that are containers containing null values. */
+  public static class NullInContainersObject extends ImmutableObject {
+    Object[] array = new Object[] {null};
+    List<?> list = newArrayList((Object) null);
+    Set<?> set = newHashSet((Object) null);
+    Map<String, ?> map = newHashMap();
+
+    public NullInContainersObject() {
+      map.put("a", null);
+    }
+  }
+
+  @Test
+  public void testToDiffableFieldMap_withEmptyAndNulls() {
+    Map<String, Object> diffableFieldMap = new NullInContainersObject().toDiffableFieldMap();
+    assertThat((List<?>) diffableFieldMap.get("array")).containsExactly((Object) null);
+    assertThat((List<?>) diffableFieldMap.get("list")).containsExactly((Object) null);
+    assertThat((Set<?>) diffableFieldMap.get("set")).containsExactly((Object) null);
+    assertThat((Map<?, ?>) diffableFieldMap.get("map")).containsExactly("a", null);
+  }
+
   /** Subclass of ImmutableObject with keys to other objects. */
   public static class RootObject extends ImmutableObject {
+
     Key<ValueObject> hydrateMe;
 
     @DoNotHydrate
@@ -263,8 +283,6 @@ public class ImmutableObjectTest {
     Map<String, Key<ValueObject>> map;
 
     Set<Key<ValueObject>> set;
-
-    ReferenceUnion<?> referenceUnion;
   }
 
   /** Simple subclass of ImmutableObject. */
@@ -306,13 +324,6 @@ public class ImmutableObjectTest {
   public void testToHydratedString_expandsCollections() {
     RootObject root = new RootObject();
     root.set = ImmutableSet.of(Key.create(persistResource(ValueObject.create(1, "foo"))));
-    assertThat(root.toHydratedString()).contains("foo");
-  }
-
-  @Test
-  public void testToHydratedString_expandsReferenceUnions() {
-    RootObject root = new RootObject();
-    root.referenceUnion = ReferenceUnion.create(Key.create(persistActiveContact("foo")));
     assertThat(root.toHydratedString()).contains("foo");
   }
 }

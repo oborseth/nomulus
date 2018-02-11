@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,26 +19,28 @@ import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.EppResourceUtils.isActive;
 import static google.registry.testing.DatastoreHelper.getHistoryEntriesOfType;
 import static google.registry.testing.HistoryEntrySubject.assertAboutHistoryEntries;
+import static google.registry.util.DiffUtils.prettyPrintEntityDeepDiff;
 
 import com.google.common.collect.ImmutableSet;
-import com.google.common.truth.FailureStrategy;
+import com.google.common.truth.FailureMetadata;
 import com.google.common.truth.Subject;
 import google.registry.model.EppResource;
+import google.registry.model.ImmutableObject;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.reporting.HistoryEntry;
-import google.registry.model.transfer.TransferStatus;
 import google.registry.testing.TruthChainer.And;
 import google.registry.testing.TruthChainer.Which;
 import java.util.List;
 import java.util.Objects;
+import javax.annotation.Nullable;
 import org.joda.time.DateTime;
 
 /** Base Truth subject for asserting things about epp resources. */
 abstract class AbstractEppResourceSubject
     <T extends EppResource, S extends AbstractEppResourceSubject<T, S>> extends Subject<S, T> {
 
-  public AbstractEppResourceSubject(FailureStrategy strategy, T subject) {
-    super(strategy, checkNotNull(subject));
+  public AbstractEppResourceSubject(FailureMetadata failureMetadata, T subject) {
+    super(failureMetadata, checkNotNull(subject));
   }
 
   private List<HistoryEntry> getHistoryEntries() {
@@ -56,6 +58,18 @@ abstract class AbstractEppResourceSubject
         "%s with foreign key '%s'",
         actual().getClass().getSimpleName(),
         actual().getForeignKey());
+  }
+
+  @Override
+  public void isEqualTo(@Nullable Object other) {
+    // If the objects differ and we can show an interesting ImmutableObject diff, do so.
+    if (actual() != null && other instanceof ImmutableObject && !actual().equals(other)) {
+      String diffText = prettyPrintEntityDeepDiff(
+          ((ImmutableObject) other).toDiffableFieldMap(), actual().toDiffableFieldMap());
+      fail(String.format("is equal to %s\n\nIt differs as follows:\n%s", other, diffText));
+    }
+    // Otherwise, fall back to regular behavior.
+    super.isEqualTo(other);
   }
 
   public And<S> hasRepoId(long roid) {
@@ -151,20 +165,6 @@ abstract class AbstractEppResourceSubject
         "has deletionTime");
   }
 
-  public And<S> hasLastTransferTime(DateTime lastTransferTime) {
-    return hasValue(
-        lastTransferTime,
-        actual().getLastTransferTime(),
-        "has lastTransferTime");
-  }
-
-  public And<S> hasLastTransferTimeNotEqualTo(DateTime lastTransferTime) {
-    return doesNotHaveValue(
-        lastTransferTime,
-        actual().getLastTransferTime(),
-        "lastTransferTime");
-  }
-
   public And<S> hasLastEppUpdateTime(DateTime lastUpdateTime) {
     return hasValue(
         lastUpdateTime,
@@ -187,46 +187,12 @@ abstract class AbstractEppResourceSubject
         "has lastEppUpdateClientId");
   }
 
-  public And<S> hasCurrentSponsorClientId(String clientId) {
+
+  public And<S> hasPersistedCurrentSponsorClientId(String clientId) {
     return hasValue(
         clientId,
-        actual().getCurrentSponsorClientId(),
-        "has currentSponsorClientId");
-  }
-
-  public And<S> hasTransferStatus(TransferStatus transferStatus) {
-    return hasValue(
-        transferStatus,
-        actual().getTransferData().getTransferStatus(),
-        "has transferStatus");
-  }
-
-  public And<S> hasTransferRequestClientTrid(String clTrid) {
-    return hasValue(
-        clTrid,
-        actual().getTransferData().getTransferRequestTrid().getClientTransactionId(),
-        "has trid");
-  }
-
-  public And<S> hasPendingTransferExpirationTime(DateTime pendingTransferExpirationTime) {
-    return hasValue(
-        pendingTransferExpirationTime,
-        actual().getTransferData().getPendingTransferExpirationTime(),
-        "has pendingTransferExpirationTime");
-  }
-
-  public And<S> hasTransferGainingClientId(String gainingClientId) {
-    return hasValue(
-        gainingClientId,
-        actual().getTransferData().getGainingClientId(),
-        "has transfer ga");
-  }
-
-  public And<S> hasTransferLosingClientId(String losingClientId) {
-    return hasValue(
-        losingClientId,
-        actual().getTransferData().getLosingClientId(),
-        "has transfer losingClientId");
+        actual().getPersistedCurrentSponsorClientId(),
+        "has persisted currentSponsorClientId");
   }
 
   public And<S> isActiveAt(DateTime time) {

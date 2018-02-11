@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,11 @@
 
 package google.registry.ui.server.registrar;
 
+import static com.google.common.net.HttpHeaders.LOCATION;
 import static com.google.common.net.HttpHeaders.X_FRAME_OPTIONS;
+import static google.registry.util.PreconditionsUtils.checkArgumentPresent;
 import static javax.servlet.http.HttpServletResponse.SC_FORBIDDEN;
+import static javax.servlet.http.HttpServletResponse.SC_MOVED_TEMPORARILY;
 import static javax.servlet.http.HttpServletResponse.SC_SERVICE_UNAVAILABLE;
 
 import com.google.appengine.api.users.UserService;
@@ -26,11 +29,13 @@ import com.google.common.net.MediaType;
 import com.google.template.soy.data.SoyMapData;
 import com.google.template.soy.shared.SoyCssRenamingMap;
 import com.google.template.soy.tofu.SoyTofu;
-import google.registry.config.ConfigModule.Config;
-import google.registry.flows.EppConsoleAction;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.model.registrar.Registrar;
 import google.registry.request.Action;
 import google.registry.request.Response;
+import google.registry.request.auth.Auth;
+import google.registry.request.auth.AuthResult;
+import google.registry.request.auth.UserAuthInfo;
 import google.registry.security.XsrfTokenManager;
 import google.registry.ui.server.SoyTemplateUtils;
 import google.registry.ui.soy.registrar.ConsoleSoyInfo;
@@ -38,7 +43,10 @@ import javax.inject.Inject;
 import javax.servlet.http.HttpServletRequest;
 
 /** Action that serves Registrar Console single HTML page (SPA). */
-@Action(path = ConsoleUiAction.PATH, requireLogin = true, xsrfProtection = false)
+@Action(
+  path = ConsoleUiAction.PATH,
+  auth = Auth.AUTH_PUBLIC
+)
 public final class ConsoleUiAction implements Runnable {
 
   public static final String PATH = "/registrar";
@@ -58,17 +66,38 @@ public final class ConsoleUiAction implements Runnable {
   @Inject Response response;
   @Inject SessionUtils sessionUtils;
   @Inject UserService userService;
+  @Inject XsrfTokenManager xsrfTokenManager;
+  @Inject AuthResult authResult;
   @Inject @Config("logoFilename") String logoFilename;
   @Inject @Config("productName") String productName;
   @Inject @Config("integrationEmail") String integrationEmail;
   @Inject @Config("supportEmail") String supportEmail;
   @Inject @Config("announcementsEmail") String announcementsEmail;
   @Inject @Config("supportPhoneNumber") String supportPhoneNumber;
+  @Inject @Config("technicalDocsUrl") String technicalDocsUrl;
   @Inject @Config("registrarConsoleEnabled") boolean enabled;
   @Inject ConsoleUiAction() {}
 
   @Override
   public void run() {
+    if (!authResult.userAuthInfo().isPresent()) {
+      response.setStatus(SC_MOVED_TEMPORARILY);
+      String location;
+      try {
+        location = userService.createLoginURL(req.getRequestURI());
+      } catch (IllegalArgumentException e) {
+        // UserServiceImpl.createLoginURL() throws IllegalArgumentException if underlying API call
+        // returns an error code of NOT_ALLOWED. createLoginURL() assumes that the error is caused
+        // by an invalid URL. But in fact, the error can also occur if UserService doesn't have any
+        // user information, which happens when the request has been authenticated as internal. In
+        // this case, we want to avoid dying before we can send the redirect, so just redirect to
+        // the root path.
+        location = "/";
+      }
+      response.setHeader(LOCATION, location);
+      return;
+    }
+    UserAuthInfo userAuthInfo = authResult.userAuthInfo().get();
     response.setContentType(MediaType.HTML_UTF_8);
     response.setHeader(X_FRAME_OPTIONS, "SAMEORIGIN");  // Disallow iframing.
     response.setHeader("X-Ui-Compatible", "IE=edge");  // Ask IE not to be silly.
@@ -79,6 +108,7 @@ public final class ConsoleUiAction implements Runnable {
     data.put("supportEmail", supportEmail);
     data.put("announcementsEmail", announcementsEmail);
     data.put("supportPhoneNumber", supportPhoneNumber);
+    data.put("technicalDocsUrl", technicalDocsUrl);
     if (!enabled) {
       response.setStatus(SC_SERVICE_UNAVAILABLE);
       response.setPayload(
@@ -89,9 +119,9 @@ public final class ConsoleUiAction implements Runnable {
               .render());
       return;
     }
-    data.put("username", userService.getCurrentUser().getNickname());
+    data.put("username", userAuthInfo.user().getNickname());
     data.put("logoutUrl", userService.createLogoutURL(PATH));
-    if (!sessionUtils.checkRegistrarConsoleLogin(req)) {
+    if (!sessionUtils.checkRegistrarConsoleLogin(req, userAuthInfo)) {
       response.setStatus(SC_FORBIDDEN);
       response.setPayload(
           TOFU_SUPPLIER.get()
@@ -101,10 +131,12 @@ public final class ConsoleUiAction implements Runnable {
               .render());
       return;
     }
-    Registrar registrar = Registrar.loadByClientId(sessionUtils.getRegistrarClientId(req));
-    data.put("xsrfToken", XsrfTokenManager.generateToken(EppConsoleAction.XSRF_SCOPE));
-    data.put("clientId", registrar.getClientId());
-    data.put("isAdmin", userService.isUserAdmin());
+    String clientId = sessionUtils.getRegistrarClientId(req);
+    Registrar registrar =
+        checkArgumentPresent(
+            Registrar.loadByClientIdCached(clientId), "Registrar %s does not exist", clientId);
+    data.put("xsrfToken", xsrfTokenManager.generateToken(userAuthInfo.user().getEmail()));
+    data.put("clientId", clientId);
     data.put("showPaymentLink", registrar.getBillingMethod() == Registrar.BillingMethod.BRAINTREE);
 
     String payload = TOFU_SUPPLIER.get()

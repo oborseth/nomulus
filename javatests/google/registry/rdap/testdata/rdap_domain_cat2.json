@@ -1,0 +1,387 @@
+{
+  "status": [
+    "client delete prohibited",
+    "client renew prohibited",
+    "client transfer prohibited",
+    "server update prohibited"
+  ],
+  "handle": "%HANDLE%",
+  "links": [
+    {
+      "href": "https://example.com/rdap/domain/%NAME%",
+      "type": "application/rdap+json",
+      "rel": "self",
+      "value": "https://example.com/rdap/domain/%NAME%"
+    }
+  ],
+  "events": [
+    {
+      "eventAction": "registration",
+      "eventActor": "foo",
+      "eventDate": "2000-01-01T00:00:00.000Z"
+    },
+    {
+      "eventAction": "expiration",
+      "eventDate": "2110-10-08T00:44:59.000Z"
+    },
+    {
+      "eventAction": "last changed",
+      "eventDate": "2009-05-29T20:13:00.000Z"
+    },
+    {
+      "eventAction": "last update of RDAP database",
+      "eventDate": "2000-01-01T00:00:00.000Z"
+    }
+  ],
+  "nameservers": [
+    {
+      "status": [
+        "active",
+        "associated"
+      ],
+      "handle": "%NAMESERVER1ROID%",
+      "links": [
+        {
+          "href": "https://example.com/rdap/nameserver/%NAMESERVER1NAME%",
+          "type": "application/rdap+json",
+          "rel": "self",
+          "value": "https://example.com/rdap/nameserver/%NAMESERVER1NAME%"
+        }
+      ],
+      "ldhName": "%NAMESERVER1NAME%",
+      "ipAddresses": {
+        "v4": [
+          "%NAMESERVER1ADDRESS%"
+        ]
+      },
+      "events": [
+        {
+          "eventAction": "registration",
+          "eventActor": "foo",
+          "eventDate": "1999-01-01T00:00:00.000Z"
+        },
+        {
+          "eventAction": "last update of RDAP database",
+          "eventDate": "2000-01-01T00:00:00.000Z"
+        }
+      ],
+      "objectClassName": "nameserver"
+    },
+    {
+      "status": [
+        "active",
+        "associated"
+      ],
+      "handle": "%NAMESERVER2ROID%",
+      "links": [
+        {
+          "href": "https://example.com/rdap/nameserver/%NAMESERVER2NAME%",
+          "type": "application/rdap+json",
+          "rel": "self",
+          "value": "https://example.com/rdap/nameserver/%NAMESERVER2NAME%"
+        }
+      ],
+      "ldhName": "%NAMESERVER2NAME%",
+      "ipAddresses": {
+        "v6": [
+          "%NAMESERVER2ADDRESS%"
+        ]
+      },
+      "events": [
+        {
+          "eventAction": "registration",
+          "eventActor": "foo",
+          "eventDate": "1998-01-01T00:00:00.000Z"
+        },
+        {
+          "eventAction": "last update of RDAP database",
+          "eventDate": "2000-01-01T00:00:00.000Z"
+        }
+      ],
+      "objectClassName": "nameserver"
+    }
+  ],
+  "ldhName": "%NAME%",
+  "entities": [
+    {
+      "status": [
+        "active",
+        "associated"
+      ],
+      "handle": "%CONTACT1ROID%",
+      "roles": [
+        "administrative"
+      ],
+      "links": [
+        {
+          "href": "https://example.com/rdap/entity/%CONTACT1ROID%",
+          "type": "application/rdap+json",
+          "rel": "self",
+          "value": "https://example.com/rdap/entity/%CONTACT1ROID%"
+        }
+      ],
+      "events": [
+        {
+          "eventAction": "registration",
+          "eventActor": "foo",
+          "eventDate": "1998-01-01T00:00:00.000Z"
+        },
+        {
+          "eventAction": "last update of RDAP database",
+          "eventDate": "2000-01-01T00:00:00.000Z"
+        }
+      ],
+      "objectClassName": "entity",
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "Sieglinde"
+          ],
+          [
+            "org",
+            {},
+            "text",
+            "GOOGLE INCORPORATED <script>"
+          ],
+          [
+            "adr",
+            {},
+            "text",
+            [
+              "",
+              "",
+              "123 Example Boulevard <script>",
+              "KOKOMO",
+              "BM",
+              "31337",
+              "United States"
+            ]
+          ],
+          [
+            "tel",
+            {
+              "type": [
+                "voice"
+              ]
+            },
+            "uri",
+            "tel:+1.2126660420"
+          ],
+          [
+            "tel",
+            {
+              "type": [
+                "fax"
+              ]
+            },
+            "uri",
+            "tel:+1.2126660420"
+          ],
+          [
+            "email",
+            {},
+            "text",
+            "sieglinde@cat2.lol"
+          ]
+        ]
+      ]
+    },
+    {
+      "status": [
+        "active",
+        "associated"
+      ],
+      "handle": "%CONTACT2ROID%",
+      "roles": [
+        "technical"
+      ],
+      "links": [
+        {
+          "href": "https://example.com/rdap/entity/%CONTACT2ROID%",
+          "type": "application/rdap+json",
+          "rel": "self",
+          "value": "https://example.com/rdap/entity/%CONTACT2ROID%"
+        }
+      ],
+      "events": [
+        {
+          "eventAction": "registration",
+          "eventActor": "foo",
+          "eventDate": "1997-01-01T00:00:00.000Z"
+        },
+        {
+          "eventAction": "last update of RDAP database",
+          "eventDate": "2000-01-01T00:00:00.000Z"
+        }
+      ],
+      "objectClassName": "entity",
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "Siegfried"
+          ],
+          [
+            "org",
+            {},
+            "text",
+            "GOOGLE INCORPORATED <script>"
+          ],
+          [
+            "adr",
+            {},
+            "text",
+            [
+              "",
+              "",
+              "123 Example Boulevard <script>",
+              "KOKOMO",
+              "BM",
+              "31337",
+              "United States"
+            ]
+          ],
+          [
+            "tel",
+            {
+              "type": [
+                "voice"
+              ]
+            },
+            "uri",
+            "tel:+1.2126660420"
+          ],
+          [
+            "tel",
+            {
+              "type": [
+                "fax"
+              ]
+            },
+            "uri",
+            "tel:+1.2126660420"
+          ],
+          [
+            "email",
+            {},
+            "text",
+            "siegfried@cat2.lol"
+          ]
+        ]
+      ]
+    },
+    {
+      "status": [
+        "active",
+        "associated"
+      ],
+      "handle": "%CONTACT3ROID%",
+      "roles": [
+        "registrant"
+      ],
+      "links": [
+        {
+          "href": "https://example.com/rdap/entity/%CONTACT3ROID%",
+          "type": "application/rdap+json",
+          "rel": "self",
+          "value": "https://example.com/rdap/entity/%CONTACT3ROID%"
+        }
+      ],
+      "events": [
+        {
+          "eventAction": "registration",
+          "eventActor": "foo",
+          "eventDate": "1999-01-01T00:00:00.000Z"
+        },
+        {
+          "eventAction": "last update of RDAP database",
+          "eventDate": "2000-01-01T00:00:00.000Z"
+        }
+      ],
+      "objectClassName": "entity",
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "Siegmund"
+          ],
+          [
+            "org",
+            {},
+            "text",
+            "GOOGLE INCORPORATED <script>"
+          ],
+          [
+            "adr",
+            {},
+            "text",
+            [
+              "",
+              "",
+              "123 Example Boulevard <script>",
+              "KOKOMO",
+              "BM",
+              "31337",
+              "United States"
+            ]
+          ],
+          [
+            "tel",
+            {
+              "type": [
+                "voice"
+              ]
+            },
+            "uri",
+            "tel:+1.2126660420"
+          ],
+          [
+            "tel",
+            {
+              "type": [
+                "fax"
+              ]
+            },
+            "uri",
+            "tel:+1.2126660420"
+          ],
+          [
+            "email",
+            {},
+            "text",
+            "siegmund@cat2.lol"
+          ]
+        ]
+      ]
+    }
+  ],
+  "objectClassName": "domain"
+}

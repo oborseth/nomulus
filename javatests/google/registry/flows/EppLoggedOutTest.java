@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,13 +40,22 @@ public class EppLoggedOutTest extends EppTestCase {
     assertCommandAndResponse(
         "hello.xml",
         null,
-        "greeting_crr.xml",
+        "greeting.xml",
         ImmutableMap.of("DATE", now.toString(dateTimeNoMillis())),
         now);
   }
 
   @Test
   public void testSyntaxError() throws Exception {
-    assertCommandAndResponse("syntax_error.xml", "syntax_error_response.xml");
+    assertCommandAndResponse(
+        "syntax_error.xml",
+        ImmutableMap.of(),
+        "response_error_no_cltrid.xml",
+        ImmutableMap.of(
+            "MSG",
+            "Syntax error at line 4, column 65: cvc-complex-type.3.2.2: "
+                + "Attribute 'xsi:schemaLocation' is not allowed to appear in element 'epp'.",
+            "CODE",
+            "2001"));
   }
 }

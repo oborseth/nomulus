@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,35 +21,23 @@ import static google.registry.model.common.Cursor.CursorType.RECURRING_BILLING;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistActiveDomain;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 
-import com.googlecode.objectify.VoidWork;
 import google.registry.model.EntityTestCase;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.registry.Registry;
-import google.registry.testing.ExceptionRule;
 import org.joda.time.DateTime;
-import org.junit.Rule;
 import org.junit.Test;
 
 /** Unit tests for {@link Cursor}. */
 public class CursorTest extends EntityTestCase {
-
-  @Rule public final ExceptionRule thrown = new ExceptionRule();
-
   @Test
   public void testSuccess_persistScopedCursor() {
     createTld("tld");
     clock.advanceOneMilli();
     final DateTime time = DateTime.parse("2012-07-12T03:30:00.000Z");
-    ofy()
-        .transact(
-            new VoidWork() {
-              @Override
-              public void vrun() {
-                ofy().save().entity(Cursor.create(RDE_UPLOAD, time, Registry.get("tld")));
-              }
-            });
+    ofy().transact(() -> ofy().save().entity(Cursor.create(RDE_UPLOAD, time, Registry.get("tld"))));
     assertThat(ofy().load().key(Cursor.createKey(BRDA, Registry.get("tld"))).now()).isNull();
     assertThat(
             ofy()
@@ -63,14 +51,7 @@ public class CursorTest extends EntityTestCase {
   @Test
   public void testSuccess_persistGlobalCursor() {
     final DateTime time = DateTime.parse("2012-07-12T03:30:00.000Z");
-    ofy()
-        .transact(
-            new VoidWork() {
-              @Override
-              public void vrun() {
-                ofy().save().entity(Cursor.createGlobal(RECURRING_BILLING, time));
-              }
-            });
+    ofy().transact(() -> ofy().save().entity(Cursor.createGlobal(RECURRING_BILLING, time)));
     assertThat(ofy().load().key(Cursor.createGlobalKey(RECURRING_BILLING)).now().getCursorTime())
         .isEqualTo(time);
   }
@@ -78,14 +59,7 @@ public class CursorTest extends EntityTestCase {
   @Test
   public void testIndexing() throws Exception {
     final DateTime time = DateTime.parse("2012-07-12T03:30:00.000Z");
-    ofy()
-        .transact(
-            new VoidWork() {
-              @Override
-              public void vrun() {
-                ofy().save().entity(Cursor.createGlobal(RECURRING_BILLING, time));
-              }
-            });
+    ofy().transact(() -> ofy().save().entity(Cursor.createGlobal(RECURRING_BILLING, time)));
     Cursor cursor = ofy().load().key(Cursor.createGlobalKey(RECURRING_BILLING)).now();
     verifyIndexing(cursor);
   }
@@ -96,57 +70,72 @@ public class CursorTest extends EntityTestCase {
     clock.advanceOneMilli();
     final DateTime time = DateTime.parse("2012-07-12T03:30:00.000Z");
     final DomainResource domain = persistActiveDomain("notaregistry.tld");
-    thrown.expect(
-        IllegalArgumentException.class, "Class required for cursor does not match scope class");
-    ofy()
-        .transact(
-            new VoidWork() {
-              @Override
-              public void vrun() {
-                ofy().save().entity(Cursor.create(RDE_UPLOAD, time, domain));
-              }
-            });
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                ofy().transact(() -> ofy().save().entity(Cursor.create(RDE_UPLOAD, time, domain))));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Class required for cursor does not match scope class");
   }
 
   @Test
   public void testFailure_invalidScopeOnKeyCreate() throws Exception {
     createTld("tld");
-    thrown.expect(
-        IllegalArgumentException.class, "Class required for cursor does not match scope class");
-    Cursor.createKey(RDE_UPLOAD, persistActiveDomain("notaregistry.tld"));
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> Cursor.createKey(RDE_UPLOAD, persistActiveDomain("notaregistry.tld")));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Class required for cursor does not match scope class");
   }
 
   @Test
   public void testFailure_createGlobalKeyForScopedCursorType() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "Cursor type is not a global cursor");
-    Cursor.createGlobalKey(RDE_UPLOAD);
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> Cursor.createGlobalKey(RDE_UPLOAD));
+    assertThat(thrown).hasMessageThat().contains("Cursor type is not a global cursor");
   }
 
   @Test
   public void testFailure_invalidScopeOnGlobalKeyCreate() throws Exception {
     createTld("tld");
-    thrown.expect(
-        IllegalArgumentException.class, "Class required for cursor does not match scope class");
-    Cursor.createKey(RECURRING_BILLING, persistActiveDomain("notaregistry.tld"));
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> Cursor.createKey(RECURRING_BILLING, persistActiveDomain("notaregistry.tld")));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Class required for cursor does not match scope class");
   }
 
   @Test
   public void testFailure_nullScope() throws Exception {
-    thrown.expect(NullPointerException.class, "Cursor scope cannot be null");
-    Cursor.create(RECURRING_BILLING, START_OF_TIME, null);
+    NullPointerException thrown =
+        expectThrows(
+            NullPointerException.class,
+            () -> Cursor.create(RECURRING_BILLING, START_OF_TIME, null));
+    assertThat(thrown).hasMessageThat().contains("Cursor scope cannot be null");
   }
 
   @Test
   public void testFailure_nullCursorType() throws Exception {
     createTld("tld");
-    thrown.expect(NullPointerException.class, "Cursor type cannot be null");
-    Cursor.create(null, START_OF_TIME, Registry.get("tld"));
+    NullPointerException thrown =
+        expectThrows(
+            NullPointerException.class,
+            () -> Cursor.create(null, START_OF_TIME, Registry.get("tld")));
+    assertThat(thrown).hasMessageThat().contains("Cursor type cannot be null");
   }
 
   @Test
   public void testFailure_nullTime() throws Exception {
     createTld("tld");
-    thrown.expect(NullPointerException.class, "Cursor time cannot be null");
-    Cursor.create(RDE_UPLOAD, null, Registry.get("tld"));
+    NullPointerException thrown =
+        expectThrows(
+            NullPointerException.class, () -> Cursor.create(RDE_UPLOAD, null, Registry.get("tld")));
+    assertThat(thrown).hasMessageThat().contains("Cursor time cannot be null");
   }
 }

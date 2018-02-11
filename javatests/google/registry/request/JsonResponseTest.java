@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,11 +18,9 @@ import static com.google.common.truth.Truth.assertThat;
 import static google.registry.request.JsonResponse.JSON_SAFETY_PREFIX;
 
 import com.google.common.collect.ImmutableMap;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeResponse;
 import java.util.Map;
 import org.json.simple.JSONValue;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -30,9 +28,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link JsonResponse}. */
 @RunWith(JUnit4.class)
 public class JsonResponseTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   FakeResponse fakeResponse = new FakeResponse();
   JsonResponse jsonResponse = new JsonResponse(fakeResponse);

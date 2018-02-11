@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,10 +14,10 @@
 
 package google.registry.monitoring.whitebox;
 
-import static com.google.appengine.api.taskqueue.QueueFactory.getQueue;
 import static com.google.appengine.api.taskqueue.TaskOptions.Builder.withUrl;
 
 import com.google.appengine.api.modules.ModulesService;
+import com.google.appengine.api.taskqueue.Queue;
 import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.taskqueue.TransientFailureException;
 import com.google.common.base.Supplier;
@@ -36,10 +36,11 @@ public class BigQueryMetricsEnqueuer {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
 
-  public static final String QUEUE = "bigquery-streaming-metrics";
+  public static final String QUEUE_BIGQUERY_STREAMING_METRICS = "bigquery-streaming-metrics";
 
   @Inject ModulesService modulesService;
   @Inject @Named("insertIdGenerator") Supplier<String> idGenerator;
+  @Inject @Named(QUEUE_BIGQUERY_STREAMING_METRICS) Queue queue;
 
   @Inject BigQueryMetricsEnqueuer() {}
 
@@ -54,10 +55,10 @@ public class BigQueryMetricsEnqueuer {
         opts.param(entry.getKey(), entry.getValue());
       }
       opts.param("tableId", metric.getTableId());
-      getQueue(QUEUE).add(opts);
+      queue.add(opts);
     } catch (TransientFailureException e) {
       // Log and swallow. We may drop some metrics here but this should be rare.
-      logger.info(e, e.getMessage());
+      logger.info(e, "Transient error occurred while recording metric; metric dropped.");
     }
   }
 }

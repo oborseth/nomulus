@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -84,7 +84,7 @@ public abstract class HttpException extends RuntimeException {
     }
 
     public NotModifiedException(String message) {
-      super(HttpServletResponse.SC_NOT_FOUND, message, null);
+      super(HttpServletResponse.SC_NOT_MODIFIED, message, null);
     }
 
     @Override
@@ -193,6 +193,10 @@ public abstract class HttpException extends RuntimeException {
   public static final class InternalServerErrorException extends HttpException {
     public InternalServerErrorException(String message) {
       super(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, message, null);
+    }
+
+    public InternalServerErrorException(String message, Throwable cause) {
+      super(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, message, cause);
     }
 
     @Override

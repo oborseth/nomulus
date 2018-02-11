@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@ package google.registry.rde;
 import static com.google.appengine.api.taskqueue.QueueFactory.getQueue;
 import static com.google.appengine.api.taskqueue.TaskOptions.Builder.withUrl;
 import static com.google.appengine.tools.cloudstorage.GcsServiceFactory.createGcsService;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static google.registry.model.common.Cursor.getCursorTimeOrStartOfTime;
 import static google.registry.model.ofy.ObjectifyService.ofy;
+import static google.registry.xml.ValidationMode.LENIENT;
+import static google.registry.xml.ValidationMode.STRICT;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -27,8 +30,7 @@ import com.google.appengine.tools.cloudstorage.GcsFilename;
 import com.google.appengine.tools.cloudstorage.RetryParams;
 import com.google.appengine.tools.mapreduce.Reducer;
 import com.google.appengine.tools.mapreduce.ReducerInput;
-import com.googlecode.objectify.VoidWork;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.gcs.GcsUtils;
 import google.registry.keyring.api.KeyModule;
 import google.registry.keyring.api.PgpHelper;
@@ -37,8 +39,9 @@ import google.registry.model.rde.RdeMode;
 import google.registry.model.rde.RdeNamingUtils;
 import google.registry.model.rde.RdeRevision;
 import google.registry.model.registry.Registry;
-import google.registry.model.server.Lock;
+import google.registry.request.Parameter;
 import google.registry.request.RequestParameters;
+import google.registry.request.lock.LockHandler;
 import google.registry.tldconfig.idn.IdnTableEnum;
 import google.registry.util.FormattingLogger;
 import google.registry.util.TaskEnqueuer;
@@ -51,6 +54,7 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.security.Security;
 import java.util.Iterator;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import javax.inject.Inject;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
@@ -62,30 +66,48 @@ import org.joda.time.Duration;
 /** Reducer for {@link RdeStagingAction}. */
 public final class RdeStagingReducer extends Reducer<PendingDeposit, DepositFragment, Void> {
 
-  private static final long serialVersionUID = -3366189042770402345L;
+  private static final long serialVersionUID = 60326234579091203L;
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
 
-  private final RdeMarshaller marshaller = new RdeMarshaller();
+  private final TaskEnqueuer taskEnqueuer;
+  private final LockHandler lockHandler;
+  private final int gcsBufferSize;
+  private final String bucket;
+  private final int ghostrydeBufferSize;
+  private final Duration lockTimeout;
+  private final byte[] stagingKeyBytes;
+  private final RdeMarshaller marshaller;
 
-  @Inject TaskEnqueuer taskEnqueuer;
-  @Inject @Config("gcsBufferSize") int gcsBufferSize;
-  @Inject @Config("rdeBucket") String bucket;
-  @Inject @Config("rdeGhostrydeBufferSize") int ghostrydeBufferSize;
-  @Inject @Config("rdeStagingLockTimeout") Duration lockTimeout;
-  @Inject @KeyModule.Key("rdeStagingEncryptionKey") byte[] stagingKeyBytes;
-  @Inject RdeStagingReducer() {}
+  @Inject
+  RdeStagingReducer(
+      TaskEnqueuer taskEnqueuer,
+      LockHandler lockHandler,
+      @Config("gcsBufferSize") int gcsBufferSize,
+      @Config("rdeBucket") String bucket,
+      @Config("rdeGhostrydeBufferSize") int ghostrydeBufferSize,
+      @Config("rdeStagingLockTimeout") Duration lockTimeout,
+      @KeyModule.Key("rdeStagingEncryptionKey") byte[] stagingKeyBytes,
+      @Parameter(RdeModule.PARAM_LENIENT) boolean lenient) {
+    this.taskEnqueuer = taskEnqueuer;
+    this.lockHandler = lockHandler;
+    this.gcsBufferSize = gcsBufferSize;
+    this.bucket = bucket;
+    this.ghostrydeBufferSize = ghostrydeBufferSize;
+    this.lockTimeout = lockTimeout;
+    this.stagingKeyBytes = stagingKeyBytes;
+    this.marshaller = new RdeMarshaller(lenient ? LENIENT : STRICT);
+  }
 
   @Override
   public void reduce(final PendingDeposit key, final ReducerInput<DepositFragment> fragments) {
-    Callable<Void> lockRunner = new Callable<Void>() {
-      @Override
-      public Void call() throws Exception {
-        reduceWithLock(key, fragments);
-        return null;
-      }};
-    String lockName = String.format("RdeStaging %s", key.tld());
-    if (!Lock.executeWithLocks(lockRunner, null, null, lockTimeout, lockName)) {
+    Callable<Void> lockRunner =
+        () -> {
+          reduceWithLock(key, fragments);
+          return null;
+        };
+    String lockName = String.format("RdeStaging %s", key.mode());
+    if (!lockHandler.executeWithLocks(lockRunner, key.tld(), lockTimeout, lockName)) {
       logger.warningfmt("Lock in use: %s", lockName);
     }
   }
@@ -107,9 +129,15 @@ public final class RdeStagingReducer extends Reducer<PendingDeposit, DepositFrag
     final RdeMode mode = key.mode();
     final String tld = key.tld();
     final DateTime watermark = key.watermark();
-    final int revision = RdeRevision.getNextRevision(tld, watermark, mode);
+    final int revision =
+        Optional.ofNullable(key.revision())
+            .orElse(RdeRevision.getNextRevision(tld, watermark, mode));
     String id = RdeUtil.timestampToId(watermark);
     String prefix = RdeNamingUtils.makeRydeFilename(tld, watermark, mode, 1, revision);
+    if (key.manual()) {
+      checkState(key.directoryWithTrailingSlash() != null, "Manual subdirectory not specified");
+      prefix = "manual/" + key.directoryWithTrailingSlash() + prefix;
+    }
     GcsFilename xmlFilename = new GcsFilename(bucket, prefix + ".xml.ghostryde");
     GcsFilename xmlLengthFilename = new GcsFilename(bucket, prefix + ".xml.length");
     GcsFilename reportFilename = new GcsFilename(bucket, prefix + "-report.xml.ghostryde");
@@ -139,7 +167,7 @@ public final class RdeStagingReducer extends Reducer<PendingDeposit, DepositFrag
         }
         if (!fragment.error().isEmpty()) {
           failed = true;
-          logger.severe(fragment.error());
+          logger.severefmt("Fragment error: %s", fragment.error());
         }
       }
       for (IdnTableEnum idn : IdnTableEnum.values()) {
@@ -149,7 +177,7 @@ public final class RdeStagingReducer extends Reducer<PendingDeposit, DepositFrag
 
       // Output XML that says how many resources were emitted.
       header = counter.makeHeader(tld, mode);
-      output.write(marshaller.marshalStrictlyOrDie(new XjcRdeHeaderElement(header)));
+      output.write(marshaller.marshalOrDie(new XjcRdeHeaderElement(header)));
 
       // Output the bottom of the XML document.
       output.write(marshaller.makeFooter());
@@ -162,7 +190,7 @@ public final class RdeStagingReducer extends Reducer<PendingDeposit, DepositFrag
     }
 
     // If an entity was broken, abort after writing as much logs/deposit data as possible.
-    verify(!failed);
+    verify(!failed, "RDE staging failed for TLD %s", tld);
 
     // Write a file to GCS containing the byte length (ASCII) of the raw unencrypted XML.
     //
@@ -193,32 +221,43 @@ public final class RdeStagingReducer extends Reducer<PendingDeposit, DepositFrag
     }
 
     // Now that we're done, kick off RdeUploadAction and roll forward the cursor transactionally.
-    ofy().transact(new VoidWork() {
-      @Override
-      public void vrun() {
-        Registry registry = Registry.get(tld);
-        DateTime position = getCursorTimeOrStartOfTime(
-            ofy().load().key(Cursor.createKey(key.cursor(), registry)).now());
-        DateTime newPosition = key.watermark().plus(key.interval());
-        if (!position.isBefore(newPosition)) {
-          logger.warning("Cursor has already been rolled forward.");
-          return;
-        }
-        verify(position.equals(key.watermark()),
-            "Partial ordering of RDE deposits broken: %s %s", position, key);
-        ofy().save().entity(Cursor.create(key.cursor(), newPosition, registry)).now();
-        logger.infofmt("Rolled forward %s on %s cursor to %s", key.cursor(), tld, newPosition);
-        RdeRevision.saveRevision(tld, watermark, mode, revision);
-        if (mode == RdeMode.FULL) {
-          taskEnqueuer.enqueue(getQueue("rde-upload"),
-              withUrl(RdeUploadAction.PATH)
-                  .param(RequestParameters.PARAM_TLD, tld));
-        } else {
-          taskEnqueuer.enqueue(getQueue("brda"),
-              withUrl(BrdaCopyAction.PATH)
-                  .param(RequestParameters.PARAM_TLD, tld)
-                  .param(RdeModule.PARAM_WATERMARK, watermark.toString()));
-        }
-      }});
+    if (key.manual()) {
+      logger.info("Manual operation; not advancing cursor or enqueuing upload task");
+      return;
+    }
+    ofy()
+        .transact(
+            () -> {
+              Registry registry = Registry.get(tld);
+              DateTime position =
+                  getCursorTimeOrStartOfTime(
+                      ofy().load().key(Cursor.createKey(key.cursor(), registry)).now());
+              checkState(key.interval() != null, "Interval must be present");
+              DateTime newPosition = key.watermark().plus(key.interval());
+              if (!position.isBefore(newPosition)) {
+                logger.warning("Cursor has already been rolled forward.");
+                return;
+              }
+              verify(
+                  position.equals(key.watermark()),
+                  "Partial ordering of RDE deposits broken: %s %s",
+                  position,
+                  key);
+              ofy().save().entity(Cursor.create(key.cursor(), newPosition, registry)).now();
+              logger.infofmt(
+                  "Rolled forward %s on %s cursor to %s", key.cursor(), tld, newPosition);
+              RdeRevision.saveRevision(tld, watermark, mode, revision);
+              if (mode == RdeMode.FULL) {
+                taskEnqueuer.enqueue(
+                    getQueue("rde-upload"),
+                    withUrl(RdeUploadAction.PATH).param(RequestParameters.PARAM_TLD, tld));
+              } else {
+                taskEnqueuer.enqueue(
+                    getQueue("brda"),
+                    withUrl(BrdaCopyAction.PATH)
+                        .param(RequestParameters.PARAM_TLD, tld)
+                        .param(RdeModule.PARAM_WATERMARK, watermark.toString()));
+              }
+            });
   }
 }

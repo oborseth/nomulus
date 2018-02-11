@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -140,7 +140,7 @@ public class XmlTransformer {
    *         element doesn't match {@code expect}.
    * @see com.google.common.io.Files#asByteSource
    * @see com.google.common.io.Resources#asByteSource
-   * @see "http://errorprone.info/bugpattern/TypeParameterUnusedInFormals"
+   * @see <a href="http://errorprone.info/bugpattern/TypeParameterUnusedInFormals">TypeParameterUnusedInFormals</a>
    */
   public <T> T unmarshal(Class<T> clazz, InputStream stream) throws XmlException {
     try (InputStream autoClosingStream = stream) {
@@ -240,7 +240,7 @@ public class XmlTransformer {
    */
   public void marshalStrict(Object root, Result result) throws XmlException {
     try {
-      getMarshaller(schema, ImmutableMap.<String, Object>of())
+      getMarshaller(schema, ImmutableMap.of())
           .marshal(checkNotNull(root, "root"), checkNotNull(result, "result"));
     } catch (JAXBException e) {
       throw new XmlException(e);

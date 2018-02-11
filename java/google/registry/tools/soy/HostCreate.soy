@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-{namespace domain.registry.tools autoescape="strict"}
+{namespace domain.registry.tools}
 /**
  * Create host
  */
-{template .hostcreate}
+{template .hostcreate stricthtml="false"}
   {@param hostname: string}
   {@param? ipv4addresses: list<string>}
   {@param? ipv6addresses: list<string>}
@@ -28,14 +28,14 @@
         <host:create xmlns:host="urn:ietf:params:xml:ns:host-1.0">
           <host:name>{$hostname}</host:name>
           {if $ipv4addresses}
-            {foreach $ipv4 in $ipv4addresses}
+            {for $ipv4 in $ipv4addresses}
               <host:addr ip="v4">{$ipv4}</host:addr>
-            {/foreach}
+            {/for}
           {/if}
           {if $ipv6addresses}
-            {foreach $ipv6 in $ipv6addresses}
+            {for $ipv6 in $ipv6addresses}
               <host:addr ip="v6">{$ipv6}</host:addr>
-            {/foreach}
+            {/for}
           {/if}
         </host:create>
       </create>

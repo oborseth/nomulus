@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,35 +15,35 @@
 package google.registry.model;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.collect.Iterables.transform;
-import static google.registry.model.RoidSuffixes.getRoidSuffixForTld;
-import static google.registry.model.index.ForeignKeyIndex.loadAndGetKey;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.util.DateTimeUtils.isAtOrAfter;
 import static google.registry.util.DateTimeUtils.isBeforeOrAt;
 import static google.registry.util.DateTimeUtils.latestOf;
 
-import com.google.common.base.Function;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.Result;
+import com.googlecode.objectify.cmd.Query;
 import com.googlecode.objectify.util.ResultNow;
-import google.registry.config.RegistryEnvironment;
 import google.registry.model.EppResource.Builder;
+import google.registry.model.EppResource.BuilderWithTransferData;
 import google.registry.model.EppResource.ForeignKeyedEppResource;
+import google.registry.model.EppResource.ResourceWithTransferData;
 import google.registry.model.contact.ContactResource;
 import google.registry.model.domain.DomainApplication;
 import google.registry.model.domain.DomainBase;
 import google.registry.model.eppcommon.StatusValue;
-import google.registry.model.host.HostResource;
 import google.registry.model.index.ForeignKeyIndex;
 import google.registry.model.ofy.CommitLogManifest;
 import google.registry.model.ofy.CommitLogMutation;
+import google.registry.model.registry.Registry;
 import google.registry.model.transfer.TransferData;
 import google.registry.model.transfer.TransferStatus;
 import google.registry.util.FormattingLogger;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.Set;
+import java.util.function.Function;
 import javax.annotation.Nullable;
 import org.joda.time.DateTime;
 import org.joda.time.Interval;
@@ -53,39 +53,32 @@ public final class EppResourceUtils {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
 
-  /** Returns the full domain repoId of the format HEX-TLD for the specified long id and tld. */
-  public static String createDomainRoid(long repoId, String tld) {
-    return createRoid(repoId, getRoidSuffixForTld(tld));
+  /** Returns the full domain repoId in the format HEX-TLD for the specified long id and tld. */
+  public static String createDomainRepoId(long repoId, String tld) {
+    return createRepoId(repoId, Registry.get(tld).getRoidSuffix());
   }
 
-  /**
-   * Returns the full contact/host repoId of the format HEX-GOOGLE for the specified long repo id.
-   */
-  public static String createContactHostRoid(long repoId) {
-    return createRoid(
-        repoId, RegistryEnvironment.get().config().getContactAndHostRepositoryIdentifier());
-  }
-
-  private static String createRoid(long repoId, String roidSuffix) {
+  /** Returns the full repoId in the format HEX-TLD for the specified long id and ROID suffix. */
+  public static String createRepoId(long repoId, String roidSuffix) {
     // %X is uppercase hexadecimal.
     return String.format("%X-%s", repoId, roidSuffix);
   }
 
   /** Helper to call {@link EppResource#cloneProjectedAtTime} without warnings. */
   @SuppressWarnings("unchecked")
-  private static final <T extends EppResource> T cloneProjectedAtTime(T resource, DateTime now) {
+  private static <T extends EppResource> T cloneProjectedAtTime(T resource, DateTime now) {
     return (T) resource.cloneProjectedAtTime(now);
   }
 
   /**
-   * Loads the last created version of an {@link EppResource} from the datastore by foreign key.
+   * Loads the last created version of an {@link EppResource} from Datastore by foreign key.
    *
    * <p>Returns null if no resource with this foreign key was ever created, or if the most recently
    * created resource was deleted before time "now".
    *
    * <p>Loading an {@link EppResource} by itself is not sufficient to know its current state since
    * it may have various expirable conditions and status values that might implicitly change its
-   * state as time progresses even if it has not been updated in the datastore. Rather, the resource
+   * state as time progresses even if it has not been updated in Datastore. Rather, the resource
    * must be combined with a timestamp to view its current state. We use a global last updated
    * timestamp on the entire entity group (which is essentially free since all writes to the entity
    * group must be serialized anyways) to guarantee monotonically increasing write times, so
@@ -102,11 +95,13 @@ public final class EppResourceUtils {
     checkArgument(
         ForeignKeyedEppResource.class.isAssignableFrom(clazz),
         "loadByForeignKey may only be called for foreign keyed EPP resources");
-    Key<T> resourceKey = loadAndGetKey(clazz, foreignKey, now);
-    if (resourceKey == null) {
+    ForeignKeyIndex<T> fki =
+        ofy().load().type(ForeignKeyIndex.mapToFkiClass(clazz)).id(foreignKey).now();
+    // The value of fki.getResourceKey() might be null for hard-deleted prober data.
+    if (fki == null || isAtOrAfter(now, fki.getDeletionTime()) || fki.getResourceKey() == null) {
       return null;
     }
-    T resource = ofy().load().key(resourceKey).now();
+    T resource = ofy().load().key(fki.getResourceKey()).now();
     if (resource == null || isAtOrAfter(now, resource.getDeletionTime())) {
       return null;
     }
@@ -137,7 +132,7 @@ public final class EppResourceUtils {
   }
 
   /**
-   * Checks multiple {@link EppResource} objects from the datastore by unique ids.
+   * Checks multiple {@link EppResource} objects from Datastore by unique ids.
    *
    * <p>There are currently no resources that support checks and do not use foreign keys. If we need
    * to support that case in the future, we can loosen the type to allow any {@link EppResource} and
@@ -165,11 +160,15 @@ public final class EppResourceUtils {
    */
   public static <T extends EppResource> Iterable<T> queryNotDeleted(
       Class<T> clazz, DateTime now, String filterDefinition, Object filterValue) {
-    return transform(
-        ofy().load().type(clazz)
-            .filter(filterDefinition, filterValue)
-            .filter("deletionTime >", now.toDate()),
-        EppResourceUtils.<T>transformAtTime(now));
+    return ofy()
+        .load()
+        .type(clazz)
+        .filter(filterDefinition, filterValue)
+        .filter("deletionTime >", now.toDate())
+        .list()
+        .stream()
+        .map(EppResourceUtils.transformAtTime(now))
+        .collect(toImmutableSet());
   }
 
   /**
@@ -177,11 +176,7 @@ public final class EppResourceUtils {
    * Iterables.transform() over a collection of EppResources.
    */
   public static <T extends EppResource> Function<T, T> transformAtTime(final DateTime now) {
-    return new Function<T, T>() {
-      @Override
-      public T apply(T resource) {
-        return cloneProjectedAtTime(resource, now);
-      }};
+    return (T resource) -> cloneProjectedAtTime(resource, now);
   }
 
   /**
@@ -201,8 +196,8 @@ public final class EppResourceUtils {
   }
 
   /** Process an automatic transfer on a resource. */
-  public static void setAutomaticTransferSuccessProperties(
-      Builder<?, ?> builder, TransferData transferData) {
+  public static <B extends Builder<?, B> & BuilderWithTransferData<B>>
+      void setAutomaticTransferSuccessProperties(B builder, TransferData transferData) {
     checkArgument(TransferStatus.PENDING.equals(transferData.getTransferStatus()));
     builder.removeStatusValue(StatusValue.PENDING_TRANSFER)
         .setTransferData(transferData.asBuilder()
@@ -213,7 +208,7 @@ public final class EppResourceUtils {
             .setServerApproveAutorenewPollMessage(null)
             .build())
         .setLastTransferTime(transferData.getPendingTransferExpirationTime())
-        .setCurrentSponsorClientId(transferData.getGainingClientId());
+        .setPersistedCurrentSponsorClientId(transferData.getGainingClientId());
   }
 
   /**
@@ -222,8 +217,10 @@ public final class EppResourceUtils {
    *   <li>Process an automatic transfer.
    * </ul>
    */
-  public static <T extends EppResource> void projectResourceOntoBuilderAtTime(
-      T resource, Builder<?, ?> builder, DateTime now) {
+  public static <
+      T extends EppResource & ResourceWithTransferData,
+      B extends Builder<?, B> & BuilderWithTransferData<B>>
+          void projectResourceOntoBuilderAtTime(T resource, B builder, DateTime now) {
     TransferData transferData = resource.getTransferData();
     // If there's a pending transfer that has expired, process it.
     DateTime expirationTime = transferData.getPendingTransferExpirationTime();
@@ -240,20 +237,20 @@ public final class EppResourceUtils {
    * perform a single asynchronous key fetch operation.
    *
    * <p><b>Warning:</b> A resource can only be rolled backwards in time, not forwards; therefore
-   * {@code resource} should be whatever's currently in datastore.
+   * {@code resource} should be whatever's currently in Datastore.
    *
    * <p><b>Warning:</b> Revisions are granular to 24-hour periods. It's recommended that
    * {@code timestamp} be set to midnight. Otherwise you must take into consideration that under
    * certain circumstances, a resource might be restored to a revision on the previous day, even if
    * there were revisions made earlier on the same date as {@code timestamp}; however, a resource
-   * will never be restored to a revision occuring after {@code timestamp}. This behavior is due to
+   * will never be restored to a revision occurring after {@code timestamp}. This behavior is due to
    * the way {@link google.registry.model.translators.CommitLogRevisionsTranslatorFactory
    * CommitLogRevisionsTranslatorFactory} manages the {@link EppResource#revisions} field. Please
    * note however that the creation and deletion times of a resource are granular to the
    * millisecond.
    *
    * @return an asynchronous operation returning resource at {@code timestamp} or {@code null} if
-   *     if resource is deleted or not yet created
+   *     resource is deleted or not yet created
    */
   public static <T extends EppResource>
       Result<T> loadAtPointInTime(final T resource, final DateTime timestamp) {
@@ -269,19 +266,17 @@ public final class EppResourceUtils {
         (isAtOrAfter(timestamp, resource.getUpdateAutoTimestamp().getTimestamp()))
             ? new ResultNow<>(resource)
             : loadMostRecentRevisionAtTime(resource, timestamp);
-    return new Result<T>() {
-      @Override
-      public T now() {
-        T loadedResource = loadResult.now();
-        return loadedResource == null ? null
-            : (isActive(loadedResource, timestamp)
-                ? cloneProjectedAtTime(loadedResource, timestamp)
-                : null);
-      }};
+    return () -> {
+      T loadedResource = loadResult.now();
+      return (loadedResource == null) ? null
+          : (isActive(loadedResource, timestamp)
+              ? cloneProjectedAtTime(loadedResource, timestamp)
+              : null);
+    };
   }
 
   /**
-   * Returns an asynchronous result holding the most recent datastore revision of a given
+   * Returns an asynchronous result holding the most recent Datastore revision of a given
    * EppResource before or at the provided timestamp using the EppResource revisions map, falling
    * back to using the earliest revision or the resource as-is if there are no revisions.
    *
@@ -297,19 +292,16 @@ public final class EppResourceUtils {
     }
     final Result<CommitLogMutation> mutationResult =
         ofy().load().key(CommitLogMutation.createKey(revision, resourceKey));
-    return new Result<T>() {
-      @Override
-      public T now() {
-        CommitLogMutation mutation = mutationResult.now();
-        if (mutation != null) {
-          return ofy().load().fromEntity(mutation.getEntity());
-        }
-        logger.severefmt(
-            "Couldn't load mutation for revision at %s for %s, falling back to resource."
-                + " Revision: %s",
-            timestamp, resourceKey, revision);
-        return resource;
+    return () -> {
+      CommitLogMutation mutation = mutationResult.now();
+      if (mutation != null) {
+        return ofy().load().fromEntity(mutation.getEntity());
       }
+      logger.severefmt(
+          "Couldn't load mutation for revision at %s for %s, falling back to resource."
+              + " Revision: %s",
+          timestamp, resourceKey, revision);
+      return resource;
     };
   }
 
@@ -335,37 +327,33 @@ public final class EppResourceUtils {
   }
 
   /**
-   * Find keys of domains or applications that reference a specified contact or host.
+   * Returns a query for domains or applications that reference a specified contact or host.
    *
    * <p>This is an eventually consistent query.
    *
-   * @param clazz the referent type (contact or host)
    * @param key the referent key
    * @param now the logical time of the check
-   * @param limit max number of keys to return
    */
-  public static List<Key<DomainBase>> queryDomainsUsingResource(
-      Class<? extends EppResource> clazz, Key<? extends EppResource> key, DateTime now, int limit) {
-    checkArgument(ContactResource.class.equals(clazz) || HostResource.class.equals(clazz));
+  public static Query<DomainBase> queryForLinkedDomains(
+      Key<? extends EppResource> key, DateTime now) {
+    boolean isContactKey = key.getKind().equals(Key.getKind(ContactResource.class));
     return ofy()
         .load()
         .type(DomainBase.class)
-        .filter(clazz.equals(ContactResource.class) ? "allContacts.contact" : "nsHosts", key)
-        .filter("deletionTime >", now)
-        .limit(limit)
-        .keys()
-        .list();
+        .filter(isContactKey ? "allContacts.contact" : "nsHosts", key)
+        .filter("deletionTime >", now);
   }
 
-  /** Clone a contact or host with an eventually-consistent notion of LINKED. */
-  public static EppResource cloneResourceWithLinkedStatus(EppResource resource, DateTime now) {
-    Builder<?, ?> builder = resource.asBuilder();
-    if (queryDomainsUsingResource(resource.getClass(), Key.create(resource), now, 1).isEmpty()) {
-      builder.removeStatusValue(StatusValue.LINKED);
-    } else {
-      builder.addStatusValue(StatusValue.LINKED);
-    }
-    return builder.build();
+  /**
+   * Returns whether the given contact or host is linked to (that is, referenced by) a domain.
+   *
+   * <p>This is an eventually consistent query.
+   *
+   * @param key the referent key
+   * @param now the logical time of the check
+   */
+  public static boolean isLinked(Key<? extends EppResource> key, DateTime now) {
+    return queryForLinkedDomains(key, now).limit(1).count() > 0;
   }
 
   /** Exception to throw when failing to parse a repo id. */

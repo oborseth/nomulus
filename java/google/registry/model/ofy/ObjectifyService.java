@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,9 +14,8 @@
 
 package google.registry.model.ofy;
 
-import static com.google.appengine.api.memcache.ErrorHandlers.getConsistentLogAndContinue;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.base.Predicates.not;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.googlecode.objectify.ObjectifyService.factory;
 import static google.registry.util.TypeUtils.hasAnnotation;
 
@@ -24,7 +23,9 @@ import com.google.appengine.api.datastore.AsyncDatastoreService;
 import com.google.appengine.api.datastore.DatastoreServiceConfig;
 import com.google.appengine.api.datastore.DatastoreServiceFactory;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.Iterables;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Streams;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.Objectify;
 import com.googlecode.objectify.ObjectifyFactory;
@@ -35,6 +36,7 @@ import com.googlecode.objectify.impl.translate.opt.joda.MoneyStringTranslatorFac
 import google.registry.config.RegistryEnvironment;
 import google.registry.model.EntityClasses;
 import google.registry.model.ImmutableObject;
+import google.registry.model.translators.BloomFilterOfStringTranslatorFactory;
 import google.registry.model.translators.CidrAddressBlockTranslatorFactory;
 import google.registry.model.translators.CommitLogRevisionsTranslatorFactory;
 import google.registry.model.translators.CreateAutoTimestampTranslatorFactory;
@@ -43,9 +45,7 @@ import google.registry.model.translators.DurationTranslatorFactory;
 import google.registry.model.translators.InetAddressTranslatorFactory;
 import google.registry.model.translators.ReadableInstantUtcTranslatorFactory;
 import google.registry.model.translators.UpdateAutoTimestampTranslatorFactory;
-import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.logging.Level;
 
 /**
  * An instance of Ofy, obtained via {@code #ofy()}, should be used to access all persistable
@@ -102,8 +102,8 @@ public class ObjectifyService {
 
       @Override
       protected AsyncDatastoreService createRawAsyncDatastoreService(DatastoreServiceConfig cfg) {
-        // In the unit test environment, wrap the datastore service in a proxy that can be used to
-        // examine the number of requests sent to datastore.
+        // In the unit test environment, wrap the Datastore service in a proxy that can be used to
+        // examine the number of requests sent to Datastore.
         AsyncDatastoreService service = super.createRawAsyncDatastoreService(cfg);
         return RegistryEnvironment.get().equals(RegistryEnvironment.UNITTEST)
             ? new RequestCapturingAsyncDatastoreService(service)
@@ -113,14 +113,12 @@ public class ObjectifyService {
     // Translators must be registered before any entities can be registered.
     registerTranslators();
     registerEntityClasses(EntityClasses.ALL_CLASSES);
-
-    // Set the memcache error handler so that we don't see internally logged errors.
-    factory().setMemcacheErrorHandler(getConsistentLogAndContinue(Level.INFO));
   }
 
   /** Register translators that allow less common types to be stored directly in Datastore. */
   private static void registerTranslators() {
-    for (TranslatorFactory<?> translatorFactory : Arrays.asList(
+    for (TranslatorFactory<?> translatorFactory : ImmutableList.of(
+        new BloomFilterOfStringTranslatorFactory(),
         new CidrAddressBlockTranslatorFactory(),
         new CommitLogRevisionsTranslatorFactory(),
         new CreateAutoTimestampTranslatorFactory(),
@@ -134,15 +132,18 @@ public class ObjectifyService {
     }
   }
 
-  /** Register classes that can be persisted via Objectify as datastore entities. */
+  /** Register classes that can be persisted via Objectify as Datastore entities. */
   private static void registerEntityClasses(
-      Iterable<Class<? extends ImmutableObject>> entityClasses) {
+      ImmutableSet<Class<? extends ImmutableObject>> entityClasses) {
     // Register all the @Entity classes before any @EntitySubclass classes so that we can check
     // that every @Entity registration is a new kind and every @EntitySubclass registration is not.
     // This is future-proofing for Objectify 5.x where the registration logic gets less lenient.
-    for (Class<?> clazz : Iterables.concat(
-        Iterables.filter(entityClasses, hasAnnotation(Entity.class)),
-        Iterables.filter(entityClasses, not(hasAnnotation(Entity.class))))) {
+
+    for (Class<?> clazz :
+        Streams.concat(
+                entityClasses.stream().filter(hasAnnotation(Entity.class)),
+                entityClasses.stream().filter(hasAnnotation(Entity.class).negate()))
+            .collect(toImmutableSet())) {
       String kind = Key.getKind(clazz);
       boolean registered = factory().getMetadata(kind) != null;
       if (clazz.isAnnotationPresent(Entity.class)) {

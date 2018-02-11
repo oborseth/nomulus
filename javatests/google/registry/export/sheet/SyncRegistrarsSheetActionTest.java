@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ package google.registry.export.sheet;
 
 import static com.google.common.net.MediaType.PLAIN_TEXT_UTF_8;
 import static com.google.common.truth.Truth.assertThat;
-import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -24,13 +23,13 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
 
-import com.google.common.base.Optional;
-import google.registry.model.server.Lock;
 import google.registry.testing.AppEngineRule;
+import google.registry.testing.FakeLockHandler;
 import google.registry.testing.FakeResponse;
-import java.util.concurrent.Callable;
+import java.util.Optional;
 import javax.annotation.Nullable;
 import org.joda.time.Duration;
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -49,15 +48,21 @@ public class SyncRegistrarsSheetActionTest {
   private final FakeResponse response = new FakeResponse();
   private final SyncRegistrarsSheet syncRegistrarsSheet = mock(SyncRegistrarsSheet.class);
 
+  private SyncRegistrarsSheetAction action;
+
   private void runAction(@Nullable String idConfig, @Nullable String idParam) {
-    SyncRegistrarsSheetAction action = new SyncRegistrarsSheetAction();
+    action.idConfig = Optional.ofNullable(idConfig);
+    action.idParam = Optional.ofNullable(idParam);
+    action.run();
+  }
+
+  @Before
+  public void setUp() {
+    action = new SyncRegistrarsSheetAction();
     action.response = response;
     action.syncRegistrarsSheet = syncRegistrarsSheet;
-    action.idConfig = Optional.fromNullable(idConfig);
-    action.idParam = Optional.fromNullable(idParam);
-    action.interval = Duration.standardHours(1);
     action.timeout = Duration.standardHours(1);
-    action.run();
+    action.lockHandler = new FakeLockHandler(true);
   }
 
   @Test
@@ -69,22 +74,22 @@ public class SyncRegistrarsSheetActionTest {
 
   @Test
   public void testPost_withoutParams_runsSyncWithDefaultIdAndChecksIfModified() throws Exception {
-    when(syncRegistrarsSheet.wasRegistrarsModifiedInLast(any(Duration.class))).thenReturn(true);
+    when(syncRegistrarsSheet.wereRegistrarsModified()).thenReturn(true);
     runAction("jazz", null);
     assertThat(response.getStatus()).isEqualTo(200);
     assertThat(response.getContentType()).isEqualTo(PLAIN_TEXT_UTF_8);
     assertThat(response.getPayload()).startsWith("OK");
-    verify(syncRegistrarsSheet).wasRegistrarsModifiedInLast(any(Duration.class));
+    verify(syncRegistrarsSheet).wereRegistrarsModified();
     verify(syncRegistrarsSheet).run(eq("jazz"));
     verifyNoMoreInteractions(syncRegistrarsSheet);
   }
 
   @Test
   public void testPost_noModificationsToRegistrarEntities_doesNothing() throws Exception {
-    when(syncRegistrarsSheet.wasRegistrarsModifiedInLast(any(Duration.class))).thenReturn(false);
+    when(syncRegistrarsSheet.wereRegistrarsModified()).thenReturn(false);
     runAction("NewRegistrar", null);
     assertThat(response.getPayload()).startsWith("NOTMODIFIED");
-    verify(syncRegistrarsSheet).wasRegistrarsModifiedInLast(any(Duration.class));
+    verify(syncRegistrarsSheet).wereRegistrarsModified();
     verifyNoMoreInteractions(syncRegistrarsSheet);
   }
 
@@ -98,14 +103,8 @@ public class SyncRegistrarsSheetActionTest {
 
   @Test
   public void testPost_failToAquireLock_servletDoesNothingAndReturns() throws Exception {
-    String lockName = "Synchronize registrars sheet: foobar";
-    Lock.executeWithLocks(new Callable<Void>() {
-      @Override
-      public Void call() throws Exception {
-        runAction(null, "foobar");
-        return null;
-      }
-    }, SyncRegistrarsSheetAction.class, "", Duration.standardHours(1), lockName);
+    action.lockHandler = new FakeLockHandler(false);
+    runAction(null, "foobar");
     assertThat(response.getPayload()).startsWith("LOCKED");
     verifyZeroInteractions(syncRegistrarsSheet);
   }

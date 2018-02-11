@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -64,7 +64,7 @@ registry.registrar.BrainFrame = function(origin, containerId) {
   this.container_ = goog.dom.getRequiredElement(containerId);
 
   /**
-   * Last known height of {@code container_}.
+   * Last known height of `container_`.
    * @private {number}
    */
   this.containerHeight_ = 0;
@@ -79,7 +79,7 @@ registry.registrar.BrainFrame = function(origin, containerId) {
   this.listen(this.resizeTimer_, goog.Timer.TICK, this.onResizeTimer_);
 
   /**
-   * Form that wraps {@code container_}.
+   * Form that wraps `container_`.
    * @private {?Element}
    * @const
    */
@@ -123,7 +123,7 @@ registry.registrar.BrainFrame.prototype.onMessage_ = function(e) {
     throw new Error(
         'Message origin is "' + msg.origin + '" but wanted: ' + this.origin_);
   }
-  var data = goog.json.parse(msg.data);
+  var data = /** @type {!Object} */ (JSON.parse(msg.data));
   switch (goog.object.get(data, 'type')) {
     case registry.registrar.BrainFrame.MessageType.TOKEN_RESPONSE:
       goog.global.braintree.setup(goog.object.get(data, 'token'), 'dropin', {
@@ -204,7 +204,7 @@ registry.registrar.BrainFrame.prototype.onPaymentMethod_ = function(pm) {
 
 /**
  * Sends message to parent iframe.
- * @param {...*} var_args Passed along to {@code goog.object.create}.
+ * @param {...*} var_args Passed along to `goog.object.create`.
  * @private
  */
 registry.registrar.BrainFrame.prototype.send_ = function(var_args) {
@@ -216,7 +216,7 @@ registry.registrar.BrainFrame.prototype.send_ = function(var_args) {
 
 
 /**
- * Delegates to {@code window.parent.postMessage}. This method exists because
+ * Delegates to `window.parent.postMessage`. This method exists because
  * IE will not allow us to mock methods on the window object.
  * @param {string} message
  * @param {string} origin

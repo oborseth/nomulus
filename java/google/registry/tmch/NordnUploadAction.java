@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,17 +34,18 @@ import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.urlfetch.HTTPRequest;
 import com.google.appengine.api.urlfetch.HTTPResponse;
 import com.google.appengine.api.urlfetch.URLFetchService;
-import com.google.common.base.Optional;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.request.Action;
 import google.registry.request.Parameter;
 import google.registry.request.RequestParameters;
+import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
 import google.registry.util.FormattingLogger;
 import google.registry.util.UrlFetchException;
 import java.io.IOException;
 import java.net.URL;
 import java.util.List;
+import java.util.Optional;
 import java.util.Random;
 import javax.inject.Inject;
 import org.joda.time.DateTime;
@@ -57,7 +58,12 @@ import org.joda.time.Duration;
  *
  * @see NordnVerifyAction
  */
-@Action(path = NordnUploadAction.PATH, method = Action.Method.POST, automaticallyPrintOk = true)
+@Action(
+  path = NordnUploadAction.PATH,
+  method = Action.Method.POST,
+  automaticallyPrintOk = true,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public final class NordnUploadAction implements Runnable {
 
   static final String PATH = "/_dr/task/nordnUpload";
@@ -121,7 +127,8 @@ public final class NordnUploadAction implements Runnable {
    * <p>Idempotency: If the exact same LORDN report is uploaded twice, the MarksDB server will
    * return the same confirmation number.
    *
-   * @see "http://tools.ietf.org/html/draft-lozano-tmch-func-spec-08#section-6.3"
+   * @see <a href="http://tools.ietf.org/html/draft-lozano-tmch-func-spec-08#section-6.3">
+   *     TMCH functional specifications - LORDN File</a>
    */
   private void uploadCsvToLordn(String urlPath, String csvData) throws IOException {
     String url = tmchMarksdbUrl + urlPath;

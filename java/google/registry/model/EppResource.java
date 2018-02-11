@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,49 +14,44 @@
 
 package google.registry.model;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Sets.difference;
 import static com.google.common.collect.Sets.union;
-import static google.registry.util.CollectionUtils.difference;
+import static google.registry.util.CollectionUtils.nullToEmpty;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.annotation.Id;
 import com.googlecode.objectify.annotation.Index;
 import google.registry.model.eppcommon.StatusValue;
-import google.registry.model.eppoutput.EppResponse.ResponseData;
 import google.registry.model.ofy.CommitLogManifest;
 import google.registry.model.transfer.TransferData;
+import java.util.Optional;
 import java.util.Set;
-import javax.xml.bind.annotation.XmlElement;
-import javax.xml.bind.annotation.XmlTransient;
 import org.joda.time.DateTime;
 
-/** An Epp entity object such as a contact or a host. */
-@XmlTransient
-public abstract class EppResource extends BackupGroupRoot implements Buildable, ResponseData {
+/** An EPP entity object (i.e. a domain, application, contact, or host). */
+public abstract class EppResource extends BackupGroupRoot implements Buildable {
 
   /**
    * Unique identifier in the registry for this resource.
    *
    * <p>This is in the (\w|_){1,80}-\w{1,8} format specified by RFC 5730 for roidType.
+   * @see <a href="https://tools.ietf.org/html/rfc5730">RFC 5730</a>
    */
   @Id
-  @XmlElement(name = "roid")
   String repoId;
 
   /** The ID of the registrar that is currently sponsoring this resource. */
   @Index
-  @XmlElement(name = "clID")
   String currentSponsorClientId;
 
   /** The ID of the registrar that created this resource. */
-  @XmlElement(name = "crID")
   String creationClientId;
 
   /**
@@ -66,14 +61,12 @@ public abstract class EppResource extends BackupGroupRoot implements Buildable, 
    * edits; it only includes EPP-visible modifications such as {@literal <update>}. Can be null if
    * the resource has never been modified.
    */
-  @XmlElement(name = "upID")
   String lastEppUpdateClientId;
 
   /** The time when this resource was created. */
   // Map the method to XML, not the field, because if we map the field (with an adaptor class) it
   // will never be omitted from the xml even if the timestamp inside creationTime is null and we
   // return null from the adaptor. (Instead it gets written as an empty tag.)
-  @XmlTransient
   CreateAutoTimestamp creationTime = CreateAutoTimestamp.create(null);
 
   /**
@@ -90,7 +83,6 @@ public abstract class EppResource extends BackupGroupRoot implements Buildable, 
    * now.
    */
   @Index
-  @XmlTransient
   DateTime deletionTime;
 
 
@@ -101,24 +93,10 @@ public abstract class EppResource extends BackupGroupRoot implements Buildable, 
    * edits; it only includes EPP-visible modifications such as {@literal <update>}. Can be null if
    * the resource has never been modified.
    */
-  @XmlElement(name = "upDate")
   DateTime lastEppUpdateTime;
-
-  /**
-   * The time that this resource was last transferred.
-   *
-   * <p>Can be null if the resource has never been transferred.
-   */
-  // Map the method to XML, not the field, so subclasses can override it.
-  @XmlTransient
-  DateTime lastTransferTime;
 
   /** Status values associated with this resource. */
   Set<StatusValue> status;
-
-  /** Data about any pending or past transfers on this contact. */
-  @XmlTransient
-  TransferData transferData;
 
   /**
    * Sorted map of {@link DateTime} keys (modified time) to {@link CommitLogManifest} entries.
@@ -128,14 +106,12 @@ public abstract class EppResource extends BackupGroupRoot implements Buildable, 
    *
    * @see google.registry.model.translators.CommitLogRevisionsTranslatorFactory
    */
-  @XmlTransient
   ImmutableSortedMap<DateTime, Key<CommitLogManifest>> revisions = ImmutableSortedMap.of();
 
   public final String getRepoId() {
     return repoId;
   }
 
-  @XmlElement(name = "crDate")
   public final DateTime getCreationTime() {
     return creationTime.getTimestamp();
   }
@@ -152,26 +128,18 @@ public abstract class EppResource extends BackupGroupRoot implements Buildable, 
     return lastEppUpdateClientId;
   }
 
-  public final String getCurrentSponsorClientId() {
+  /**
+   * Get the stored value of {@link #currentSponsorClientId}.
+   *
+   * <p>For subordinate hosts, this value may not represent the actual current client id, which is
+   * the client id of the superordinate host. For all other resources this is the true client id.
+   */
+  public final String getPersistedCurrentSponsorClientId() {
     return currentSponsorClientId;
   }
 
   public final ImmutableSet<StatusValue> getStatusValues() {
     return nullToEmptyImmutableCopy(status);
-  }
-
-  public final TransferData getTransferData() {
-    return Optional.fromNullable(transferData).or(TransferData.EMPTY);
-  }
-
-  /** Returns whether there is any transferData. */
-  public final boolean hasTransferData() {
-    return transferData != null;
-  }
-
-  @XmlElement(name = "trDate")
-  public DateTime getLastTransferTime() {
-    return lastTransferTime;
   }
 
   public final DateTime getDeletionTime() {
@@ -195,6 +163,26 @@ public abstract class EppResource extends BackupGroupRoot implements Buildable, 
   /** EppResources that are loaded via foreign keys should implement this marker interface. */
   public interface ForeignKeyedEppResource {}
 
+  /** An interface for resources that have transfer data. */
+  public interface ResourceWithTransferData {
+    TransferData getTransferData();
+
+    /**
+     * The time that this resource was last transferred.
+     *
+     * <p>Can be null if the resource has never been transferred.
+     */
+    DateTime getLastTransferTime();
+  }
+
+  /** An interface for builders of resources that have transfer data. */
+  public interface BuilderWithTransferData<B extends BuilderWithTransferData<B>> {
+    B setTransferData(TransferData transferData);
+
+    /** Set the time when this resource was transferred. */
+    B setLastTransferTime(DateTime lastTransferTime);
+  }
+
   /** Abstract builder for {@link EppResource} types. */
   public abstract static class Builder<T extends EppResource, B extends Builder<?, ?>>
       extends GenericBuilder<T, B> {
@@ -214,7 +202,8 @@ public abstract class EppResource extends BackupGroupRoot implements Buildable, 
      * normal EPP flows.
      */
     public B setCreationTime(DateTime creationTime) {
-      checkState(getInstance().creationTime.timestamp == null,
+      checkState(
+          getInstance().creationTime.getTimestamp() == null,
           "creationTime can only be set once for EppResource.");
       getInstance().creationTime = CreateAutoTimestamp.create(creationTime);
       return thisCastToDerived();
@@ -234,7 +223,7 @@ public abstract class EppResource extends BackupGroupRoot implements Buildable, 
     }
 
     /** Set the current sponsoring registrar. */
-    public B setCurrentSponsorClientId(String currentSponsorClientId) {
+    public B setPersistedCurrentSponsorClientId(String currentSponsorClientId) {
       getInstance().currentSponsorClientId = currentSponsorClientId;
       return thisCastToDerived();
     }
@@ -257,14 +246,16 @@ public abstract class EppResource extends BackupGroupRoot implements Buildable, 
       return thisCastToDerived();
     }
 
-    /** Set the time when this resource was transferred. */
-    public B setLastTransferTime(DateTime lastTransferTime) {
-      getInstance().lastTransferTime = lastTransferTime;
-      return thisCastToDerived();
-    }
-
     /** Set this resource's status values. */
     public B setStatusValues(ImmutableSet<StatusValue> statusValues) {
+      Class<? extends EppResource> resourceClass = getInstance().getClass();
+      for (StatusValue statusValue : nullToEmpty(statusValues)) {
+        checkArgument(
+            statusValue.isAllowedOn(resourceClass),
+            "The %s status cannot be set on %s",
+            statusValue,
+            resourceClass.getSimpleName());
+      }
       getInstance().status = statusValues;
       return thisCastToDerived();
     }
@@ -291,43 +282,22 @@ public abstract class EppResource extends BackupGroupRoot implements Buildable, 
           difference(getInstance().getStatusValues(), statusValues)));
     }
 
-    /** Set this resource's transfer data. */
-    public B setTransferData(TransferData transferData) {
-      getInstance().transferData = transferData;
-      return thisCastToDerived();
-    }
-
     /** Set this resource's repoId. */
     public B setRepoId(String repoId) {
       getInstance().repoId = repoId;
       return thisCastToDerived();
     }
 
-    /** Wipe out any personal information in the resource. */
-    public B wipeOut() {
-      return thisCastToDerived();
-    }
-
     /** Build the resource, nullifying empty strings and sets and setting defaults. */
     @Override
     public T build() {
-      // An EPP object has an implicit status of OK if no pending operations or prohibitions exist
-      // (i.e. no other status value besides LINKED is present).
+      // An EPP object has an implicit status of OK if no pending operations or prohibitions exist.
       removeStatusValue(StatusValue.OK);
-      if (difference(getInstance().getStatusValues(), StatusValue.LINKED).isEmpty()) {
+      if (getInstance().getStatusValues().isEmpty()) {
         addStatusValue(StatusValue.OK);
       }
-      return buildWithoutImplicitStatusValues();
-    }
-
-    /** Build the resource, nullifying empty strings and sets and setting defaults. */
-    public T buildWithoutImplicitStatusValues() {
-      // If TransferData is totally empty, set it to null.
-      if (TransferData.EMPTY.equals(getInstance().transferData)) {
-        setTransferData(null);
-      }
       // If there is no deletion time, set it to END_OF_TIME.
-      setDeletionTime(Optional.fromNullable(getInstance().deletionTime).or(END_OF_TIME));
+      setDeletionTime(Optional.ofNullable(getInstance().deletionTime).orElse(END_OF_TIME));
       return ImmutableObject.cloneEmptyToNull(super.build());
     }
   }

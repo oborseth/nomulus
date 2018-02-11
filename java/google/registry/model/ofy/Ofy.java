@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,20 +16,18 @@ package google.registry.model.ofy;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.base.Predicates.notNull;
 import static com.google.common.collect.Maps.uniqueIndex;
 import static com.googlecode.objectify.ObjectifyService.ofy;
+import static google.registry.config.RegistryConfig.getBaseOfyRetryDuration;
 import static google.registry.util.CollectionUtils.union;
-import static google.registry.util.ObjectifyUtils.OBJECTS_TO_KEYS;
 
 import com.google.appengine.api.datastore.DatastoreFailureException;
 import com.google.appengine.api.datastore.DatastoreTimeoutException;
-import com.google.appengine.api.datastore.ReadPolicy.Consistency;
 import com.google.appengine.api.taskqueue.TransientFailureException;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
+import com.google.common.collect.Streams;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.Objectify;
 import com.googlecode.objectify.ObjectifyFactory;
@@ -37,7 +35,6 @@ import com.googlecode.objectify.Work;
 import com.googlecode.objectify.cmd.Deleter;
 import com.googlecode.objectify.cmd.Loader;
 import com.googlecode.objectify.cmd.Saver;
-import google.registry.config.RegistryEnvironment;
 import google.registry.model.annotations.NotBackedUp;
 import google.registry.model.annotations.VirtualEntity;
 import google.registry.model.ofy.ReadOnlyWork.KillTransactionException;
@@ -63,15 +60,6 @@ import org.joda.time.Duration;
 public class Ofy {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
-
-  /**
-   * Recommended memcache expiration time, which is one hour, specified in seconds.
-   *
-   * <p>This value should used as a cache expiration time for any entities annotated with an
-   * Objectify {@code @Cache} annotation, to put an upper bound on unlikely-but-possible divergence
-   * between memcache and datastore when a memcache write fails.
-   */
-  public static final int RECOMMENDED_MEMCACHE_EXPIRATION = 3600;
 
   /** Default clock for transactions that don't provide one. */
   @NonFinalForTesting
@@ -108,6 +96,16 @@ public class Ofy {
     return ofy().factory();
   }
 
+  /**
+   * Returns keys read by Objectify during this transaction.
+   *
+   * <p>This won't include the keys of asynchronous save and delete operations that haven't been
+   * reaped.
+   */
+  public ImmutableSet<Key<?>> getSessionKeys() {
+    return ((SessionKeyExposingObjectify) ofy()).getSessionKeys();
+  }
+
   /** Clears the session cache. */
   public void clearSessionCache() {
     ofy().clear();
@@ -121,12 +119,9 @@ public class Ofy {
     checkState(inTransaction(), "Must be called in a transaction");
   }
 
+  /** Load from Datastore. */
   public Loader load() {
     return ofy().load();
-  }
-
-  public Loader loadEventuallyConsistent() {
-    return ofy().consistency(Consistency.EVENTUAL).load();
   }
 
   /**
@@ -139,7 +134,7 @@ public class Ofy {
       @Override
       protected void handleDeletion(Iterable<Key<?>> keys) {
         assertInTransaction();
-        checkState(Iterables.all(keys, notNull()), "Can't delete a null key.");
+        checkState(Streams.stream(keys).allMatch(Objects::nonNull), "Can't delete a null key.");
         checkProhibitedAnnotations(keys, NotBackedUp.class, VirtualEntity.class);
         TRANSACTION_INFO.get().putDeletes(keys);
       }
@@ -147,12 +142,17 @@ public class Ofy {
   }
 
   /**
-   * Delete, without any augmentations.
+   * Delete, without any augmentations except to check that we're not saving any virtual entities.
    *
    * <p>No backups get written.
    */
   public Deleter deleteWithoutBackup() {
-    return ofy().delete();
+    return new AugmentedDeleter() {
+      @Override
+      protected void handleDeletion(Iterable<Key<?>> keys) {
+        checkProhibitedAnnotations(keys, VirtualEntity.class);
+      }
+    };
   }
 
   /**
@@ -166,9 +166,10 @@ public class Ofy {
       @Override
       protected void handleSave(Iterable<?> entities) {
         assertInTransaction();
-        checkState(Iterables.all(entities, notNull()), "Can't save a null entity.");
+        checkState(
+            Streams.stream(entities).allMatch(Objects::nonNull), "Can't save a null entity.");
         checkProhibitedAnnotations(entities, NotBackedUp.class, VirtualEntity.class);
-        ImmutableMap<Key<?>, ?> keysToEntities = uniqueIndex(entities, OBJECTS_TO_KEYS);
+        ImmutableMap<Key<?>, ?> keysToEntities = uniqueIndex(entities, Key::create);
         TRANSACTION_INFO.get().putSaves(keysToEntities);
       }
     };
@@ -198,11 +199,39 @@ public class Ofy {
     return inTransaction() ? work.run() : transactNew(work);
   }
 
+  /**
+   * Execute a transaction.
+   *
+   * <p>This overload is used for transactions that don't return a value, formerly implemented using
+   * VoidWork.
+   */
+  public void transact(Runnable work) {
+    transact(
+        () -> {
+          work.run();
+          return null;
+        });
+  }
+
   /** Pause the current transaction (if any) and complete this one before returning to it. */
   public <R> R transactNew(Work<R> work) {
     // Wrap the Work in a CommitLoggedWork so that we can give transactions a frozen view of time
     // and maintain commit logs for them.
     return transactCommitLoggedWork(new CommitLoggedWork<>(work, getClock()));
+  }
+
+  /**
+   * Pause the current transaction (if any) and complete this one before returning to it.
+   *
+   * <p>This overload is used for transactions that don't return a value, formerly implemented using
+   * VoidWork.
+   */
+  public void transactNew(Runnable work) {
+    transactNew(
+        () -> {
+          work.run();
+          return null;
+        });
   }
 
   /**
@@ -212,7 +241,7 @@ public class Ofy {
    */
   @VisibleForTesting
   <R> R transactCommitLoggedWork(CommitLoggedWork<R> work) {
-    long baseRetryMillis = RegistryEnvironment.get().config().getBaseOfyRetryDuration().getMillis();
+    long baseRetryMillis = getBaseOfyRetryDuration().getMillis();
     for (long attempt = 0, sleepMillis = baseRetryMillis;
         true;
         attempt++, sleepMillis *= 2) {
@@ -225,7 +254,7 @@ public class Ofy {
           | DatastoreFailureException e) {
         // TransientFailureExceptions come from task queues and always mean nothing committed.
         // TimestampInversionExceptions are thrown by our code and are always retryable as well.
-        // However, datastore exceptions might get thrown even if the transaction succeeded.
+        // However, Datastore exceptions might get thrown even if the transaction succeeded.
         if ((e instanceof DatastoreTimeoutException || e instanceof DatastoreFailureException)
             && checkIfAlreadySucceeded(work)) {
           return work.getResult();
@@ -244,26 +273,24 @@ public class Ofy {
    * its own retryable read-only transaction.
    */
   private <R> Boolean checkIfAlreadySucceeded(final CommitLoggedWork<R> work) {
-      return work.hasRun() && transactNewReadOnly(new Work<Boolean>() {
-        @Override
-        public Boolean run() {
-          CommitLogManifest manifest = work.getManifest();
-          if (manifest == null) {
-            // Work ran but no commit log was created. This might mean that the transaction did not
-            // write anything to datastore. We can safely retry because it only reads. (Although the
-            // transaction might have written a task to a queue, we consider that safe to retry too
-            // since we generally assume that tasks might be doubly executed.) Alternatively it
-            // might mean that the transaction wrote to datastore but turned off commit logs by
-            // exclusively using save/deleteWithoutBackups() rather than save/delete(). Although we
-            // have no hard proof that retrying is safe, we use these methods judiciously and it is
-            // reasonable to assume that if the transaction really did succeed that the retry will
-            // either be idempotent or will fail with a non-transient error.
-            return false;
-          }
-          return Objects.equals(
-              union(work.getMutations(), manifest),
-              ImmutableSet.copyOf(ofy().load().ancestor(manifest)));
-        }});
+      return work.hasRun() && transactNewReadOnly(() -> {
+        CommitLogManifest manifest = work.getManifest();
+        if (manifest == null) {
+          // Work ran but no commit log was created. This might mean that the transaction did not
+          // write anything to Datastore. We can safely retry because it only reads. (Although the
+          // transaction might have written a task to a queue, we consider that safe to retry too
+          // since we generally assume that tasks might be doubly executed.) Alternatively it
+          // might mean that the transaction wrote to Datastore but turned off commit logs by
+          // exclusively using save/deleteWithoutBackups() rather than save/delete(). Although we
+          // have no hard proof that retrying is safe, we use these methods judiciously and it is
+          // reasonable to assume that if the transaction really did succeed that the retry will
+          // either be idempotent or will fail with a non-transient error.
+          return false;
+        }
+        return Objects.equals(
+            union(work.getMutations(), manifest),
+            ImmutableSet.copyOf(load().ancestor(manifest)));
+      });
   }
 
   /** A read-only transaction is useful to get strongly consistent reads at a shared timestamp. */
@@ -295,7 +322,7 @@ public class Ofy {
   /**
    * Execute some work with a fresh session cache.
    *
-   * <p>This is useful in cases where we want to load the latest possible data from datastore but
+   * <p>This is useful in cases where we want to load the latest possible data from Datastore but
    * don't need point-in-time consistency across loads and consequently don't need a transaction.
    * Note that unlike a transaction's fresh session cache, the contents of this cache will be
    * discarded once the work completes, rather than being propagated into the enclosing session.

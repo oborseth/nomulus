@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -48,6 +48,14 @@ public abstract class BaseFee extends ImmutableObject {
     EAP("Early Access Period, fee expires: %s"),
     RENEW("renew"),
     RESTORE("restore"),
+    /**
+     * A transfer fee.
+     *
+     * <p>These are not used by the default system, in which the only fee associated with a transfer
+     * is the RENEW fee. These exist so that custom pricing logic can create a custom transfer fee
+     * if desired.
+     */
+    TRANSFER("transfer"),
     UPDATE("update"),
     CREDIT("%s credit");
 
@@ -105,7 +113,8 @@ public abstract class BaseFee extends ImmutableObject {
    * must always be negative. Essentially, they are the same thing, just with different sign.
    * However, we need them to be separate classes for proper JAXB handling.
    *
-   * @see "https://tools.ietf.org/html/draft-brown-epp-fees-03#section-2.4"
+   * @see <a href="https://tools.ietf.org/html/draft-brown-epp-fees-03#section-2.4">
+   *     Registry Fee Extension for EPP - Fees and Credits</a>
    */
   public BigDecimal getCost() {
     return cost;
@@ -122,11 +131,6 @@ public abstract class BaseFee extends ImmutableObject {
   public Range<DateTime> getValidDateRange() {
     checkState(hasValidDateRange());
     return validDateRange;
-  }
-
-  protected void generateDescription(Object... args) {
-    checkState(type != null);
-    description = type.renderDescription(args);
   }
 
   public boolean hasZeroCost() {

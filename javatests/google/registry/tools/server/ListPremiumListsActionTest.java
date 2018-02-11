@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,8 +16,7 @@ package google.registry.tools.server;
 
 import static google.registry.testing.DatastoreHelper.persistPremiumList;
 
-import com.google.common.base.Optional;
-import google.registry.model.registry.label.PremiumList;
+import java.util.Optional;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -35,10 +34,6 @@ public class ListPremiumListsActionTest extends ListActionTestCase {
   public void init() throws Exception {
     persistPremiumList("xn--q9jyb4c", "rich,USD 100");
     persistPremiumList("how", "richer,JPY 5000");
-    PremiumList.get("how").get().asBuilder()
-        .setDescription("foobar")
-        .build()
-        .saveAndUpdateEntries();
     action = new ListPremiumListsAction();
   }
 

@@ -1,30 +1,28 @@
 package(
-    default_visibility = ["//java/google/registry:registry_project"],
+    default_visibility = ["//visibility:public"],
 )
 
 licenses(["notice"])  # Apache 2.0
-
 
 java_library(
     name = "sheet",
     srcs = glob(["*.java"]),
     deps = [
-        "//java/com/google/api/client/googleapis/auth/oauth2",
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//java/com/google/common/io",
-        "//java/com/google/common/net",
-        "//java/com/google/gdata",
-        "//java/com/google/gdata:spreadsheet",
-        "//third_party/java/appengine:appengine-api",
-        "//third_party/java/dagger",
-        "//third_party/java/joda_time",
-        "//third_party/java/jsr305_annotations",
-        "//third_party/java/jsr330_inject",
-        "//third_party/java/servlet/servlet_api",
         "//java/google/registry/config",
         "//java/google/registry/model",
         "//java/google/registry/request",
+        "//java/google/registry/request/auth",
+        "//java/google/registry/request/lock",
         "//java/google/registry/util",
+        "//third_party/objectify:objectify-v4_1",
+        "@com_google_api_client",
+        "@com_google_apis_google_api_services_sheets",
+        "@com_google_appengine_api_1_0_sdk",
+        "@com_google_code_findbugs_jsr305",
+        "@com_google_dagger",
+        "@com_google_guava",
+        "@com_google_http_client",
+        "@javax_servlet_api",
+        "@joda_time",
     ],
 )

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,12 +15,17 @@
 package google.registry.testing;
 
 import static com.google.common.truth.Truth.assertAbout;
+import static com.google.common.truth.Truth.assertThat;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.testing.TestLogHandler;
-import com.google.common.truth.AbstractVerb.DelegatedVerb;
-import com.google.common.truth.FailureStrategy;
+import com.google.common.truth.Correspondence;
+import com.google.common.truth.FailureMetadata;
+import com.google.common.truth.SimpleSubjectBuilder;
+import com.google.common.truth.StringSubject;
 import com.google.common.truth.Subject;
-import google.registry.testing.TruthChainer.And;
+import google.registry.testing.TruthChainer.Which;
+import java.util.List;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -28,39 +33,57 @@ import java.util.logging.LogRecord;
 /** Utility methods for asserting things about logging {@link Handler} instances. */
 public class LogsSubject extends Subject<LogsSubject, TestLogHandler> {
 
-  /** A factory for instances of this subject. */
-  private static class SubjectFactory
-      extends ReflectiveSubjectFactory<TestLogHandler, LogsSubject> {}
-
-  public LogsSubject(FailureStrategy strategy, TestLogHandler subject) {
-    super(strategy, subject);
+  public LogsSubject(FailureMetadata failureMetadata, TestLogHandler subject) {
+    super(failureMetadata, subject);
   }
 
-  public And<LogsSubject> hasNoLogsAtLevel(Level level) {
+  private static final Correspondence<String, String> CONTAINS_CORRESPONDENCE =
+      new Correspondence<String, String>() {
+        @Override
+        public boolean compare(String actual, String expected) {
+          return actual.contains(expected);
+        }
+
+        @Override
+        public String toString() {
+          return "contains";
+        }
+      };
+
+  private List<String> getMessagesAtLevel(Level level) {
+    ImmutableList.Builder<String> builder = new ImmutableList.Builder<>();
     for (LogRecord log : actual().getStoredLogRecords()) {
       if (log.getLevel().equals(level)) {
-        failWithRawMessage(
-            "Not true that there are no logs at level %s. Found <%s>.", level, log.getMessage());
+        builder.add(log.getMessage());
       }
     }
-    return new And<>(this);
+    return builder.build();
   }
 
-  public And<LogsSubject> hasLogAtLevelWithMessage(Level level, String message) {
-    boolean found = false;
-    for (LogRecord log : actual().getStoredLogRecords()) {
-      if (log.getLevel().equals(level) && log.getMessage().contains(message)) {
-        found = true;
-        break;
+  public void hasNoLogsAtLevel(Level level) {
+    check()
+        .withMessage("Logs at level %s", level)
+        .that(getMessagesAtLevel(level))
+        .isEmpty();
+  }
+
+  public Which<StringSubject> hasLogAtLevelWithMessage(Level level, String message) {
+    List<String> messagesAtLevel = getMessagesAtLevel(level);
+    check()
+        .withMessage("Logs at level %s", level)
+        .that(messagesAtLevel)
+        .comparingElementsUsing(CONTAINS_CORRESPONDENCE)
+        .contains(message);
+    for (String messageCandidate : messagesAtLevel) {
+      if (messageCandidate.contains(message)) {
+        return new Which<>(assertThat(messageCandidate)
+            .named(String.format("log message at %s matching '%s'", level, message)));
       }
     }
-    if (!found) {
-      failWithRawMessage("Found no logs at level %s with message %s.", level, message);
-    }
-    return new And<>(this);
+    throw new AssertionError("Message check passed yet matching message not found");
   }
 
-  public static DelegatedVerb<LogsSubject, TestLogHandler> assertAboutLogs() {
-    return assertAbout(new SubjectFactory());
+  public static SimpleSubjectBuilder<LogsSubject, TestLogHandler> assertAboutLogs() {
+    return assertAbout(LogsSubject::new);
   }
 }

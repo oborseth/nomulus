@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ public class ToolsServletTest {
   private final HttpServletResponse rsp = mock(HttpServletResponse.class);
 
   @Test
-  public void testDoPost_notFound() throws Exception {
+  public void testService_unknownPath_returnsNotFound() throws Exception {
     when(req.getMethod()).thenReturn("GET");
     when(req.getRequestURI()).thenReturn("/lol");
     new ToolsServlet().service(req, rsp);

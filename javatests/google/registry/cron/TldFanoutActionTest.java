@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,25 +16,28 @@ package google.registry.cron;
 
 import static com.google.common.collect.Iterables.getLast;
 import static com.google.common.collect.Lists.transform;
+import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.DatastoreHelper.createTlds;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.TaskQueueHelper.assertNoTasksEnqueued;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
 import static java.util.Arrays.asList;
 
-import com.google.common.base.Function;
+import com.google.appengine.api.taskqueue.dev.QueueStateInfo.TaskStateInfo;
+import com.google.appengine.tools.development.testing.LocalTaskQueueTestConfig;
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableSet;
 import google.registry.model.registry.Registry;
 import google.registry.model.registry.Registry.TldType;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
+import google.registry.testing.FakeResponse;
 import google.registry.testing.TaskQueueHelper.TaskMatcher;
 import google.registry.util.Retrier;
 import google.registry.util.TaskEnqueuer;
+import java.util.List;
+import java.util.Optional;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -47,9 +50,7 @@ public class TldFanoutActionTest {
 
   private static final String ENDPOINT = "/the/servlet";
   private static final String QUEUE = "the-queue";
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
+  private final FakeResponse response = new FakeResponse();
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder()
@@ -74,19 +75,20 @@ public class TldFanoutActionTest {
     return params.build();
   }
 
-  private static void run(ImmutableListMultimap<String, String> params) throws Exception {
+  private void run(ImmutableListMultimap<String, String> params) throws Exception {
     TldFanoutAction action = new TldFanoutAction();
     action.params = params;
     action.endpoint = getLast(params.get("endpoint"));
     action.queue = getLast(params.get("queue"));
     action.excludes = params.containsKey("exclude")
         ? ImmutableSet.copyOf(Splitter.on(',').split(params.get("exclude").get(0)))
-        : ImmutableSet.<String>of();
+        : ImmutableSet.of();
     action.taskEnqueuer = new TaskEnqueuer(new Retrier(null, 1));
+    action.response = response;
     action.runInEmpty = params.containsKey("runInEmpty");
     action.forEachRealTld = params.containsKey("forEachRealTld");
     action.forEachTestTld = params.containsKey("forEachTestTld");
-    action.jitterSeconds = Optional.absent();
+    action.jitterSeconds = Optional.empty();
     action.run();
   }
 
@@ -99,14 +101,13 @@ public class TldFanoutActionTest {
   private static void assertTasks(String... tasks) throws Exception {
     assertTasksEnqueued(
         QUEUE,
-        transform(asList(tasks), new Function<String, TaskMatcher>() {
-          @Override
-          public TaskMatcher apply(String namespace) {
-            return new TaskMatcher()
-                .url(ENDPOINT)
-                .header("content-type", "application/x-www-form-urlencoded")
-                .param("tld", namespace);
-          }}));
+        transform(
+            asList(tasks),
+            (String namespace) ->
+                new TaskMatcher()
+                    .url(ENDPOINT)
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .param("tld", namespace)));
   }
 
   @Test
@@ -207,5 +208,24 @@ public class TldFanoutActionTest {
     run(getParamsMap("forEachTestTld", "", "newkey", "newval"));
     assertTasksEnqueued(QUEUE,
         new TaskMatcher().url("/the/servlet").param("newkey", "newval"));
+  }
+
+  @Test
+  public void testSuccess_returnHttpResponse() throws Exception {
+    run(getParamsMap("forEachRealTld", "", "endpoint", "/the/servlet/:tld"));
+
+    List<TaskStateInfo> taskList =
+        LocalTaskQueueTestConfig.getLocalTaskQueue().getQueueStateInfo().get(QUEUE).getTaskInfo();
+
+    assertThat(taskList).hasSize(3);
+    String expectedResponse = String.format(
+        "OK: Launched the following 3 tasks in queue the-queue\n"
+            + "- Task: %s, tld: com, endpoint: /the/servlet/com\n"
+            + "- Task: %s, tld: net, endpoint: /the/servlet/net\n"
+            + "- Task: %s, tld: org, endpoint: /the/servlet/org\n",
+        taskList.get(0).getTaskName(),
+        taskList.get(1).getTaskName(),
+        taskList.get(2).getTaskName());
+    assertThat(response.getPayload()).isEqualTo(expectedResponse);
   }
 }

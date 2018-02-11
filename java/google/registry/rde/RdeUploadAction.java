@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import static com.google.appengine.api.taskqueue.TaskOptions.Builder.withUrl;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.net.MediaType.PLAIN_TEXT_UTF_8;
 import static com.jcraft.jsch.ChannelSftp.OVERWRITE;
+import static google.registry.model.common.Cursor.CursorType.RDE_UPLOAD_SFTP;
 import static google.registry.model.common.Cursor.getCursorTimeOrStartOfTime;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.model.rde.RdeMode.FULL;
@@ -27,10 +28,12 @@ import static java.util.Arrays.asList;
 
 import com.google.appengine.api.taskqueue.Queue;
 import com.google.appengine.tools.cloudstorage.GcsFilename;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.io.ByteStreams;
-import com.googlecode.objectify.VoidWork;
 import com.jcraft.jsch.JSch;
-import google.registry.config.ConfigModule.Config;
+import com.jcraft.jsch.JSchException;
+import dagger.Lazy;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.gcs.GcsUtils;
 import google.registry.keyring.api.KeyModule.Key;
 import google.registry.model.common.Cursor;
@@ -45,8 +48,10 @@ import google.registry.request.HttpException.ServiceUnavailableException;
 import google.registry.request.Parameter;
 import google.registry.request.RequestParameters;
 import google.registry.request.Response;
+import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
 import google.registry.util.FormattingLogger;
+import google.registry.util.Retrier;
 import google.registry.util.TaskEnqueuer;
 import google.registry.util.TeeOutputStream;
 import java.io.ByteArrayInputStream;
@@ -72,7 +77,11 @@ import org.joda.time.Duration;
  * <p>Once this action completes, it rolls the cursor forward a day and triggers
  * {@link RdeReportAction}.
  */
-@Action(path = RdeUploadAction.PATH, method = POST)
+@Action(
+  path = RdeUploadAction.PATH,
+  method = POST,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public final class RdeUploadAction implements Runnable, EscrowTask {
 
   static final String PATH = "/_dr/task/rdeUpload";
@@ -83,7 +92,15 @@ public final class RdeUploadAction implements Runnable, EscrowTask {
   @Inject GcsUtils gcsUtils;
   @Inject Ghostryde ghostryde;
   @Inject EscrowTaskRunner runner;
-  @Inject JSch jsch;
+
+  // Using Lazy<JSch> instead of JSch to prevent fetching of rdeSsh*Keys before we know we're
+  // actually going to use them. See b/37868282
+  //
+  // This prevents making an unnecessary time-expensive (and potentially failing) API call to the
+  // external KMS system when the RdeUploadAction ends up not being used (if the EscrowTaskRunner
+  // determins this EscrowTask was already completed today).
+  @Inject Lazy<JSch> lazyJsch;
+
   @Inject JSchSshSessionFactory jschSshSessionFactory;
   @Inject Response response;
   @Inject RydePgpCompressionOutputStreamFactory pgpCompressionFactory;
@@ -92,6 +109,7 @@ public final class RdeUploadAction implements Runnable, EscrowTask {
   @Inject RydePgpSigningOutputStreamFactory pgpSigningFactory;
   @Inject RydeTarOutputStreamFactory tarFactory;
   @Inject TaskEnqueuer taskEnqueuer;
+  @Inject Retrier retrier;
   @Inject @Parameter(RequestParameters.PARAM_TLD) String tld;
   @Inject @Config("rdeBucket") String bucket;
   @Inject @Config("rdeInterval") Duration interval;
@@ -113,7 +131,7 @@ public final class RdeUploadAction implements Runnable, EscrowTask {
   }
 
   @Override
-  public void runWithLock(DateTime watermark) throws Exception {
+  public void runWithLock(final DateTime watermark) throws Exception {
     DateTime stagingCursorTime = getCursorTimeOrStartOfTime(
         ofy().load().key(Cursor.createKey(CursorType.RDE_STAGING, Registry.get(tld))).now());
     if (!stagingCursorTime.isAfter(watermark)) {
@@ -121,7 +139,7 @@ public final class RdeUploadAction implements Runnable, EscrowTask {
       throw new ServiceUnavailableException("Waiting for RdeStagingAction to complete");
     }
     DateTime sftpCursorTime = getCursorTimeOrStartOfTime(
-        ofy().load().key(Cursor.createKey(CursorType.RDE_UPLOAD_SFTP, Registry.get(tld))).now());
+        ofy().load().key(Cursor.createKey(RDE_UPLOAD_SFTP, Registry.get(tld))).now());
     if (sftpCursorTime.plus(sftpCooldown).isAfter(clock.nowUtc())) {
       // Fail the task good and hard so it retries until the cooldown passes.
       logger.infofmt("tld=%s cursor=%s sftpCursor=%s", tld, watermark, sftpCursorTime);
@@ -129,23 +147,29 @@ public final class RdeUploadAction implements Runnable, EscrowTask {
     }
     int revision = RdeRevision.getNextRevision(tld, watermark, FULL) - 1;
     verify(revision >= 0, "RdeRevision was not set on generated deposit");
-    String name = RdeNamingUtils.makeRydeFilename(tld, watermark, FULL, 1, revision);
-    GcsFilename xmlFilename = new GcsFilename(bucket, name + ".xml.ghostryde");
-    GcsFilename xmlLengthFilename = new GcsFilename(bucket, name + ".xml.length");
+    final String name = RdeNamingUtils.makeRydeFilename(tld, watermark, FULL, 1, revision);
+    final GcsFilename xmlFilename = new GcsFilename(bucket, name + ".xml.ghostryde");
+    final GcsFilename xmlLengthFilename = new GcsFilename(bucket, name + ".xml.length");
     GcsFilename reportFilename = new GcsFilename(bucket, name + "-report.xml.ghostryde");
     verifyFileExists(xmlFilename);
     verifyFileExists(xmlLengthFilename);
     verifyFileExists(reportFilename);
-    upload(xmlFilename, readXmlLength(xmlLengthFilename), watermark, name);
-    ofy().transact(new VoidWork() {
-      @Override
-      public void vrun() {
-        Cursor cursor =
-            Cursor.create(
-                CursorType.RDE_UPLOAD_SFTP, ofy().getTransactionTime(), Registry.get(tld));
-        ofy().save().entity(cursor).now();
-      }
-    });
+    final long xmlLength = readXmlLength(xmlLengthFilename);
+    retrier.callWithRetry(
+        () -> {
+          upload(xmlFilename, xmlLength, watermark, name);
+          return null;
+        },
+        JSchException.class);
+    ofy()
+        .transact(
+            () ->
+                ofy()
+                    .save()
+                    .entity(
+                        Cursor.create(
+                            RDE_UPLOAD_SFTP, ofy().getTransactionTime(), Registry.get(tld)))
+                    .now());
     response.setContentType(PLAIN_TEXT_UTF_8);
     response.setPayload(String.format("OK %s %s\n", tld, watermark));
   }
@@ -172,14 +196,15 @@ public final class RdeUploadAction implements Runnable, EscrowTask {
    *    && cat /tmp/sig > gs://bucket/$rydeFilename.sig      # Save a copy of signature to GCS.
    *   }</pre>
    */
-  private void upload(
+  @VisibleForTesting
+  protected void upload(
       GcsFilename xmlFile, long xmlLength, DateTime watermark, String name) throws Exception {
     logger.infofmt("Uploading %s to %s", xmlFile, uploadUrl);
     try (InputStream gcsInput = gcsUtils.openInputStream(xmlFile);
         Ghostryde.Decryptor decryptor = ghostryde.openDecryptor(gcsInput, stagingDecryptionKey);
         Ghostryde.Decompressor decompressor = ghostryde.openDecompressor(decryptor);
         Ghostryde.Input xmlInput = ghostryde.openInput(decompressor)) {
-      try (JSchSshSession session = jschSshSessionFactory.create(jsch, uploadUrl);
+      try (JSchSshSession session = jschSshSessionFactory.create(lazyJsch.get(), uploadUrl);
           JSchSftpChannel ftpChan = session.openSftpChannel()) {
         byte[] signature;
         String rydeFilename = name + ".ryde";

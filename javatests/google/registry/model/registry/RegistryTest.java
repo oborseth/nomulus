@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,17 @@
 
 package google.registry.model.registry;
 
-import static com.google.common.collect.Iterables.transform;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.model.common.EntityGroupRoot.getCrossTldKey;
 import static google.registry.model.ofy.ObjectifyService.ofy;
-import static google.registry.model.registry.label.ReservedListTest.GET_NAME_FUNCTION;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.newRegistry;
 import static google.registry.testing.DatastoreHelper.persistPremiumList;
 import static google.registry.testing.DatastoreHelper.persistReservedList;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static org.joda.money.CurrencyUnit.EUR;
@@ -32,25 +33,20 @@ import static org.joda.money.CurrencyUnit.USD;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.googlecode.objectify.Key;
+import google.registry.dns.writer.VoidDnsWriter;
 import google.registry.model.EntityTestCase;
 import google.registry.model.registry.Registry.RegistryNotFoundException;
 import google.registry.model.registry.Registry.TldState;
 import google.registry.model.registry.label.PremiumList;
 import google.registry.model.registry.label.ReservedList;
-import google.registry.testing.ExceptionRule;
 import java.math.BigDecimal;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 
 /** Unit tests for {@link Registry}. */
 public class RegistryTest extends EntityTestCase {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   Registry registry;
 
   @Before
@@ -69,8 +65,7 @@ public class RegistryTest extends EntityTestCase {
   @Test
   public void testFailure_registryNotFound() throws Exception {
     createTld("foo");
-    thrown.expect(RegistryNotFoundException.class);
-    Registry.get("baz");
+    assertThrows(RegistryNotFoundException.class, () -> Registry.get("baz"));
   }
 
   @Test
@@ -146,9 +141,9 @@ public class RegistryTest extends EntityTestCase {
         "mouse,FULLY_BLOCKED");
     Registry r = Registry.get("tld")
         .asBuilder().setReservedLists(ImmutableSet.of(rl5, rl6)).build();
-    assertThat(transform(r.getReservedLists(), GET_NAME_FUNCTION))
+    assertThat(r.getReservedLists().stream().map(Key::getName))
         .containsExactly("tld-reserved5", "tld-reserved6");
-    r = Registry.get("tld").asBuilder().setReservedLists(ImmutableSet.<ReservedList> of()).build();
+    r = Registry.get("tld").asBuilder().setReservedLists(ImmutableSet.of()).build();
     assertThat(r.getReservedLists()).isEmpty();
   }
 
@@ -167,10 +162,50 @@ public class RegistryTest extends EntityTestCase {
         .asBuilder()
         .setReservedListsByName(ImmutableSet.of("tld-reserved24", "tld-reserved25"))
         .build();
-    assertThat(transform(r.getReservedLists(), GET_NAME_FUNCTION))
+    assertThat(r.getReservedLists().stream().map(Key::getName))
         .containsExactly("tld-reserved24", "tld-reserved25");
-    r = Registry.get("tld").asBuilder().setReservedListsByName(ImmutableSet.<String> of()).build();
+    r = Registry.get("tld").asBuilder().setReservedListsByName(ImmutableSet.of()).build();
     assertThat(r.getReservedLists()).isEmpty();
+  }
+
+  @Test
+  public void testSetReservedLists_succeedsWithDuplicateIdenticalAuthCodes() {
+    ReservedList rl1 = persistReservedList(
+        "tld-reserved007",
+        "lol,RESERVED_FOR_ANCHOR_TENANT,identical",
+        "cat,FULLY_BLOCKED");
+    ReservedList rl2 = persistReservedList(
+        "tld-reserved008",
+        "lol,RESERVED_FOR_ANCHOR_TENANT,identical",
+        "tim,FULLY_BLOCKED");
+    Registry registry = Registry.get("tld").asBuilder().setReservedLists(rl1, rl2).build();
+    assertThat(registry.getReservedLists()).containsExactly(Key.create(rl1), Key.create(rl2));
+  }
+
+  @Test
+  public void testSetReservedLists_failsForConflictingAuthCodes() {
+    ReservedList rl1 = persistReservedList(
+        "tld-reserved055",
+        "lol,RESERVED_FOR_ANCHOR_TENANT,conflict1",
+        "cat,FULLY_BLOCKED");
+    ReservedList rl2 = persistReservedList(
+        "tld-reserved056",
+        "lol,RESERVED_FOR_ANCHOR_TENANT,conflict2",
+        "tim,FULLY_BLOCKED");
+    ReservedList rl3 = persistReservedList(
+        "tld-reserved057",
+        "lol,RESERVED_FOR_ANCHOR_TENANT,another_conflict");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> {
+              @SuppressWarnings("unused")
+              Registry unused =
+                  Registry.get("tld").asBuilder().setReservedLists(rl1, rl2, rl3).build();
+            });
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("auth code conflicts for labels: [lol=[conflict1, conflict2, another_conflict]]");
   }
 
   @Test
@@ -194,6 +229,14 @@ public class RegistryTest extends EntityTestCase {
   public void testSettingLordnUsername() {
     Registry registry = Registry.get("tld").asBuilder().setLordnUsername("username").build();
     assertThat(registry.getLordnUsername()).isEqualTo("username");
+  }
+
+  @Test
+  public void testSettingDnsWriters() {
+    Registry registry = Registry.get("tld");
+    assertThat(registry.getDnsWriters()).containsExactly(VoidDnsWriter.NAME);
+    registry = registry.asBuilder().setDnsWriters(ImmutableSet.of("baz", "bang")).build();
+    assertThat(registry.getDnsWriters()).containsExactly("baz", "bang");
   }
 
   @Test
@@ -310,106 +353,167 @@ public class RegistryTest extends EntityTestCase {
 
   @Test
   public void testFailure_tldNeverSet() {
-    thrown.expect(IllegalArgumentException.class, "No registry TLD specified.");
-    new Registry.Builder().build();
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> new Registry.Builder().build());
+    assertThat(thrown).hasMessageThat().contains("No registry TLD specified");
   }
 
   @Test
   public void testFailure_setTldStr_null() {
-    thrown.expect(IllegalArgumentException.class, "TLD must not be null.");
-    new Registry.Builder().setTldStr(null);
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> new Registry.Builder().setTldStr(null));
+    assertThat(thrown).hasMessageThat().contains("TLD must not be null");
   }
 
   @Test
   public void testFailure_setTldStr_invalidTld() {
-    thrown.expect(
-        IllegalArgumentException.class,
-        "Cannot create registry for TLD that is not a valid, canonical domain name");
-    new Registry.Builder().setTldStr(".tld").build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class, () -> new Registry.Builder().setTldStr(".tld").build());
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Cannot create registry for TLD that is not a valid, canonical domain name");
   }
 
   @Test
   public void testFailure_setTldStr_nonCanonicalTld() {
-    thrown.expect(
-        IllegalArgumentException.class,
-        "Cannot create registry for TLD that is not a valid, canonical domain name");
-    new Registry.Builder().setTldStr("TLD").build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class, () -> new Registry.Builder().setTldStr("TLD").build());
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Cannot create registry for TLD that is not a valid, canonical domain name");
   }
 
   @Test
   public void testFailure_tldStatesOutOfOrder() {
-    thrown.expect(IllegalArgumentException.class);
-    Registry.get("tld").asBuilder()
-        .setTldStateTransitions(ImmutableSortedMap.of(
-            clock.nowUtc(), TldState.SUNRUSH, clock.nowUtc().plusMonths(1), TldState.SUNRISE))
-        .build();
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            Registry.get("tld")
+                .asBuilder()
+                .setTldStateTransitions(
+                    ImmutableSortedMap.of(
+                        clock.nowUtc(),
+                        TldState.SUNRUSH,
+                        clock.nowUtc().plusMonths(1),
+                        TldState.SUNRISE))
+                .build());
   }
 
   @Test
   public void testFailure_duplicateTldState() {
-    thrown.expect(IllegalArgumentException.class);
-    Registry.get("tld").asBuilder()
-        .setTldStateTransitions(ImmutableSortedMap.of(
-            clock.nowUtc(), TldState.SUNRUSH, clock.nowUtc().plusMonths(1), TldState.SUNRUSH))
-        .build();
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            Registry.get("tld")
+                .asBuilder()
+                .setTldStateTransitions(
+                    ImmutableSortedMap.of(
+                        clock.nowUtc(),
+                        TldState.SUNRUSH,
+                        clock.nowUtc().plusMonths(1),
+                        TldState.SUNRUSH))
+                .build());
   }
 
   @Test
   public void testFailure_pricingEngineIsRequired() {
-    thrown.expect(
-        IllegalArgumentException.class, "All registries must have a configured pricing engine");
-    new Registry.Builder().setTldStr("invalid").build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> new Registry.Builder().setTldStr("invalid").build());
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("All registries must have a configured pricing engine");
   }
 
   @Test
   public void testFailure_negativeRenewBillingCostTransitionValue() {
-    thrown.expect(IllegalArgumentException.class, "billing cost cannot be negative");
-    Registry.get("tld").asBuilder()
-        .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(USD, -42)));
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                Registry.get("tld")
+                    .asBuilder()
+                    .setRenewBillingCostTransitions(
+                        ImmutableSortedMap.of(START_OF_TIME, Money.of(USD, -42))));
+    assertThat(thrown).hasMessageThat().contains("billing cost cannot be negative");
   }
 
   @Test
   public void testFailure_negativeCreateBillingCost() {
-    thrown.expect(IllegalArgumentException.class, "billing cost cannot be negative");
-    Registry.get("tld").asBuilder().setCreateBillingCost(Money.of(USD, -42));
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> Registry.get("tld").asBuilder().setCreateBillingCost(Money.of(USD, -42)));
+    assertThat(thrown).hasMessageThat().contains("createBillingCost cannot be negative");
   }
 
   @Test
   public void testFailure_negativeRestoreBillingCost() {
-    thrown.expect(IllegalArgumentException.class, "billing cost cannot be negative");
-    Registry.get("tld").asBuilder().setRestoreBillingCost(Money.of(USD, -42));
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> Registry.get("tld").asBuilder().setRestoreBillingCost(Money.of(USD, -42)));
+    assertThat(thrown).hasMessageThat().contains("restoreBillingCost cannot be negative");
   }
 
   @Test
   public void testFailure_negativeServerStatusChangeBillingCost() {
-    thrown.expect(IllegalArgumentException.class, "billing cost cannot be negative");
-    Registry.get("tld").asBuilder().setServerStatusChangeBillingCost(Money.of(USD, -42));
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                Registry.get("tld")
+                    .asBuilder()
+                    .setServerStatusChangeBillingCost(Money.of(USD, -42)));
+    assertThat(thrown).hasMessageThat().contains("billing cost cannot be negative");
   }
 
   @Test
   public void testFailure_renewBillingCostTransitionValue_wrongCurrency() {
-    thrown.expect(IllegalArgumentException.class, "cost must be in the registry's currency");
-    Registry.get("tld").asBuilder()
-        .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 42)))
-        .build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                Registry.get("tld")
+                    .asBuilder()
+                    .setRenewBillingCostTransitions(
+                        ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 42)))
+                    .build());
+    assertThat(thrown).hasMessageThat().contains("cost must be in the registry's currency");
   }
 
   @Test
   public void testFailure_createBillingCost_wrongCurrency() {
-    thrown.expect(IllegalArgumentException.class, "cost must be in the registry's currency");
-    Registry.get("tld").asBuilder().setCreateBillingCost(Money.of(EUR, 42)).build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> Registry.get("tld").asBuilder().setCreateBillingCost(Money.of(EUR, 42)).build());
+    assertThat(thrown).hasMessageThat().contains("cost must be in the registry's currency");
   }
 
   @Test
   public void testFailure_restoreBillingCost_wrongCurrency() {
-    thrown.expect(IllegalArgumentException.class, "cost must be in the registry's currency");
-    Registry.get("tld").asBuilder().setRestoreBillingCost(Money.of(EUR, 42)).build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> Registry.get("tld").asBuilder().setRestoreBillingCost(Money.of(EUR, 42)).build());
+    assertThat(thrown).hasMessageThat().contains("cost must be in the registry's currency");
   }
 
   @Test
   public void testFailure_serverStatusChangeBillingCost_wrongCurrency() {
-    thrown.expect(IllegalArgumentException.class, "cost must be in the registry's currency");
-    Registry.get("tld").asBuilder().setServerStatusChangeBillingCost(Money.of(EUR, 42)).build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                Registry.get("tld")
+                    .asBuilder()
+                    .setServerStatusChangeBillingCost(Money.of(EUR, 42))
+                    .build());
+    assertThat(thrown).hasMessageThat().contains("cost must be in the registry's currency");
   }
 
   @Test
@@ -439,10 +543,37 @@ public class RegistryTest extends EntityTestCase {
 
   @Test
   public void testFailure_eapFee_wrongCurrency() {
-    thrown.expect(
-        IllegalArgumentException.class, "All EAP fees must be in the registry's currency");
-    Registry.get("tld").asBuilder()
-        .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
-        .build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                Registry.get("tld")
+                    .asBuilder()
+                    .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
+                    .build());
+    assertThat(thrown).hasMessageThat().contains("All EAP fees must be in the registry's currency");
+  }
+
+  @Test
+  public void testFailure_roidSuffixTooLong() {
+    IllegalArgumentException e =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> Registry.get("tld").asBuilder().setRoidSuffix("123456789"));
+    assertThat(e).hasMessageThat().isEqualTo("ROID suffix must be in format ^[A-Z0-9_]{1,8}$");
+  }
+
+  @Test
+  public void testFailure_roidSuffixNotUppercased() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> Registry.get("tld").asBuilder().setRoidSuffix("abcd"));
+  }
+
+  @Test
+  public void testFailure_roidSuffixContainsInvalidCharacters() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> Registry.get("tld").asBuilder().setRoidSuffix("ABC-DEF"));
   }
 }

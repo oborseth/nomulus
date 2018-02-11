@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,15 +16,12 @@ package google.registry.rde;
 
 import static google.registry.model.ofy.ObjectifyService.ofy;
 
-import com.googlecode.objectify.VoidWork;
 import google.registry.model.common.Cursor;
 import google.registry.model.common.Cursor.CursorType;
 import google.registry.model.registry.Registry;
-import google.registry.model.server.Lock;
 import google.registry.request.HttpException.NoContentException;
 import google.registry.request.HttpException.ServiceUnavailableException;
-import google.registry.request.Parameter;
-import google.registry.request.RequestParameters;
+import google.registry.request.lock.LockHandler;
 import google.registry.util.Clock;
 import google.registry.util.FormattingLogger;
 import java.util.concurrent.Callable;
@@ -38,10 +35,10 @@ import org.joda.time.Duration;
  * <p>This class implements the <i>Locking Rolling Cursor</i> pattern, which solves the problem of
  * how to reliably execute App Engine tasks which can't be made idempotent.
  *
- * <p>{@link Lock} is used to ensure only one task executes at a time for a given
+ * <p>{@link LockHandler} is used to ensure only one task executes at a time for a given
  * {@code LockedCursorTask} subclass + TLD combination. This is necessary because App Engine tasks
  * might double-execute. Normally tasks solve this by being idempotent, but that's not possible for
- * RDE, which writes to a GCS filename with a deterministic name. So the datastore is used to to
+ * RDE, which writes to a GCS filename with a deterministic name. So Datastore is used to to
  * guarantee isolation. If we can't acquire the lock, it means the task is already running, so
  * {@link NoContentException} is thrown to cancel the task.
  *
@@ -62,15 +59,15 @@ class EscrowTaskRunner {
     /**
      * Performs task logic while the lock is held.
      *
-     * @param watermark the logical time for a point-in-time view of datastore
+     * @param watermark the logical time for a point-in-time view of Datastore
      */
-    abstract void runWithLock(DateTime watermark) throws Exception;
+    void runWithLock(DateTime watermark) throws Exception;
   }
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
 
   @Inject Clock clock;
-  @Inject @Parameter(RequestParameters.PARAM_TLD) String tld;
+  @Inject LockHandler lockHandler;
   @Inject EscrowTaskRunner() {}
 
   /**
@@ -88,32 +85,33 @@ class EscrowTaskRunner {
       Duration timeout,
       final CursorType cursorType,
       final Duration interval) {
-    Callable<Void> lockRunner = new Callable<Void>() {
-      @Override
-      public Void call() throws Exception {
-        logger.info("tld=" + registry.getTld());
-        DateTime startOfToday = clock.nowUtc().withTimeAtStartOfDay();
-        Cursor cursor = ofy().load().key(Cursor.createKey(cursorType, registry)).now();
-        final DateTime nextRequiredRun = (cursor == null ? startOfToday : cursor.getCursorTime());
-        if (nextRequiredRun.isAfter(startOfToday)) {
-          throw new NoContentException("Already completed");
-        }
-        logger.info("cursor=" + nextRequiredRun);
-        task.runWithLock(nextRequiredRun);
-        ofy().transact(new VoidWork() {
-          @Override
-          public void vrun() {
-            ofy().save().entity(
-                Cursor.create(cursorType, nextRequiredRun.plus(interval), registry));
-          }});
-        return null;
-      }};
-    String lockName = String.format("%s %s", task.getClass().getSimpleName(), registry.getTld());
-    if (!Lock.executeWithLocks(lockRunner, null, tld, timeout, lockName)) {
+    Callable<Void> lockRunner =
+        () -> {
+          logger.infofmt("TLD: %s", registry.getTld());
+          DateTime startOfToday = clock.nowUtc().withTimeAtStartOfDay();
+          Cursor cursor = ofy().load().key(Cursor.createKey(cursorType, registry)).now();
+          final DateTime nextRequiredRun = (cursor == null ? startOfToday : cursor.getCursorTime());
+          if (nextRequiredRun.isAfter(startOfToday)) {
+            throw new NoContentException("Already completed");
+          }
+          logger.infofmt("Cursor: %s", nextRequiredRun);
+          task.runWithLock(nextRequiredRun);
+          ofy()
+              .transact(
+                  () ->
+                      ofy()
+                          .save()
+                          .entity(
+                              Cursor.create(cursorType, nextRequiredRun.plus(interval), registry)));
+          return null;
+        };
+    String lockName = String.format("EscrowTaskRunner %s", task.getClass().getSimpleName());
+    if (!lockHandler.executeWithLocks(lockRunner, registry.getTldStr(), timeout, lockName)) {
       // This will happen if either: a) the task is double-executed; b) the task takes a long time
       // to run and the retry task got executed while the first one is still running. In both
       // situations the safest thing to do is to just return 503 so the task gets retried later.
-      throw new ServiceUnavailableException("Lock in use: " + lockName);
+      throw new ServiceUnavailableException(
+          String.format("Lock in use: %s for TLD: %s", lockName, registry.getTldStr()));
     }
   }
 }

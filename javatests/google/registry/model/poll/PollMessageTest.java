@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ public class PollMessageTest extends EntityTestCase {
       .setXmlBytes("<xml></xml>".getBytes(UTF_8))
       .setModificationTime(clock.nowUtc())
       .setClientId("foo")
-      .setTrid(Trid.create("ABC-123"))
+      .setTrid(Trid.create("ABC-123", "server-trid"))
       .setBySuperuser(false)
       .setReason("reason")
       .setRequestedByRegistrar(false)

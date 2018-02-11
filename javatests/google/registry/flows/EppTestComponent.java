@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,13 +21,23 @@ import dagger.Component;
 import dagger.Module;
 import dagger.Provides;
 import dagger.Subcomponent;
-import google.registry.config.ConfigModule;
+import google.registry.config.RegistryConfig.ConfigModule;
+import google.registry.config.RegistryConfig.ConfigModule.TmchCaMode;
 import google.registry.dns.DnsQueue;
+import google.registry.flows.custom.CustomLogicFactory;
+import google.registry.flows.custom.TestCustomLogicFactory;
+import google.registry.flows.domain.DomainFlowTmchUtils;
 import google.registry.monitoring.whitebox.BigQueryMetricsEnqueuer;
 import google.registry.monitoring.whitebox.EppMetric;
 import google.registry.request.RequestScope;
+import google.registry.request.lock.LockHandler;
 import google.registry.testing.FakeClock;
+import google.registry.testing.FakeLockHandler;
+import google.registry.testing.FakeSleeper;
+import google.registry.tmch.TmchCertificateAuthority;
+import google.registry.tmch.TmchXmlSignature;
 import google.registry.util.Clock;
+import google.registry.util.Sleeper;
 import javax.inject.Singleton;
 
 /** Dagger component for running EPP tests. */
@@ -43,20 +53,48 @@ interface EppTestComponent {
 
   /** Module for injecting fakes and mocks. */
   @Module
-  static class FakesAndMocksModule {
+  class FakesAndMocksModule {
 
-    final FakeClock clock;
-    final DnsQueue dnsQueue;
-    final BigQueryMetricsEnqueuer metricsEnqueuer;
-    final EppMetric.Builder metricBuilder;
-    final ModulesService modulesService;
+    private BigQueryMetricsEnqueuer metricsEnqueuer;
+    private DnsQueue dnsQueue;
+    private DomainFlowTmchUtils domainFlowTmchUtils;
+    private EppMetric.Builder metricBuilder;
+    private FakeClock clock;
+    private FakeLockHandler lockHandler;
+    private ModulesService modulesService;
+    private Sleeper sleeper;
 
-    FakesAndMocksModule(FakeClock clock) {
-      this.clock = clock;
-      this.dnsQueue = DnsQueue.create();
-      this.metricBuilder = EppMetric.builderForRequest("request-id-1", clock);
-      this.modulesService = mock(ModulesService.class);
-      this.metricsEnqueuer = mock(BigQueryMetricsEnqueuer.class);
+    public static FakesAndMocksModule create() {
+      FakeClock clock = new FakeClock();
+      return create(clock, EppMetric.builderForRequest("request-id-1", clock));
+    }
+
+    public static FakesAndMocksModule create(FakeClock clock, EppMetric.Builder metricBuilder) {
+      return create(
+          clock,
+          metricBuilder,
+          new TmchXmlSignature(new TmchCertificateAuthority(TmchCaMode.PILOT)));
+    }
+
+    public static FakesAndMocksModule create(
+        FakeClock clock,
+        EppMetric.Builder eppMetricBuilder,
+        TmchXmlSignature tmchXmlSignature) {
+      FakesAndMocksModule instance = new FakesAndMocksModule();
+      instance.clock = clock;
+      instance.domainFlowTmchUtils = new DomainFlowTmchUtils(tmchXmlSignature);
+      instance.sleeper = new FakeSleeper(clock);
+      instance.dnsQueue = DnsQueue.create();
+      instance.metricBuilder = eppMetricBuilder;
+      instance.modulesService = mock(ModulesService.class);
+      instance.metricsEnqueuer = mock(BigQueryMetricsEnqueuer.class);
+      instance.lockHandler = new FakeLockHandler(true);
+      return instance;
+    }
+
+    @Provides
+    BigQueryMetricsEnqueuer provideBigQueryMetricsEnqueuer() {
+      return metricsEnqueuer;
     }
 
     @Provides
@@ -65,8 +103,23 @@ interface EppTestComponent {
     }
 
     @Provides
+    LockHandler provideLockHandler() {
+      return lockHandler;
+    }
+
+    @Provides
+    CustomLogicFactory provideCustomLogicFactory() {
+      return new TestCustomLogicFactory();
+    }
+
+    @Provides
     DnsQueue provideDnsQueue() {
       return dnsQueue;
+    }
+
+    @Provides
+    DomainFlowTmchUtils provideDomainFlowTmchUtils() {
+      return domainFlowTmchUtils;
     }
 
     @Provides
@@ -80,8 +133,21 @@ interface EppTestComponent {
     }
 
     @Provides
-    BigQueryMetricsEnqueuer provideBigQueryMetricsEnqueuer() {
-      return metricsEnqueuer;
+    Sleeper provideSleeper() {
+      return sleeper;
+    }
+
+    @Provides
+    ServerTridProvider provideServerTridProvider() {
+      return new FakeServerTridProvider();
+    }
+  }
+
+  class FakeServerTridProvider implements ServerTridProvider {
+
+    @Override
+    public String createServerTrid() {
+      return "server-trid";
     }
   }
 

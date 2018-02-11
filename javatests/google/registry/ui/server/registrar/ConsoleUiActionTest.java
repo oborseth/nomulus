@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,13 +14,22 @@
 
 package google.registry.ui.server.registrar;
 
+import static com.google.common.net.HttpHeaders.LOCATION;
 import static com.google.common.truth.Truth.assertThat;
+import static javax.servlet.http.HttpServletResponse.SC_MOVED_TEMPORARILY;
 import static org.mockito.Matchers.any;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.google.appengine.api.users.User;
 import com.google.appengine.api.users.UserServiceFactory;
 import com.google.common.net.MediaType;
+import google.registry.request.auth.AuthLevel;
+import google.registry.request.auth.AuthResult;
+import google.registry.request.auth.UserAuthInfo;
+import google.registry.security.XsrfTokenManager;
 import google.registry.testing.AppEngineRule;
+import google.registry.testing.FakeClock;
 import google.registry.testing.FakeResponse;
 import google.registry.testing.UserInfo;
 import javax.servlet.http.HttpServletRequest;
@@ -28,11 +37,10 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link ConsoleUiAction}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class ConsoleUiActionTest {
 
   @Rule
@@ -41,11 +49,11 @@ public class ConsoleUiActionTest {
       .withUserService(UserInfo.create("marla.singer@example.com", "12345"))
       .build();
 
-  @Mock
-  private SessionUtils sessionUtils;
-
+  private final SessionUtils sessionUtils = mock(SessionUtils.class);
+  private final HttpServletRequest request = mock(HttpServletRequest.class);
   private final FakeResponse response = new FakeResponse();
   private final ConsoleUiAction action = new ConsoleUiAction();
+  private final User user = new User("marla.singer@example.com", "gmail.com", "12345");
 
   @Before
   public void setUp() throws Exception {
@@ -56,12 +64,16 @@ public class ConsoleUiActionTest {
     action.supportEmail = "support@example.com";
     action.announcementsEmail = "announcements@example.com";
     action.supportPhoneNumber = "1 (888) 555 0123";
+    action.technicalDocsUrl = "http://example.com/technical-docs";
+    action.req = request;
     action.response = response;
     action.sessionUtils = sessionUtils;
     action.userService = UserServiceFactory.getUserService();
-    when(sessionUtils.checkRegistrarConsoleLogin(any(HttpServletRequest.class))).thenReturn(true);
-    when(sessionUtils.getRegistrarClientId(any(HttpServletRequest.class)))
-        .thenReturn("TheRegistrar");
+    action.xsrfTokenManager = new XsrfTokenManager(new FakeClock(), action.userService);
+    UserAuthInfo userAuthInfo = UserAuthInfo.create(user, false);
+    action.authResult = AuthResult.create(AuthLevel.USER, userAuthInfo);
+    when(sessionUtils.checkRegistrarConsoleLogin(request, userAuthInfo)).thenReturn(true);
+    when(sessionUtils.getRegistrarClientId(request)).thenReturn("TheRegistrar");
   }
 
   @Test
@@ -98,8 +110,28 @@ public class ConsoleUiActionTest {
 
   @Test
   public void testUserDoesntHaveAccessToAnyRegistrar_showsWhoAreYouPage() throws Exception {
-    when(sessionUtils.checkRegistrarConsoleLogin(any(HttpServletRequest.class))).thenReturn(false);
+    when(sessionUtils.checkRegistrarConsoleLogin(
+            any(HttpServletRequest.class), any(UserAuthInfo.class)))
+        .thenReturn(false);
     action.run();
     assertThat(response.getPayload()).contains("<h1>You need permission</h1>");
+  }
+
+  @Test
+  public void testNoUser_redirect() throws Exception {
+    when(request.getRequestURI()).thenReturn("/test");
+    action.authResult = AuthResult.NOT_AUTHENTICATED;
+    action.run();
+    assertThat(response.getStatus()).isEqualTo(SC_MOVED_TEMPORARILY);
+    assertThat(response.getHeaders().get(LOCATION)).isEqualTo("/_ah/login?continue=%2Ftest");
+  }
+
+  @Test
+  public void testNoUserInformationAtAll_redirectToRoot() throws Exception {
+    when(request.getRequestURI()).thenThrow(new IllegalArgumentException());
+    action.authResult = AuthResult.NOT_AUTHENTICATED;
+    action.run();
+    assertThat(response.getStatus()).isEqualTo(SC_MOVED_TEMPORARILY);
+    assertThat(response.getHeaders().get(LOCATION)).isEqualTo("/");
   }
 }

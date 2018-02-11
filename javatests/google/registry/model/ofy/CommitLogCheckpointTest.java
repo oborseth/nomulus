@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,16 +15,13 @@
 package google.registry.model.ofy;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.google.common.collect.ImmutableMap;
-import google.registry.config.TestRegistryConfig;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
-import google.registry.testing.RegistryConfigRule;
 import org.joda.time.DateTime;
-import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -39,25 +36,9 @@ public class CommitLogCheckpointTest {
       .withDatastore()
       .build();
 
-  @Rule
-  public final RegistryConfigRule configRule = new RegistryConfigRule();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   private static final DateTime T1 = START_OF_TIME;
   private static final DateTime T2 = START_OF_TIME.plusMillis(1);
   private static final DateTime T3 = START_OF_TIME.plusMillis(2);
-
-  @Before
-  public void before() {
-    // Use 3 buckets to make the tests below more realistic.
-    configRule.override(new TestRegistryConfig() {
-      @Override
-      public int getCommitLogBucketCount() {
-        return 3;
-      }});
-  }
 
   @Test
   public void test_getCheckpointTime() {
@@ -75,32 +56,44 @@ public class CommitLogCheckpointTest {
   }
 
   @Test
-  public void test_getBucketTimestamps_whenOnlyOneBucket_stillWorks() {
-    configRule.override(new TestRegistryConfig() {
-      @Override
-      public int getCommitLogBucketCount() {
-        return 1;
-      }});
-    CommitLogCheckpoint checkpoint =
-        CommitLogCheckpoint.create(DateTime.now(UTC), ImmutableMap.of(1, T1));
-    assertThat(checkpoint.getBucketTimestamps()).containsExactly(1, T1);
-  }
-
-  @Test
   public void test_create_notEnoughBucketTimestamps_throws() {
-    thrown.expect(IllegalArgumentException.class, "Bucket ids are incorrect");
-    CommitLogCheckpoint.create(DateTime.now(UTC), ImmutableMap.of(1, T1, 2, T2));
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> CommitLogCheckpoint.create(DateTime.now(UTC), ImmutableMap.of(1, T1, 2, T2)));
+    assertThat(thrown).hasMessageThat().contains("Bucket ids are incorrect");
   }
 
   @Test
   public void test_create_tooManyBucketTimestamps_throws() {
-    thrown.expect(IllegalArgumentException.class, "Bucket ids are incorrect");
-    CommitLogCheckpoint.create(DateTime.now(UTC), ImmutableMap.of(1, T1, 2, T2, 3, T3, 4, T1));
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                CommitLogCheckpoint.create(
+                    DateTime.now(UTC), ImmutableMap.of(1, T1, 2, T2, 3, T3, 4, T1)));
+    assertThat(thrown).hasMessageThat().contains("Bucket ids are incorrect");
   }
 
   @Test
   public void test_create_wrongBucketIds_throws() {
-    thrown.expect(IllegalArgumentException.class, "Bucket ids are incorrect");
-    CommitLogCheckpoint.create(DateTime.now(UTC), ImmutableMap.of(0, T1, 1, T2, 2, T3));
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                CommitLogCheckpoint.create(
+                    DateTime.now(UTC), ImmutableMap.of(0, T1, 1, T2, 2, T3)));
+    assertThat(thrown).hasMessageThat().contains("Bucket ids are incorrect");
+  }
+
+  @Test
+  public void test_create_wrongBucketIdOrder_throws() {
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                CommitLogCheckpoint.create(
+                    DateTime.now(UTC), ImmutableMap.of(2, T2, 1, T1, 3, T3)));
+    assertThat(thrown).hasMessageThat().contains("Bucket ids are incorrect");
   }
 }

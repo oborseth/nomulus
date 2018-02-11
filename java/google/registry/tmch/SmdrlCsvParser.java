@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,7 +29,8 @@ import org.joda.time.DateTime;
  * <p>This is a quick and dirty CSV parser made specifically for the SMDRL CSV format defined in
  * the TMCH specification. It doesn't support any fancy CSV features like quotes.
  *
- * @see "http://tools.ietf.org/html/draft-lozano-tmch-func-spec-08#section-6.2"
+ * @see <a href="http://tools.ietf.org/html/draft-lozano-tmch-func-spec-08#section-6.2">
+ *     TMCH functional specifications - SMD Revocation List</a>
  */
 public final class SmdrlCsvParser {
 

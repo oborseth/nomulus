@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,9 +16,10 @@ package google.registry.whois;
 
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
-import static google.registry.whois.WhoisHelper.loadWhoisTestFile;
+import static google.registry.whois.WhoisTestData.loadFile;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -35,8 +36,10 @@ import google.registry.model.domain.secdns.DelegationSignerData;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.host.HostResource;
 import google.registry.model.registrar.Registrar;
+import google.registry.model.registrar.RegistrarContact;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.FakeClock;
+import google.registry.whois.WhoisResponse.WhoisResponseResults;
 import org.joda.time.DateTime;
 import org.junit.Before;
 import org.junit.Rule;
@@ -65,18 +68,28 @@ public class DomainWhoisResponseTest {
   @Before
   public void setUp() {
     // Update the registrar to have an IANA ID.
+    Registrar registrar =
+        persistResource(
+            loadRegistrar("NewRegistrar").asBuilder().setIanaIdentifier(5555555L).build());
+
     persistResource(
-        Registrar.loadByClientId("NewRegistrar").asBuilder().setIanaIdentifier(5555555L).build());
+        new RegistrarContact.Builder()
+            .setParent(registrar)
+            .setName("Jake Doe")
+            .setEmailAddress("jakedoe@theregistrar.com")
+            .setPhoneNumber("+1.2125551216")
+            .setVisibleInDomainWhoisAsAbuse(true)
+            .build());
 
     createTld("tld");
 
     hostResource1 = persistResource(new HostResource.Builder()
-        .setFullyQualifiedHostName("NS01.EXAMPLEREGISTRAR.tld")
+        .setFullyQualifiedHostName("ns01.exampleregistrar.tld")
         .setRepoId("1-TLD")
         .build());
 
     hostResource2 = persistResource(new HostResource.Builder()
-        .setFullyQualifiedHostName("NS02.EXAMPLEREGISTRAR.tld")
+        .setFullyQualifiedHostName("ns02.exampleregistrar.tld")
         .setRepoId("2-TLD")
         .build());
 
@@ -212,12 +225,12 @@ public class DomainWhoisResponseTest {
     Key<ContactResource> techResourceKey = Key.create(techContact);
 
     domainResource = persistResource(new DomainResource.Builder()
-        .setFullyQualifiedDomainName("EXAMPLE.tld")
+        .setFullyQualifiedDomainName("example.tld")
         .setRepoId("3-TLD")
         .setLastEppUpdateTime(DateTime.parse("2009-05-29T20:13:00Z"))
         .setCreationTimeForTest(DateTime.parse("2000-10-08T00:45:00Z"))
         .setRegistrationExpirationTime(DateTime.parse("2010-10-08T00:44:59Z"))
-        .setCurrentSponsorClientId("NewRegistrar")
+        .setPersistedCurrentSponsorClientId("NewRegistrar")
         .setStatusValues(ImmutableSet.of(
             StatusValue.CLIENT_DELETE_PROHIBITED,
             StatusValue.CLIENT_RENEW_PROHIBITED,
@@ -239,16 +252,25 @@ public class DomainWhoisResponseTest {
   public void getPlainTextOutputTest() {
     DomainWhoisResponse domainWhoisResponse =
         new DomainWhoisResponse(domainResource, clock.nowUtc());
-    assertThat(domainWhoisResponse.getPlainTextOutput(false, "Doodle Disclaimer"))
-        .isEqualTo(loadWhoisTestFile("whois_domain.txt"));
+    assertThat(
+            domainWhoisResponse.getResponse(
+                false,
+                "Doodle Disclaimer\nI exist so that carriage return\nin disclaimer can be tested."))
+        .isEqualTo(WhoisResponseResults.create(loadFile("whois_domain.txt"), 1));
   }
 
   @Test
   public void addImplicitOkStatusTest() {
-    DomainWhoisResponse domainWhoisResponse = new DomainWhoisResponse(
-        domainResource.asBuilder().setStatusValues(null).build(),
-        clock.nowUtc());
-    assertThat(domainWhoisResponse.getPlainTextOutput(false, "Doodle Disclaimer"))
+    DomainWhoisResponse domainWhoisResponse =
+        new DomainWhoisResponse(
+            domainResource.asBuilder().setStatusValues(null).build(), clock.nowUtc());
+    assertThat(
+            domainWhoisResponse
+                .getResponse(
+                    false,
+                    "Doodle Disclaimer\nI exist so that carriage return\n"
+                        + "in disclaimer can be tested.")
+                .plainTextOutput())
         .contains("Domain Status: ok");
   }
 }

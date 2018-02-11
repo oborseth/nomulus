@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 package google.registry.module.frontend;
 
+import dagger.Module;
 import dagger.Subcomponent;
 import google.registry.dns.DnsModule;
 import google.registry.flows.CheckApiAction;
@@ -33,12 +34,13 @@ import google.registry.rdap.RdapIpAction;
 import google.registry.rdap.RdapModule;
 import google.registry.rdap.RdapNameserverAction;
 import google.registry.rdap.RdapNameserverSearchAction;
+import google.registry.request.RequestComponentBuilder;
 import google.registry.request.RequestModule;
 import google.registry.request.RequestScope;
 import google.registry.ui.server.registrar.ConsoleUiAction;
 import google.registry.ui.server.registrar.RegistrarPaymentAction;
 import google.registry.ui.server.registrar.RegistrarPaymentSetupAction;
-import google.registry.ui.server.registrar.RegistrarUserModule;
+import google.registry.ui.server.registrar.RegistrarSettingsAction;
 import google.registry.whois.WhoisHttpServer;
 import google.registry.whois.WhoisModule;
 import google.registry.whois.WhoisServer;
@@ -51,7 +53,6 @@ import google.registry.whois.WhoisServer;
         DnsModule.class,
         EppTlsModule.class,
         RdapModule.class,
-        RegistrarUserModule.class,
         RequestModule.class,
         WhiteboxModule.class,
         WhoisModule.class,
@@ -65,6 +66,7 @@ interface FrontendRequestComponent {
   RdapAutnumAction rdapAutnumAction();
   RegistrarPaymentAction registrarPaymentAction();
   RegistrarPaymentSetupAction registrarPaymentSetupAction();
+  RegistrarSettingsAction registrarSettingsAction();
   RdapDomainAction rdapDomainAction();
   RdapDomainSearchAction rdapDomainSearchAction();
   RdapEntityAction rdapEntityAction();
@@ -75,4 +77,13 @@ interface FrontendRequestComponent {
   RdapNameserverSearchAction rdapNameserverSearchAction();
   WhoisHttpServer whoisHttpServer();
   WhoisServer whoisServer();
+
+  @Subcomponent.Builder
+  abstract class Builder implements RequestComponentBuilder<FrontendRequestComponent> {
+    @Override public abstract Builder requestModule(RequestModule requestModule);
+    @Override public abstract FrontendRequestComponent build();
+  }
+
+  @Module(subcomponents = FrontendRequestComponent.class)
+  class FrontendRequestComponentModule {}
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,16 +19,21 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 
 import com.google.appengine.api.taskqueue.Queue;
 import com.google.appengine.api.taskqueue.TaskOptions;
-import com.google.common.base.Optional;
 import google.registry.model.ofy.CommitLogBucket;
 import google.registry.request.Action;
 import google.registry.request.Parameter;
+import google.registry.request.auth.Auth;
 import google.registry.util.TaskEnqueuer;
+import java.util.Optional;
 import java.util.Random;
 import javax.inject.Inject;
 
 /** Action for fanning out cron tasks for each commit log bucket. */
-@Action(path = "/_dr/cron/commitLogFanout", automaticallyPrintOk = true)
+@Action(
+  path = "/_dr/cron/commitLogFanout",
+  automaticallyPrintOk = true,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public final class CommitLogFanoutAction implements Runnable {
 
   public static final String BUCKET_PARAM = "bucket";

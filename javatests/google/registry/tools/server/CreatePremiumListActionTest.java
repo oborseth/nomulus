@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,12 +15,16 @@
 package google.registry.tools.server;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
+import static google.registry.model.registry.label.PremiumListUtils.deletePremiumList;
+import static google.registry.model.registry.label.PremiumListUtils.getPremiumPrice;
 import static google.registry.testing.DatastoreHelper.createTlds;
+import static google.registry.testing.DatastoreHelper.loadPremiumListEntries;
 import static javax.servlet.http.HttpServletResponse.SC_OK;
 
+import google.registry.model.registry.Registry;
 import google.registry.model.registry.label.PremiumList;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeJsonResponse;
 import org.joda.money.Money;
 import org.junit.Before;
@@ -35,21 +39,14 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class CreatePremiumListActionTest {
 
-  @Rule
-  public final AppEngineRule appEngine = AppEngineRule.builder()
-      .withDatastore()
-      .build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
+  @Rule public final AppEngineRule appEngine = AppEngineRule.builder().withDatastore().build();
   CreatePremiumListAction action;
   FakeJsonResponse response;
 
   @Before
   public void init() throws Exception {
     createTlds("foo", "xn--q9jyb4c", "how");
-    PremiumList.get("foo").get().delete();
+    deletePremiumList(PremiumList.get("foo").get());
     action = new CreatePremiumListAction();
     response = new FakeJsonResponse();
     action.response = response;
@@ -81,10 +78,7 @@ public class CreatePremiumListActionTest {
     action.override = true;
     action.run();
     assertThat(response.getStatus()).isEqualTo(SC_OK);
-    PremiumList premiumList = PremiumList.get("zanzibar").get();
-    assertThat(premiumList.getPremiumListEntries()).hasSize(1);
-    assertThat(premiumList.getPremiumPrice("zanzibar")).hasValue(Money.parse("USD 100"));
-    assertThat(premiumList.getPremiumPrice("diamond")).isAbsent();
+    assertThat(loadPremiumListEntries(PremiumList.get("zanzibar").get())).hasSize(1);
   }
 
   @Test
@@ -93,9 +87,8 @@ public class CreatePremiumListActionTest {
     action.inputData = "rich,USD 25\nricher,USD 1000\n";
     action.run();
     assertThat(response.getStatus()).isEqualTo(SC_OK);
-    PremiumList premiumList = PremiumList.get("foo").get();
-    assertThat(premiumList.getPremiumListEntries()).hasSize(2);
-    assertThat(premiumList.getPremiumPrice("rich")).hasValue(Money.parse("USD 25"));
-    assertThat(premiumList.getPremiumPrice("diamond")).isAbsent();
+    assertThat(loadPremiumListEntries(PremiumList.get("foo").get())).hasSize(2);
+    assertThat(getPremiumPrice("rich", Registry.get("foo"))).hasValue(Money.parse("USD 25"));
+    assertThat(getPremiumPrice("diamond", Registry.get("foo"))).isEmpty();
   }
 }

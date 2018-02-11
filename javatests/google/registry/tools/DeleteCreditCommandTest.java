@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,9 @@ import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.common.EntityGroupRoot.getCrossTldKey;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static org.joda.money.CurrencyUnit.USD;
 
 import com.beust.jcommander.ParameterException;
@@ -47,7 +49,7 @@ public class DeleteCreditCommandTest extends CommandTestCase<DeleteCreditCommand
 
   @Before
   public void setUp() {
-    registrar = Registrar.loadByClientId("TheRegistrar");
+    registrar = loadRegistrar("TheRegistrar");
     createTld("tld");
     assertThat(Registry.get("tld").getCurrency()).isEqualTo(USD);
     DateTime creditCreationTime = Registry.get("tld").getCreationTime().plusMillis(1);
@@ -110,26 +112,34 @@ public class DeleteCreditCommandTest extends CommandTestCase<DeleteCreditCommand
 
   @Test
   public void testFailure_nonexistentParentRegistrar() throws Exception {
-    thrown.expect(NullPointerException.class, "FakeRegistrar");
-    runCommandForced("--registrar=FakeRegistrar", "--credit_id=" + creditAId);
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--registrar=FakeRegistrar", "--credit_id=" + creditAId));
+    assertThat(thrown).hasMessageThat().contains("Registrar FakeRegistrar not found");
   }
 
   @Test
   public void testFailure_nonexistentCreditId() throws Exception {
     long badId = creditAId + creditBId + 1;
-    thrown.expect(NullPointerException.class, "ID " + badId);
-    runCommandForced("--registrar=TheRegistrar", "--credit_id=" + badId);
+    NullPointerException thrown =
+        expectThrows(
+            NullPointerException.class,
+            () -> runCommandForced("--registrar=TheRegistrar", "--credit_id=" + badId));
+    assertThat(thrown).hasMessageThat().contains("ID " + badId);
   }
 
   @Test
   public void testFailure_noRegistrar() throws Exception {
-    thrown.expect(ParameterException.class, "--registrar");
-    runCommandForced("--credit_id=" + creditAId);
+    ParameterException thrown =
+        expectThrows(ParameterException.class, () -> runCommandForced("--credit_id=" + creditAId));
+    assertThat(thrown).hasMessageThat().contains("--registrar");
   }
 
   @Test
   public void testFailure_noCreditId() throws Exception {
-    thrown.expect(ParameterException.class, "--credit_id");
-    runCommandForced("--registrar=TheRegistrar");
+    ParameterException thrown =
+        expectThrows(ParameterException.class, () -> runCommandForced("--registrar=TheRegistrar"));
+    assertThat(thrown).hasMessageThat().contains("--credit_id");
   }
 }

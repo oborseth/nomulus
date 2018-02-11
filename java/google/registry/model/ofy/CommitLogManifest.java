@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ import java.util.Set;
 import org.joda.time.DateTime;
 
 /**
- * Archived datastore transaction that can be replayed.
+ * Archived Datastore transaction that can be replayed.
  *
  * <p>Entities of this kind are entity group sharded using a {@link CommitLogBucket} parent. Each
  * object that was saved during this transaction is stored in a {@link CommitLogMutation} child

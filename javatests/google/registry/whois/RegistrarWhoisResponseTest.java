@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,9 +15,10 @@
 package google.registry.whois;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.DatastoreHelper.persistNewRegistrar;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.DatastoreHelper.persistSimpleResources;
-import static google.registry.whois.WhoisHelper.loadWhoisTestFile;
+import static google.registry.whois.WhoisTestData.loadFile;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -26,6 +27,7 @@ import google.registry.model.registrar.RegistrarAddress;
 import google.registry.model.registrar.RegistrarContact;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.FakeClock;
+import google.registry.whois.WhoisResponse.WhoisResponseResults;
 import org.joda.time.DateTime;
 import org.junit.Rule;
 import org.junit.Test;
@@ -113,22 +115,22 @@ public class RegistrarWhoisResponseTest {
 
     RegistrarWhoisResponse registrarWhoisResponse =
         new RegistrarWhoisResponse(registrar, clock.nowUtc());
-    assertThat(registrarWhoisResponse.getPlainTextOutput(false, "Doodle Disclaimer"))
-        .isEqualTo(loadWhoisTestFile("whois_registrar.txt"));
+    assertThat(
+            registrarWhoisResponse.getResponse(
+                false,
+                "Doodle Disclaimer\nI exist so that carriage return\nin disclaimer can be tested."))
+        .isEqualTo(WhoisResponseResults.create(loadFile("whois_registrar.txt"), 1));
   }
 
   @Test
   public void testSetOfFields() {
-    Registrar registrar = new Registrar.Builder()
-        .setClientId("exregistrar")
-        .setType(Registrar.Type.REAL)
-        .setIanaIdentifier(8L)
-        .setState(Registrar.State.ACTIVE)
-        .build();
+    Registrar registrar =
+        persistNewRegistrar("exregistrar", "Ex-Registrar", Registrar.Type.REAL, 8L);
 
     RegistrarWhoisResponse registrarWhoisResponse =
         new RegistrarWhoisResponse(registrar, clock.nowUtc());
     // Just make sure this doesn't NPE.
-    registrarWhoisResponse.getPlainTextOutput(false, "Doodle Disclaimer");
+    registrarWhoisResponse.getResponse(
+        false, "Doodle Disclaimer\nI exist so that carriage return\nin disclaimer can be tested.");
   }
 }

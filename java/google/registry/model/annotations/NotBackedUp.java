@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ import java.lang.annotation.Target;
 
 /**
  * Annotation for an Objectify {@link Entity} to indicate that it should not be backed up by the
- * default datastore backup configuration (it may be backed up by something else).
+ * default Datastore backup configuration (it may be backed up by something else).
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
@@ -30,7 +30,7 @@ public @interface NotBackedUp {
   Reason reason();
 
   /** Reasons why a given entity does not need to be be backed up. */
-  public enum Reason {
+  enum Reason {
     /** This entity is transient by design and has only a short-term useful lifetime. */
     TRANSIENT,
 

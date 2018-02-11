@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,22 +16,17 @@ package google.registry.whois;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.html.HtmlEscapers.htmlEscaper;
 
-import com.google.common.base.Function;
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
-import com.google.common.base.Supplier;
-import com.google.common.collect.FluentIterable;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Ordering;
 import google.registry.model.eppcommon.Address;
-import google.registry.model.registrar.Registrar;
 import google.registry.util.Idn;
 import google.registry.xml.UtcDateTimeAdapter;
-import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import javax.annotation.Nullable;
 import org.joda.time.DateTime;
 
@@ -40,17 +35,10 @@ abstract class WhoisResponseImpl implements WhoisResponse {
 
   /** Field name for ICANN problem reporting URL appended to all WHOIS responses. */
   private static final String ICANN_REPORTING_URL_FIELD =
-      "URL of the ICANN WHOIS Data Problem Reporting System";
+      "URL of the ICANN Whois Inaccuracy Complaint Form";
 
   /** ICANN problem reporting URL appended to all WHOIS responses. */
-  private static final String ICANN_REPORTING_URL = "http://wdprs.internic.net/";
-
-  private static final Registrar EMPTY_REGISTRAR = new Supplier<Registrar>() {
-      @Override
-      public Registrar get() {
-        // Use Type.TEST here to avoid requiring an IANA ID (the type does not appear in WHOIS).
-        return new Registrar.Builder().setType(Registrar.Type.TEST).build();
-      }}.get();
+  private static final String ICANN_REPORTING_URL = "https://www.icann.org/wicf/";
 
   /** The time at which this response was created. */
   private final DateTime timestamp;
@@ -76,9 +64,9 @@ abstract class WhoisResponseImpl implements WhoisResponse {
   static <T> T chooseByUnicodePreference(
       boolean preferUnicode, @Nullable T localized, @Nullable T internationalized) {
     if (preferUnicode) {
-      return Optional.fromNullable(localized).or(Optional.fromNullable(internationalized)).orNull();
+      return Optional.ofNullable(localized).orElse(internationalized);
     } else {
-      return Optional.fromNullable(internationalized).or(Optional.fromNullable(localized)).orNull();
+      return Optional.ofNullable(internationalized).orElse(localized);
     }
   }
 
@@ -104,10 +92,7 @@ abstract class WhoisResponseImpl implements WhoisResponse {
      * be to use {@link java.util.SortedSet} but that would require reworking the models.
      */
     <T> E emitSet(String title, Set<T> values, Function<T, String> transform) {
-      return emitList(title, FluentIterable
-          .from(values)
-          .transform(transform)
-          .toSortedList(Ordering.natural()));
+      return emitList(title, values.stream().map(transform).sorted().collect(toImmutableList()));
     }
 
     /** Helper method that loops over a list of values and calls {@link #emitField}. */
@@ -116,6 +101,16 @@ abstract class WhoisResponseImpl implements WhoisResponse {
         emitField(title, value);
       }
       return thisCastToDerived();
+    }
+
+    /** Emit the field name and value followed by a newline, but only if a value exists. */
+    E emitFieldIfDefined(String name, @Nullable String value) {
+      if (isNullOrEmpty(value)) {
+        return thisCastToDerived();
+      }
+      stringBuilder.append(cleanse(name)).append(':');
+      stringBuilder.append(' ').append(cleanse(value));
+      return emitNewline();
     }
 
     /** Emit the field name and value followed by a newline. */
@@ -127,11 +122,17 @@ abstract class WhoisResponseImpl implements WhoisResponse {
       return emitNewline();
     }
 
+    /** Emit a multi-part field name and value followed by a newline, but only if a value exists. */
+    E emitFieldIfDefined(List<String> nameParts, String value) {
+      if (isNullOrEmpty(value)) {
+        return thisCastToDerived();
+      }
+      return emitField(nameParts, value);
+    }
+
     /** Emit a multi-part field name and value followed by a newline. */
-    E emitField(String... namePartsAndValue) {
-      List<String> parts = Arrays.asList(namePartsAndValue);
-      return emitField(
-          Joiner.on(' ').join(parts.subList(0, parts.size() - 1)), Iterables.getLast(parts));
+    E emitField(List<String> nameParts, String value) {
+      return emitField(Joiner.on(' ').join(nameParts), value);
     }
 
     /** Emit a contact address. */
@@ -147,10 +148,16 @@ abstract class WhoisResponseImpl implements WhoisResponse {
       return thisCastToDerived();
     }
 
+    /** Emit Whois Inaccuracy Complaint Form link. Only used for domain queries. */
+    E emitWicfLink() {
+      emitField(ICANN_REPORTING_URL_FIELD, ICANN_REPORTING_URL);
+      return thisCastToDerived();
+    }
+
     /** Returns raw text that should be appended to the end of ALL WHOIS responses. */
     E emitLastUpdated(DateTime timestamp) {
       // We are assuming that our WHOIS database is always completely up to date, since it's
-      // querying the live backend datastore.
+      // querying the live backend Datastore.
       stringBuilder
           .append(">>> Last update of WHOIS database: ")
           .append(UtcDateTimeAdapter.getFormattedString(timestamp))
@@ -160,8 +167,7 @@ abstract class WhoisResponseImpl implements WhoisResponse {
 
     /** Returns raw text that should be appended to the end of ALL WHOIS responses. */
     E emitFooter(String disclaimer) {
-      emitField(ICANN_REPORTING_URL_FIELD, ICANN_REPORTING_URL);
-      stringBuilder.append("\r\n").append(disclaimer).append("\r\n");
+      stringBuilder.append(disclaimer.replaceAll("\r?\n", "\r\n").trim()).append("\r\n");
       return thisCastToDerived();
     }
 
@@ -191,11 +197,4 @@ abstract class WhoisResponseImpl implements WhoisResponse {
 
   /** An emitter that needs no special logic. */
   static class BasicEmitter extends Emitter<BasicEmitter> {}
-
-  /** Returns the registrar for this client id, or an empty registrar with null values. */
-  static Registrar getRegistrar(@Nullable String clientId) {
-    return Optional
-        .fromNullable(clientId == null ? null : Registrar.loadByClientId(clientId))
-        .or(EMPTY_REGISTRAR);
-  }
 }

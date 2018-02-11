@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Maps.transformValues;
 import static com.google.common.collect.Sets.difference;
-import static com.google.common.collect.Sets.intersection;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.util.CollectionUtils.difference;
 import static google.registry.util.CollectionUtils.forceEmptyToNull;
@@ -28,16 +27,13 @@ import static google.registry.util.CollectionUtils.nullToEmpty;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
 import static google.registry.util.CollectionUtils.union;
 
-import com.google.common.base.Function;
 import com.google.common.base.MoreObjects;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.Work;
 import google.registry.model.EppResource;
 import google.registry.model.ImmutableObject;
 import google.registry.model.contact.ContactResource;
-import google.registry.model.eppcommon.AuthInfo;
 import google.registry.model.eppinput.ResourceCommand.AbstractSingleResourceCommand;
 import google.registry.model.eppinput.ResourceCommand.ResourceCheck;
 import google.registry.model.eppinput.ResourceCommand.ResourceCreateOrChange;
@@ -71,7 +67,7 @@ public class DomainCommand {
    */
   public interface CreateOrUpdate<T extends CreateOrUpdate<T>> extends SingleResourceCommand {
     /** Creates a copy of this command with hard links to hosts and contacts. */
-    public T cloneAndLinkReferences(DateTime now) throws InvalidReferencesException;
+    T cloneAndLinkReferences(DateTime now) throws InvalidReferencesException;
   }
 
   /** The fields on "chgType" from {@link "http://tools.ietf.org/html/rfc5731"}. */
@@ -98,14 +94,8 @@ public class DomainCommand {
       return registrant;
     }
 
-    @Override
-    public void applyTo(B builder) {
-      if (registrant != null) {
-        builder.setRegistrant(registrant);
-      }
-      if (authInfo != null) {
-        builder.setAuthInfo(authInfo);
-      }
+    public DomainAuthInfo getAuthInfo() {
+      return authInfo;
     }
   }
 
@@ -175,22 +165,8 @@ public class DomainCommand {
     }
 
     @Override
-    public AuthInfo getAuthInfo() {
+    public DomainAuthInfo getAuthInfo() {
       return authInfo;
-    }
-
-    @Override
-    public void applyTo(DomainBase.Builder<?, ?> builder) {
-      super.applyTo(builder);
-      if (fullyQualifiedDomainName != null) {
-        builder.setFullyQualifiedDomainName(fullyQualifiedDomainName);
-      }
-      if (nameservers != null) {
-        builder.setNameservers(getNameservers());
-      }
-      if (contacts != null) {
-        builder.setContacts(getContacts());
-      }
     }
 
     /** Creates a copy of this {@link Create} with hard links to hosts and contacts. */
@@ -422,24 +398,6 @@ public class DomainCommand {
       }
     }
 
-    @Override
-    public void applyTo(DomainBase.Builder<?, ?> builder) throws AddRemoveSameValueException {
-      super.applyTo(builder);
-      getInnerChange().applyTo(builder);
-      AddRemove add = getInnerAdd();
-      AddRemove remove = getInnerRemove();
-      if (!intersection(add.getNameservers(), remove.getNameservers()).isEmpty()) {
-        throw new AddRemoveSameValueException();
-      }
-      builder.addNameservers(add.getNameservers());
-      builder.removeNameservers(remove.getNameservers());
-      if (!intersection(add.getContacts(), remove.getContacts()).isEmpty()) {
-        throw new AddRemoveSameValueException();
-      }
-      builder.addContacts(add.getContacts());
-      builder.removeContacts(remove.getContacts());
-    }
-
     /**
      * Creates a copy of this {@link Update} with hard links to hosts and contacts.
      *
@@ -488,23 +446,13 @@ public class DomainCommand {
   private static <T extends EppResource> ImmutableMap<String, Key<T>> loadByForeignKey(
       final Set<String> foreignKeys, final Class<T> clazz, final DateTime now)
       throws InvalidReferencesException {
-    Map<String, ForeignKeyIndex<T>> fkis = ofy().doTransactionless(
-        new Work<Map<String, ForeignKeyIndex<T>>>() {
-          @Override
-          public Map<String, ForeignKeyIndex<T>> run() {
-            return ForeignKeyIndex.load(clazz, foreignKeys, now);
-          }});
+    Map<String, ForeignKeyIndex<T>> fkis =
+        ofy().doTransactionless(() -> ForeignKeyIndex.load(clazz, foreignKeys, now));
     if (!fkis.keySet().equals(foreignKeys)) {
       throw new InvalidReferencesException(
           clazz, ImmutableSet.copyOf(difference(foreignKeys, fkis.keySet())));
     }
-    return ImmutableMap.copyOf(transformValues(
-        fkis,
-        new Function<ForeignKeyIndex<T>, Key<T>>() {
-          @Override
-          public Key<T> apply(ForeignKeyIndex<T> fki) {
-            return fki.getResourceKey();
-          }}));
+    return ImmutableMap.copyOf(transformValues(fkis, ForeignKeyIndex::getResourceKey));
   }
 
   /** Exception to throw when referenced objects don't exist. */

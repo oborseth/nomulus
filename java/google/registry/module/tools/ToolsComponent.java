@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,22 +15,27 @@
 package google.registry.module.tools;
 
 import dagger.Component;
-import google.registry.config.ConfigModule;
+import google.registry.config.RegistryConfig.ConfigModule;
 import google.registry.export.DriveModule;
+import google.registry.flows.ServerTridProviderModule;
+import google.registry.flows.custom.CustomLogicFactoryModule;
 import google.registry.gcs.GcsServiceModule;
 import google.registry.groups.DirectoryModule;
 import google.registry.groups.GroupsModule;
 import google.registry.groups.GroupssettingsModule;
-import google.registry.keyring.api.DummyKeyringModule;
 import google.registry.keyring.api.KeyModule;
+import google.registry.keyring.kms.KmsModule;
+import google.registry.module.tools.ToolsRequestComponent.ToolsRequestComponentModule;
 import google.registry.request.Modules.AppIdentityCredentialModule;
 import google.registry.request.Modules.DatastoreServiceModule;
 import google.registry.request.Modules.GoogleCredentialModule;
 import google.registry.request.Modules.Jackson2Module;
 import google.registry.request.Modules.ModulesServiceModule;
+import google.registry.request.Modules.NetHttpTransportModule;
 import google.registry.request.Modules.UrlFetchTransportModule;
 import google.registry.request.Modules.UseAppIdentityCredentialForGoogleApisModule;
-import google.registry.request.RequestModule;
+import google.registry.request.Modules.UserServiceModule;
+import google.registry.request.auth.AuthModule;
 import google.registry.util.SystemClock.SystemClockModule;
 import google.registry.util.SystemSleeper.SystemSleeperModule;
 import javax.inject.Singleton;
@@ -38,25 +43,33 @@ import javax.inject.Singleton;
 /** Dagger component with instance lifetime for "tools" App Engine module. */
 @Singleton
 @Component(
-    modules = {
-        AppIdentityCredentialModule.class,
-        ConfigModule.class,
-        DatastoreServiceModule.class,
-        DirectoryModule.class,
-        DriveModule.class,
-        DummyKeyringModule.class,
-        GcsServiceModule.class,
-        GoogleCredentialModule.class,
-        GroupsModule.class,
-        GroupssettingsModule.class,
-        Jackson2Module.class,
-        KeyModule.class,
-        ModulesServiceModule.class,
-        UrlFetchTransportModule.class,
-        UseAppIdentityCredentialForGoogleApisModule.class,
-        SystemClockModule.class,
-        SystemSleeperModule.class,
-    })
+  modules = {
+    AppIdentityCredentialModule.class,
+    AuthModule.class,
+    ConfigModule.class,
+    CustomLogicFactoryModule.class,
+    DatastoreServiceModule.class,
+    DirectoryModule.class,
+    google.registry.keyring.api.DummyKeyringModule.class,
+    DriveModule.class,
+    GcsServiceModule.class,
+    GoogleCredentialModule.class,
+    GroupsModule.class,
+    GroupssettingsModule.class,
+    Jackson2Module.class,
+    KeyModule.class,
+    KmsModule.class,
+    ModulesServiceModule.class,
+    NetHttpTransportModule.class,
+    ServerTridProviderModule.class,
+    SystemClockModule.class,
+    SystemSleeperModule.class,
+    ToolsRequestComponentModule.class,
+    UrlFetchTransportModule.class,
+    UseAppIdentityCredentialForGoogleApisModule.class,
+    UserServiceModule.class,
+  }
+)
 interface ToolsComponent {
-  ToolsRequestComponent startRequest(RequestModule requestModule);
+  ToolsRequestHandler requestHandler();
 }

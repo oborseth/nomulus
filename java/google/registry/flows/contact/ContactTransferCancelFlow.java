@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,33 +14,35 @@
 
 package google.registry.flows.contact;
 
+import static google.registry.flows.FlowUtils.validateClientIsLoggedIn;
 import static google.registry.flows.ResourceFlowUtils.denyPendingTransfer;
 import static google.registry.flows.ResourceFlowUtils.loadAndVerifyExistence;
-import static google.registry.flows.ResourceFlowUtils.verifyOptionalAuthInfoForResource;
+import static google.registry.flows.ResourceFlowUtils.verifyHasPendingTransfer;
+import static google.registry.flows.ResourceFlowUtils.verifyOptionalAuthInfo;
+import static google.registry.flows.ResourceFlowUtils.verifyTransferInitiator;
 import static google.registry.flows.contact.ContactFlowUtils.createLosingTransferPollMessage;
 import static google.registry.flows.contact.ContactFlowUtils.createTransferResponse;
-import static google.registry.model.eppoutput.Result.Code.SUCCESS;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 
-import com.google.common.base.Optional;
 import com.googlecode.objectify.Key;
 import google.registry.flows.EppException;
+import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.ClientId;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.LoggedInFlow;
 import google.registry.flows.TransactionalFlow;
-import google.registry.flows.exceptions.NotPendingTransferException;
-import google.registry.flows.exceptions.NotTransferInitiatorException;
+import google.registry.flows.annotations.ReportingSpec;
 import google.registry.model.contact.ContactResource;
 import google.registry.model.domain.metadata.MetadataExtension;
 import google.registry.model.eppcommon.AuthInfo;
 import google.registry.model.eppinput.ResourceCommand;
-import google.registry.model.eppoutput.EppOutput;
+import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.poll.PollMessage;
 import google.registry.model.reporting.HistoryEntry;
-import google.registry.model.transfer.TransferData;
+import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
 import google.registry.model.transfer.TransferStatus;
+import java.util.Optional;
 import javax.inject.Inject;
+import org.joda.time.DateTime;
 
 /**
  * An EPP flow that cancels a pending transfer on a contact.
@@ -55,31 +57,28 @@ import javax.inject.Inject;
  * @error {@link google.registry.flows.exceptions.NotPendingTransferException}
  * @error {@link google.registry.flows.exceptions.NotTransferInitiatorException}
  */
-public final class ContactTransferCancelFlow extends LoggedInFlow implements TransactionalFlow {
+@ReportingSpec(ActivityReportField.CONTACT_TRANSFER_CANCEL)
+public final class ContactTransferCancelFlow implements TransactionalFlow {
 
   @Inject ResourceCommand resourceCommand;
+  @Inject ExtensionManager extensionManager;
   @Inject Optional<AuthInfo> authInfo;
   @Inject @ClientId String clientId;
   @Inject @TargetId String targetId;
   @Inject HistoryEntry.Builder historyBuilder;
+  @Inject EppResponse.Builder responseBuilder;
   @Inject ContactTransferCancelFlow() {}
 
   @Override
-  protected final void initLoggedInFlow() throws EppException {
-    registerExtensions(MetadataExtension.class);
-  }
-
-  @Override
-  protected final EppOutput run() throws EppException {
+  public final EppResponse run() throws EppException {
+    extensionManager.register(MetadataExtension.class);
+    extensionManager.validate();
+    validateClientIsLoggedIn(clientId);
+    DateTime now = ofy().getTransactionTime();
     ContactResource existingContact = loadAndVerifyExistence(ContactResource.class, targetId, now);
-    verifyOptionalAuthInfoForResource(authInfo, existingContact);
-    TransferData transferData = existingContact.getTransferData();
-    if (transferData.getTransferStatus() != TransferStatus.PENDING) {
-      throw new NotPendingTransferException(targetId);
-    }
-    if (!clientId.equals(transferData.getGainingClientId())) {
-      throw new NotTransferInitiatorException();
-    }
+    verifyOptionalAuthInfo(authInfo, existingContact);
+    verifyHasPendingTransfer(existingContact);
+    verifyTransferInitiator(clientId, existingContact);
     ContactResource newContact =
         denyPendingTransfer(existingContact, TransferStatus.CLIENT_CANCELLED, now);
     HistoryEntry historyEntry = historyBuilder
@@ -93,7 +92,9 @@ public final class ContactTransferCancelFlow extends LoggedInFlow implements Tra
     ofy().save().<Object>entities(newContact, historyEntry, losingPollMessage);
     // Delete the billing event and poll messages that were written in case the transfer would have
     // been implicitly server approved.
-    ofy().delete().keys(transferData.getServerApproveEntities());
-    return createOutput(SUCCESS, createTransferResponse(targetId, newContact.getTransferData()));
+    ofy().delete().keys(existingContact.getTransferData().getServerApproveEntities());
+    return responseBuilder
+        .setResData(createTransferResponse(targetId, newContact.getTransferData()))
+        .build();
   }
 }

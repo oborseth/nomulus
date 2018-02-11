@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,12 +15,11 @@
 package google.registry.tldconfig.idn;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
-import google.registry.testing.ExceptionRule;
 import java.net.URI;
-import org.junit.Rule;
+import java.util.Optional;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -28,13 +27,9 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link IdnTable}. */
 @RunWith(JUnit4.class)
 public class IdnTableTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   @Test
   public void testDigits() {
-    ImmutableList<String> of = ImmutableList.<String>of(
+    ImmutableList<String> of = ImmutableList.of(
         "# URL: https://love.example/lolcatattack.txt",
         "# Policy: https://love.example/policy.html",
         "U+0030",
@@ -47,8 +42,7 @@ public class IdnTableTest {
         "U+0037",
         "U+0038",
         "U+0039");
-    IdnTable idnTable =
-        IdnTable.createFrom("lolcatattack", of, Optional.<LanguageValidator>absent());
+    IdnTable idnTable = IdnTable.createFrom("lolcatattack", of, Optional.empty());
     assertThat(idnTable.isValidLabel("0123456789")).isTrue();
     assertThat(idnTable.isValidLabel("54321a")).isFalse();
     assertThat(idnTable.isValidLabel("AAA000")).isFalse();
@@ -56,7 +50,7 @@ public class IdnTableTest {
 
   @Test
   public void testIgnoreCommentAndEmptyLines() {
-    IdnTable idnTable = IdnTable.createFrom("lolcatattack", ImmutableList.<String>of(
+    IdnTable idnTable = IdnTable.createFrom("lolcatattack", ImmutableList.of(
         "# URL: https://love.example/lolcatattack.txt",
         "# Policy: https://love.example/policy.html",
         "U+0030",
@@ -70,21 +64,25 @@ public class IdnTableTest {
         "U+0036",
         "U+0037",
         "U+0038",
-        "U+0039"), Optional.<LanguageValidator>absent());
+        "U+0039"), Optional.empty());
     assertThat(idnTable.isValidLabel("0123456789")).isFalse();
     assertThat(idnTable.isValidLabel("023456789")).isTrue();  // Works when you remove 1
   }
 
   @Test
   public void testSurrogates() {
-    IdnTable idnTable = IdnTable.createFrom("lolcatattack", ImmutableList.<String>of(
-        "# URL: https://love.example/lolcatattack.txt",
-        "# Policy: https://love.example/policy.html",
-        "U+0035",
-        "U+0036",
-        "U+0037",
-        "U+2070E",
-        "U+20731"), Optional.<LanguageValidator>absent());
+    IdnTable idnTable =
+        IdnTable.createFrom(
+            "lolcatattack",
+            ImmutableList.of(
+                "# URL: https://love.example/lolcatattack.txt",
+                "# Policy: https://love.example/policy.html",
+                "U+0035",
+                "U+0036",
+                "U+0037",
+                "U+2070E",
+                "U+20731"),
+            Optional.empty());
     assertThat(idnTable.getName()).isEqualTo("lolcatattack");
     assertThat(idnTable.isValidLabel("𠜎")).isTrue();
     assertThat(idnTable.isValidLabel("𠜱")).isTrue();
@@ -95,28 +93,31 @@ public class IdnTableTest {
 
   @Test
   public void testSpecialComments_getParsed() {
-    ImmutableList<String> of = ImmutableList.<String>of(
-        "# URL: https://love.example/lolcatattack.txt",
-        "# Policy: https://love.example/policy.html");
+    ImmutableList<String> of =
+        ImmutableList.of(
+            "# URL: https://love.example/lolcatattack.txt",
+            "# Policy: https://love.example/policy.html");
     IdnTable idnTable =
-        IdnTable.createFrom("lolcatattack", of, Optional.<LanguageValidator>absent());
+        IdnTable.createFrom("lolcatattack", of, Optional.empty());
     assertThat(idnTable.getUrl()).isEqualTo(URI.create("https://love.example/lolcatattack.txt"));
     assertThat(idnTable.getPolicy()).isEqualTo(URI.create("https://love.example/policy.html"));
   }
 
   @Test
   public void testMissingUrl_throwsNpe() {
-    ImmutableList<String> of = ImmutableList.<String>of(
-        "# Policy: https://love.example/policy.html");
-    thrown.expect(NullPointerException.class, "sloth missing '# URL:");
-    IdnTable.createFrom("sloth", of, Optional.<LanguageValidator>absent());
+    ImmutableList<String> of = ImmutableList.of("# Policy: https://love.example/policy.html");
+    NullPointerException thrown =
+        expectThrows(
+            NullPointerException.class, () -> IdnTable.createFrom("sloth", of, Optional.empty()));
+    assertThat(thrown).hasMessageThat().contains("sloth missing '# URL:");
   }
 
   @Test
   public void testMissingPolicy_throwsNpe() {
-    ImmutableList<String> of = ImmutableList.<String>of(
-        "# URL: https://love.example/sloth.txt");
-    thrown.expect(NullPointerException.class, "sloth missing '# Policy:");
-    IdnTable.createFrom("sloth", of, Optional.<LanguageValidator>absent());
+    ImmutableList<String> of = ImmutableList.of("# URL: https://love.example/sloth.txt");
+    NullPointerException thrown =
+        expectThrows(
+            NullPointerException.class, () -> IdnTable.createFrom("sloth", of, Optional.empty()));
+    assertThat(thrown).hasMessageThat().contains("sloth missing '# Policy:");
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,10 +14,12 @@
 
 package google.registry.tools;
 
-import static google.registry.util.ResourceUtils.readResourceUtf8;
+import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
+import google.registry.tools.server.ToolsTestData;
 import java.util.List;
 import org.junit.Test;
 
@@ -52,8 +54,8 @@ public class EppToolCommandTest extends EppToolCommandTestCase<EppToolCommand> {
     // The choice of xml file is arbitrary.
     runCommandForced(
         "--client=NewRegistrar",
-        readResourceUtf8(getClass(), "testdata/contact_create.xml"));
-    eppVerifier().verifySent("contact_create.xml");
+        ToolsTestData.loadFile("contact_create.xml"));
+    eppVerifier.verifySent("contact_create.xml");
   }
 
   @Test
@@ -61,15 +63,21 @@ public class EppToolCommandTest extends EppToolCommandTestCase<EppToolCommand> {
     // The choice of xml files is arbitrary.
     runCommandForced(
         "--client=NewRegistrar",
-        readResourceUtf8(getClass(), "testdata/contact_create.xml"),
-        readResourceUtf8(getClass(), "testdata/domain_check.xml"),
-        readResourceUtf8(getClass(), "testdata/domain_check_fee.xml"));
-    eppVerifier().verifySent("contact_create.xml", "domain_check.xml", "domain_check_fee.xml");
+        ToolsTestData.loadFile("contact_create.xml"),
+        ToolsTestData.loadFile("domain_check.xml"),
+        ToolsTestData.loadFile("domain_check_fee.xml"));
+    eppVerifier
+        .verifySent("contact_create.xml")
+        .verifySent("domain_check.xml")
+        .verifySent("domain_check_fee.xml");
   }
 
   @Test
   public void testFailure_nonexistentClientId() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "fakeclient");
-    runCommandForced("--client=fakeclient", "fake-xml");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--client=fakeclient", "fake-xml"));
+    assertThat(thrown).hasMessageThat().contains("fakeclient");
   }
 }

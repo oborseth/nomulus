@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,9 +25,13 @@ import com.googlecode.objectify.condition.IfNull;
 import google.registry.model.Buildable;
 import google.registry.model.EppResource;
 import google.registry.model.billing.BillingEvent;
+import google.registry.model.domain.Period;
+import google.registry.model.domain.Period.Unit;
 import google.registry.model.eppcommon.Trid;
 import google.registry.model.poll.PollMessage;
 import java.util.Set;
+import javax.annotation.Nullable;
+import org.joda.time.DateTime;
 
 /**
  * Common transfer data for {@link EppResource} types. Only applies to domains and contacts;
@@ -38,6 +42,34 @@ import java.util.Set;
 public class TransferData extends BaseTransferObject implements Buildable {
 
   public static final TransferData EMPTY = new TransferData();
+
+  /** The transaction id of the most recent transfer request (or null if there never was one). */
+  Trid transferRequestTrid;
+
+  /**
+   * The period to extend the registration upon completion of the transfer.
+   *
+   * <p>By default, domain transfers are for one year. This can be changed to zero by using the
+   * superuser EPP extension.
+   */
+  Period transferPeriod = Period.create(1, Unit.YEARS);
+
+  /**
+   * The registration expiration time resulting from the approval - speculative or actual - of the
+   * most recent transfer request, applicable for domains only.
+   *
+   * <p>For pending transfers, this is the expiration time that will take effect under a projected
+   * server approval. For approved transfers, this is the actual expiration time of the domain as
+   * of the moment of transfer completion. For rejected or cancelled transfers, this field will be
+   * reset to null.
+   *
+   * <p>Note that even when this field is set, it does not necessarily mean that the post-transfer
+   * domain has a new expiration time.  Superuser transfers may not include a bundled 1 year renewal
+   * at all, or even when a renewal is bundled, for a transfer during the autorenew grace period the
+   * bundled renewal simply subsumes the recent autorenewal, resulting in the same expiration time.
+   */
+  // TODO(b/36405140): backfill this field for existing domains to which it should apply.
+  DateTime transferredRegistrationExpirationTime;
 
   /**
    * The billing event and poll messages associated with a server-approved transfer.
@@ -78,42 +110,64 @@ public class TransferData extends BaseTransferObject implements Buildable {
   @IgnoreSave(IfNull.class)
   Key<PollMessage.Autorenew> serverApproveAutorenewPollMessage;
 
-  /** The transaction id of the most recent transfer request (or null if there never was one). */
-  Trid transferRequestTrid;
+  @Nullable
+  public Trid getTransferRequestTrid() {
+    return transferRequestTrid;
+  }
 
-  /**
-   * The number of years to add to the registration expiration time if this transfer is approved.
-   * Can be null if never transferred, or for resource types where it's not applicable.
-   */
-  Integer extendedRegistrationYears;
+  public Period getTransferPeriod() {
+    return transferPeriod;
+  }
+
+  @Nullable
+  public DateTime getTransferredRegistrationExpirationTime() {
+    return transferredRegistrationExpirationTime;
+  }
 
   public ImmutableSet<Key<? extends TransferServerApproveEntity>> getServerApproveEntities() {
     return nullToEmptyImmutableCopy(serverApproveEntities);
   }
 
+  @Nullable
   public Key<BillingEvent.OneTime> getServerApproveBillingEvent() {
     return serverApproveBillingEvent;
   }
 
+  @Nullable
   public Key<BillingEvent.Recurring> getServerApproveAutorenewEvent() {
     return serverApproveAutorenewEvent;
   }
 
+  @Nullable
   public Key<PollMessage.Autorenew> getServerApproveAutorenewPollMessage() {
     return serverApproveAutorenewPollMessage;
-  }
-
-  public Trid getTransferRequestTrid() {
-    return transferRequestTrid;
-  }
-
-  public Integer getExtendedRegistrationYears() {
-    return extendedRegistrationYears;
   }
 
   @Override
   public Builder asBuilder() {
     return new Builder(clone(this));
+  }
+
+  /**
+   * Returns a fresh Builder populated only with the constant fields of this TransferData, i.e.
+   * those that are fixed and unchanging throughout the transfer process.
+   *
+   * <p>These fields are:
+   * <ul>
+   *   <li>transferRequestTrid
+   *   <li>transferRequestTime
+   *   <li>gainingClientId
+   *   <li>losingClientId
+   *   <li>transferPeriod
+   * </ul>
+   */
+  public Builder copyConstantFieldsToBuilder() {
+    return new Builder()
+        .setTransferRequestTrid(this.transferRequestTrid)
+        .setTransferRequestTime(this.transferRequestTime)
+        .setGainingClientId(this.gainingClientId)
+        .setLosingClientId(this.losingClientId)
+        .setTransferPeriod(this.transferPeriod);
   }
 
   /** Builder for {@link TransferData} because it is immutable. */
@@ -125,6 +179,22 @@ public class TransferData extends BaseTransferObject implements Buildable {
     /** Create a {@link Builder} wrapping the given instance. */
     private Builder(TransferData instance) {
       super(instance);
+    }
+
+    public Builder setTransferRequestTrid(Trid transferRequestTrid) {
+      getInstance().transferRequestTrid = transferRequestTrid;
+      return this;
+    }
+
+    public Builder setTransferPeriod(Period transferPeriod) {
+      getInstance().transferPeriod = transferPeriod;
+      return this;
+    }
+
+    public Builder setTransferredRegistrationExpirationTime(
+        DateTime transferredRegistrationExpirationTime) {
+      getInstance().transferredRegistrationExpirationTime = transferredRegistrationExpirationTime;
+      return this;
     }
 
     public Builder setServerApproveEntities(
@@ -149,17 +219,6 @@ public class TransferData extends BaseTransferObject implements Buildable {
         Key<PollMessage.Autorenew> serverApproveAutorenewPollMessage) {
       getInstance().serverApproveAutorenewPollMessage = serverApproveAutorenewPollMessage;
       return this;
-    }
-
-    public Builder setTransferRequestTrid(Trid transferRequestTrid) {
-      getInstance().transferRequestTrid = transferRequestTrid;
-      return this;
-    }
-
-    /** Set the years to add to the registration if this transfer completes. */
-    public Builder setExtendedRegistrationYears(Integer extendedRegistrationYears) {
-      getInstance().extendedRegistrationYears = extendedRegistrationYears;
-      return thisCastToDerived();
     }
   }
 

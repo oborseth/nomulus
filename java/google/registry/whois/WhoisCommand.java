@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ package google.registry.whois;
 import org.joda.time.DateTime;
 
 /** Represents a WHOIS command request from a client. */
-interface WhoisCommand {
+public interface WhoisCommand {
 
   /**
    * Executes a WHOIS query and returns the resultant data.

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -42,6 +42,6 @@ import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
  * <p>Command classes are never persisted, and the Objectify annotations on the Create and Update
  * classes are purely for the benefit of the derived Resource classes that inherit from them.
  * Whenever a command that mutates the model is executed, a HistoryEvent is stored with the affected
- * Resource as its datastore parent. All history entries have an indexed modification time field so
+ * Resource as its Datastore parent. All history entries have an indexed modification time field so
  * that the history can be read in chronological order.
  */

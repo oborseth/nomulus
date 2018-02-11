@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,16 @@ import static google.registry.testing.FullFieldsTestEntityHelper.makeDomainResou
 import static google.registry.testing.FullFieldsTestEntityHelper.makeHostResource;
 import static google.registry.testing.FullFieldsTestEntityHelper.makeRegistrar;
 import static google.registry.testing.FullFieldsTestEntityHelper.makeRegistrarContacts;
-import static google.registry.whois.WhoisHelper.loadWhoisTestFile;
+import static google.registry.testing.JUnitBackports.expectThrows;
+import static google.registry.whois.WhoisTestData.loadFile;
+import static javax.servlet.http.HttpServletResponse.SC_BAD_REQUEST;
+import static javax.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
+import static javax.servlet.http.HttpServletResponse.SC_OK;
+import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import google.registry.model.contact.ContactResource;
 import google.registry.model.ofy.Ofy;
@@ -34,6 +43,9 @@ import google.registry.testing.AppEngineRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.FakeResponse;
 import google.registry.testing.InjectRule;
+import google.registry.whois.WhoisMetrics.WhoisMetric;
+import java.io.IOException;
+import java.io.Reader;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 import org.junit.After;
@@ -53,25 +65,24 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class WhoisHttpServerTest {
 
-  @Rule
-  public final AppEngineRule appEngine = AppEngineRule.builder()
-      .withDatastore()
-      .build();
-
-  @Rule
-  public final InjectRule inject = new InjectRule();
+  @Rule public final AppEngineRule appEngine = AppEngineRule.builder().withDatastore().build();
+  @Rule public final InjectRule inject = new InjectRule();
 
   private final FakeResponse response = new FakeResponse();
   private final FakeClock clock = new FakeClock(DateTime.parse("2009-06-29T20:13:00Z"));
 
   private WhoisHttpServer newWhoisHttpServer(String pathInfo) {
-    WhoisHttpServer result = new WhoisHttpServer();
-    result.clock = clock;
-    result.expires = Duration.standardHours(1);
-    result.requestPath = WhoisHttpServer.PATH + pathInfo;
-    result.response = response;
-    result.disclaimer = "Doodle Disclaimer";
-    return result;
+    WhoisHttpServer whoisServer = new WhoisHttpServer();
+    whoisServer.clock = clock;
+    whoisServer.expires = Duration.standardHours(1);
+    whoisServer.requestPath = WhoisHttpServer.PATH + pathInfo;
+    whoisServer.response = response;
+    whoisServer.whoisReader = new WhoisReader(new WhoisCommandFactory());
+    whoisServer.whoisMetrics = new WhoisMetrics();
+    whoisServer.metricBuilder = WhoisMetric.builderForRequest(clock);
+    whoisServer.disclaimer =
+        "Doodle Disclaimer\nI exist so that carriage return\nin disclaimer can be tested.";
+    return whoisServer;
   }
 
   @Before
@@ -91,7 +102,7 @@ public class WhoisHttpServerTest {
     newWhoisHttpServer("").run();
     assertThat(response.getStatus()).isEqualTo(400);
     assertThat(response.getContentType()).isEqualTo(PLAIN_TEXT_UTF_8);
-    assertThat(response.getPayload()).isEqualTo(loadWhoisTestFile("whois_server_no_command.txt"));
+    assertThat(response.getPayload()).isEqualTo(loadFile("whois_server_no_command.txt"));
   }
 
   @Test
@@ -100,7 +111,7 @@ public class WhoisHttpServerTest {
     assertThat(response.getStatus()).isEqualTo(400);
     assertThat(response.getContentType()).isEqualTo(PLAIN_TEXT_UTF_8);
     assertThat(response.getPayload())
-        .isEqualTo(loadWhoisTestFile("whois_server_malformed_path.txt"));
+        .isEqualTo(loadFile("whois_server_malformed_path.txt"));
   }
 
   @Test
@@ -109,7 +120,7 @@ public class WhoisHttpServerTest {
     assertThat(response.getStatus()).isEqualTo(404);
     assertThat(response.getContentType()).isEqualTo(PLAIN_TEXT_UTF_8);
     assertThat(response.getPayload())
-        .isEqualTo(loadWhoisTestFile("whois_server_domain_not_found.txt"));
+        .isEqualTo(loadFile("whois_server_domain_not_found.txt"));
   }
 
   // todo (b/27378695): reenable or delete this test
@@ -132,7 +143,7 @@ public class WhoisHttpServerTest {
     assertThat(response.getStatus()).isEqualTo(404);
     assertThat(response.getContentType()).isEqualTo(PLAIN_TEXT_UTF_8);
     assertThat(response.getPayload())
-        .isEqualTo(loadWhoisTestFile("whois_server_domain_not_found.txt"));
+        .isEqualTo(loadFile("whois_server_domain_not_found.txt"));
   }
 
   @Test
@@ -150,7 +161,7 @@ public class WhoisHttpServerTest {
     persistSimpleResources(makeRegistrarContacts(registrar));
     newWhoisHttpServer("/domain/cat.みんな").run();
     assertThat(response.getStatus()).isEqualTo(200);
-    assertThat(response.getPayload()).isEqualTo(loadWhoisTestFile("whois_server_idn_utf8.txt"));
+    assertThat(response.getPayload()).isEqualTo(loadFile("whois_server_idn_utf8.txt"));
   }
 
   @Test
@@ -164,7 +175,7 @@ public class WhoisHttpServerTest {
         trl,
         persistResource(makeHostResource("ns1.cat.みんな", "1.2.3.4")),
         persistResource(makeHostResource("ns2.cat.みんな", "bad:f00d:cafe::15:beef")),
-        persistResource( makeRegistrar("example", "Example Registrar", Registrar.State.ACTIVE))));
+        persistResource(makeRegistrar("example", "Example Registrar", Registrar.State.ACTIVE))));
     newWhoisHttpServer("/domain/cat.みんな").run();
     assertThat(response.getPayload()).contains("Eric  Schmidt");
   }
@@ -219,14 +230,14 @@ public class WhoisHttpServerTest {
         registrar));
     persistSimpleResources(makeRegistrarContacts(registrar));
     newWhoisHttpServer("/domain/cat.xn--q9jyb4c").run();
-    assertThat(response.getPayload()).isEqualTo(loadWhoisTestFile("whois_server_idn_utf8.txt"));
+    assertThat(response.getPayload()).isEqualTo(loadFile("whois_server_idn_utf8.txt"));
   }
 
   @Test
   public void testRun_nameserverQuery_works() throws Exception {
     persistResource(makeHostResource("ns1.cat.lol", "1.2.3.4"));
     newWhoisHttpServer("/nameserver/ns1.cat.lol").run();
-    assertThat(response.getPayload()).isEqualTo(loadWhoisTestFile("whois_server_nameserver.txt"));
+    assertThat(response.getPayload()).isEqualTo(loadFile("whois_server_nameserver.txt"));
   }
 
   // todo (b/27378695): reenable or delete this test
@@ -235,7 +246,7 @@ public class WhoisHttpServerTest {
   public void testRun_nameserverQueryInTestTld_notFound() throws Exception {
     persistResource(makeHostResource("ns1.cat.lol", "1.2.3.4"));
     newWhoisHttpServer("/nameserver/ns1.cat.lol").run();
-    assertThat(response.getPayload()).isEqualTo(loadWhoisTestFile("whois_server_nameserver.txt"));
+    assertThat(response.getPayload()).isEqualTo(loadFile("whois_server_nameserver.txt"));
   }
 
   @Test
@@ -308,7 +319,7 @@ public class WhoisHttpServerTest {
     // Notice the partial search without "inc".
     newWhoisHttpServer("/registrar/Example%20Registrar").run();
     assertThat(response.getStatus()).isEqualTo(200);
-    assertThat(response.getPayload()).isEqualTo(loadWhoisTestFile("whois_server_registrar.txt"));
+    assertThat(response.getPayload()).isEqualTo(loadFile("whois_server_registrar.txt"));
   }
 
   @Test
@@ -319,7 +330,7 @@ public class WhoisHttpServerTest {
     newWhoisHttpServer("/registrar/Example%20Registrar,%20Inc.").run();
     assertThat(response.getStatus()).isEqualTo(404);
     assertThat(response.getPayload())
-        .isEqualTo(loadWhoisTestFile("whois_server_registrar_not_found.txt"));
+        .isEqualTo(loadFile("whois_server_registrar_not_found.txt"));
   }
 
   @Test
@@ -331,6 +342,50 @@ public class WhoisHttpServerTest {
     newWhoisHttpServer("/registrar/Example%20Registrar,%20Inc.").run();
     assertThat(response.getStatus()).isEqualTo(404);
     assertThat(response.getPayload())
-        .isEqualTo(loadWhoisTestFile("whois_server_registrar_not_found.txt"));
+        .isEqualTo(loadFile("whois_server_registrar_not_found.txt"));
+  }
+
+  @Test
+  public void testRun_metricsLoggedForSuccessfulCommand() throws Exception {
+    persistResource(makeHostResource("ns1.cat.lol", "1.2.3.4"));
+    WhoisHttpServer server = newWhoisHttpServer("/nameserver/ns1.cat.lol");
+    server.whoisMetrics = mock(WhoisMetrics.class);
+    server.run();
+    WhoisMetric expected =
+        WhoisMetric.builderForRequest(clock)
+            .setCommandName("NameserverLookupByHost")
+            .setNumResults(1)
+            .setStatus(SC_OK)
+            .build();
+    verify(server.whoisMetrics).recordWhoisMetric(eq(expected));
+  }
+
+  @Test
+  public void testRun_metricsLoggedForUnsuccessfulCommand() throws Exception {
+    WhoisHttpServer server = newWhoisHttpServer("nic.%u307F%u3093%u306A");
+    server.whoisMetrics = mock(WhoisMetrics.class);
+    server.run();
+    WhoisMetric expected =
+        WhoisMetric.builderForRequest(clock).setNumResults(0).setStatus(SC_BAD_REQUEST).build();
+    verify(server.whoisMetrics).recordWhoisMetric(eq(expected));
+  }
+
+  @Test
+  public void testRun_metricsLoggedForInternalServerError() throws Exception {
+    persistResource(makeHostResource("ns1.cat.lol", "1.2.3.4"));
+    WhoisHttpServer server = newWhoisHttpServer("ns1.cat.lol");
+    server.whoisReader = mock(WhoisReader.class);
+    when(server.whoisReader.readCommand(any(Reader.class), any(DateTime.class)))
+        .thenThrow(new IOException("missing cat interface"));
+    server.whoisMetrics = mock(WhoisMetrics.class);
+
+    RuntimeException thrown = expectThrows(RuntimeException.class, server::run);
+    assertThat(thrown).hasCauseThat().hasMessageThat().isEqualTo("missing cat interface");
+    WhoisMetric expected =
+        WhoisMetric.builderForRequest(clock)
+            .setNumResults(0)
+            .setStatus(SC_INTERNAL_SERVER_ERROR)
+            .build();
+    verify(server.whoisMetrics).recordWhoisMetric(eq(expected));
   }
 }

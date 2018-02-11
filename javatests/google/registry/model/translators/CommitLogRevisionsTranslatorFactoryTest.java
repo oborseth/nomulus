@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,21 +23,15 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSortedMap;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.ObjectifyService;
-import com.googlecode.objectify.VoidWork;
-import com.googlecode.objectify.Work;
 import com.googlecode.objectify.annotation.Entity;
-import google.registry.config.TestRegistryConfig;
 import google.registry.model.common.CrossTldSingleton;
 import google.registry.model.ofy.CommitLogManifest;
 import google.registry.model.ofy.Ofy;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.InjectRule;
-import google.registry.testing.RegistryConfigRule;
 import java.util.List;
 import org.joda.time.DateTime;
-import org.joda.time.Duration;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -63,18 +57,6 @@ public class CommitLogRevisionsTranslatorFactoryTest {
   @Rule
   public final InjectRule inject = new InjectRule();
 
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Rule
-  public final RegistryConfigRule configRule = new RegistryConfigRule(
-      new TestRegistryConfig() {
-        @Override
-        public Duration getCommitLogDatastoreRetention() {
-          return Duration.standardDays(30);
-        }
-      });
-
   private final FakeClock clock = new FakeClock(START_TIME);
 
   @Before
@@ -84,11 +66,7 @@ public class CommitLogRevisionsTranslatorFactoryTest {
   }
 
   private void save(final TestObject object) {
-    ofy().transact(new VoidWork() {
-      @Override
-       public void vrun() {
-         ofy().save().entity(object);
-       }});
+    ofy().transact(() -> ofy().save().entity(object));
   }
 
   private TestObject reload() {
@@ -172,11 +150,7 @@ public class CommitLogRevisionsTranslatorFactoryTest {
     save(new TestObject());
     clock.advanceBy(standardDays(1));
     com.google.appengine.api.datastore.Entity entity =
-        ofy().transactNewReadOnly(new Work<com.google.appengine.api.datastore.Entity>() {
-          @Override
-          public com.google.appengine.api.datastore.Entity run() {
-            return ofy().save().toEntity(reload());
-          }});
+        ofy().transactNewReadOnly(() -> ofy().save().toEntity(reload()));
     assertThat(entity.getProperties().keySet()).containsExactly("revisions.key", "revisions.value");
     assertThat(entity.getProperties()).containsEntry(
         "revisions.key", ImmutableList.of(START_TIME.toDate(), START_TIME.plusDays(1).toDate()));
@@ -193,11 +167,7 @@ public class CommitLogRevisionsTranslatorFactoryTest {
   @Test
   public void testLoad_missingRevisionRawProperties_createsEmptyObject() throws Exception {
     com.google.appengine.api.datastore.Entity entity =
-        ofy().transactNewReadOnly(new Work<com.google.appengine.api.datastore.Entity>() {
-          @Override
-          public com.google.appengine.api.datastore.Entity run() {
-            return ofy().save().toEntity(new TestObject());
-          }});
+        ofy().transactNewReadOnly(() -> ofy().save().toEntity(new TestObject()));
     entity.removeProperty("revisions.key");
     entity.removeProperty("revisions.value");
     TestObject object = ofy().load().fromEntity(entity);

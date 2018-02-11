@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,8 +15,10 @@
 package google.registry.tools;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.model.registry.label.ReservationType.FULLY_BLOCKED;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 
 import com.google.common.collect.ImmutableList;
@@ -84,14 +86,18 @@ public class UpdateReservedListCommandTest extends
     assertThat(reservedList.getReservedListEntries()).hasSize(2);
     assertThat(reservedList.getReservationInList("baddies")).hasValue(FULLY_BLOCKED);
     assertThat(reservedList.getReservationInList("ford")).hasValue(FULLY_BLOCKED);
-    assertThat(reservedList.getReservationInList("helicopter")).isAbsent();
+    assertThat(reservedList.getReservationInList("helicopter")).isEmpty();
   }
 
   @Test
   public void testFailure_reservedListDoesntExist() throws Exception {
     String errorMessage =
         "Could not update reserved list xn--q9jyb4c_poobah because it doesn't exist.";
-    thrown.expect(IllegalArgumentException.class, errorMessage);
-    runCommand("--force", "--name=xn--q9jyb4c_poobah", "--input=" + reservedTermsPath);
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommand("--force", "--name=xn--q9jyb4c_poobah", "--input=" + reservedTermsPath));
+    assertThat(thrown).hasMessageThat().contains(errorMessage);
   }
 }

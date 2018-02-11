@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,11 +19,9 @@ import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.base.Strings.nullToEmpty;
 
 import com.google.common.base.Ascii;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.net.InetAddresses;
 import google.registry.request.HttpException.BadRequestException;
-import java.net.InetAddress;
+import java.util.Optional;
 import javax.annotation.Nullable;
 import javax.servlet.http.HttpServletRequest;
 import org.joda.time.DateTime;
@@ -31,7 +29,7 @@ import org.joda.time.DateTime;
 /** Utilities for extracting parameters from HTTP requests. */
 public final class RequestParameters {
 
-  /** The standardized request parameter name used by any servlet that takes a tld parameter. */
+  /** The standardized request parameter name used by any action that takes a tld parameter. */
   public static final String PARAM_TLD = "tld";
 
   /**
@@ -60,7 +58,7 @@ public final class RequestParameters {
 
   /** Returns the first GET or POST parameter associated with {@code name}. */
   public static Optional<String> extractOptionalParameter(HttpServletRequest req, String name) {
-    return Optional.fromNullable(emptyToNull(req.getParameter(name)));
+    return Optional.ofNullable(emptyToNull(req.getParameter(name)));
   }
 
   /**
@@ -72,7 +70,7 @@ public final class RequestParameters {
     String stringParam = req.getParameter(name);
     try {
       return isNullOrEmpty(stringParam)
-          ? Optional.<Integer>absent()
+          ? Optional.empty()
           : Optional.of(Integer.valueOf(stringParam));
     } catch (NumberFormatException e) {
       throw new BadRequestException("Expected integer: " + name);
@@ -95,7 +93,21 @@ public final class RequestParameters {
   /** Returns all GET or POST parameters associated with {@code name}. */
   public static ImmutableSet<String> extractSetOfParameters(HttpServletRequest req, String name) {
     String[] parameters = req.getParameterValues(name);
-    return parameters == null ? ImmutableSet.<String>of() : ImmutableSet.copyOf(parameters);
+    return parameters == null ? ImmutableSet.of() : ImmutableSet.copyOf(parameters);
+  }
+
+  /**
+   * Returns the first GET or POST parameter associated with {@code name}, absent otherwise.
+   *
+   * @throws BadRequestException if request parameter named {@code name} is not equal to any of the
+   *     values in {@code enumClass}
+   */
+  public static <C extends Enum<C>> Optional<C> extractOptionalEnumParameter(
+      HttpServletRequest req, Class<C> enumClass, String name) {
+    String stringParam = req.getParameter(name);
+    return isNullOrEmpty(stringParam)
+        ? Optional.empty()
+        : Optional.of(extractEnumParameter(req, enumClass, name));
   }
 
   /**
@@ -115,15 +127,27 @@ public final class RequestParameters {
   }
 
   /**
-   * Returns {@code true} if parameter is present and not empty and not {@code "false"}.
+   * Returns first GET or POST parameter associated with {@code name} as a boolean.
+   *
+   * @throws BadRequestException if request parameter is present but not a valid boolean
+   */
+  public static Optional<Boolean> extractOptionalBooleanParameter(
+      HttpServletRequest req, String name) {
+    String stringParam = req.getParameter(name);
+    return isNullOrEmpty(stringParam)
+        ? Optional.empty()
+        : Optional.of(Boolean.valueOf(stringParam));
+  }
+
+  /**
+   * Returns {@code true} iff the given parameter is present, not empty, and not {@code "false"}.
    *
    * <p>This considers a parameter with a non-existent value true, for situations where the request
    * URI is something like {@code /foo?bar}, where the mere presence of the {@code bar} parameter
    * without a value indicates that it's true.
    */
   public static boolean extractBooleanParameter(HttpServletRequest req, String name) {
-    return req.getParameterMap().containsKey(name)
-        && !equalsFalse(req.getParameter(name));
+    return req.getParameterMap().containsKey(name) && !equalsFalse(req.getParameter(name));
   }
 
   /**
@@ -155,7 +179,7 @@ public final class RequestParameters {
     String stringParam = req.getParameter(name);
     try {
       return isNullOrEmpty(stringParam)
-          ? Optional.<DateTime>absent()
+          ? Optional.empty()
           : Optional.of(DateTime.parse(stringParam));
     } catch (IllegalArgumentException e) {
       throw new BadRequestException("Bad ISO 8601 timestamp: " + name);
@@ -163,23 +187,30 @@ public final class RequestParameters {
   }
 
   /**
-   * Returns first request parameter associated with {@code name} parsed as an optional
-   * {@link InetAddress} (which might be IPv6).
+   * Returns all GET or POST date parameters associated with {@code name}, or an empty set if none.
    *
-   * @throws BadRequestException if request parameter named {@code name} is present but could not
-   *     be parsed as an {@link InetAddress}
+   * <p>Dates are parsed as an <a href="https://goo.gl/pk5Q2k">ISO 8601</a> timestamp, e.g. {@code
+   * 1984-12-18TZ}, {@code 2000-01-01T16:20:00Z}.
+   *
+   * @throws BadRequestException if one of the parameter values is not a valid {@link DateTime}.
    */
-  public static Optional<InetAddress> extractOptionalInetAddressParameter(
+  public static ImmutableSet<DateTime> extractSetOfDatetimeParameters(
       HttpServletRequest req, String name) {
-    Optional<String> paramVal = extractOptionalParameter(req, name);
-    if (!paramVal.isPresent()) {
-      return Optional.absent();
+    String[] stringParams = req.getParameterValues(name);
+    if (stringParams == null) {
+      return ImmutableSet.of();
     }
-    try {
-      return Optional.of(InetAddresses.forString(paramVal.get()));
-    } catch (IllegalArgumentException e) {
-      throw new BadRequestException("Not an IPv4 or IPv6 address: " + name);
+    ImmutableSet.Builder<DateTime> datesBuilder = new ImmutableSet.Builder<>();
+    for (String stringParam : stringParams) {
+      try {
+        if (!isNullOrEmpty(stringParam)) {
+          datesBuilder.add(DateTime.parse(stringParam));
+        }
+      } catch (IllegalArgumentException e) {
+        throw new BadRequestException("Bad ISO 8601 timestamp: " + name);
+      }
     }
+    return datesBuilder.build();
   }
 
   private static boolean equalsFalse(@Nullable String value) {
@@ -206,7 +237,7 @@ public final class RequestParameters {
    * @param name case insensitive header name
    */
   public static Optional<String> extractOptionalHeader(HttpServletRequest req, String name) {
-    return Optional.fromNullable(req.getHeader(name));
+    return Optional.ofNullable(req.getHeader(name));
   }
 
   private RequestParameters() {}

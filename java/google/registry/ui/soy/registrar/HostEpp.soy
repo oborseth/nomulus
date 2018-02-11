@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-{namespace registry.soy.registrar.hostepp autoescape="strict"}
+{namespace registry.soy.registrar.hostepp}
 
 
 /**
@@ -20,17 +20,17 @@
  * @param item
  * @param clTrid
  */
-{template .create}
+{template .create stricthtml="false"}
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <create>
       <host:create xmlns:host="urn:ietf:params:xml:ns:host-1.0">
         <host:name>{$item['host:name']}</host:name>
         {if isNonnull($item['host:addr'])}
-          {foreach $addr in $item['host:addr']}
+          {for $addr in $item['host:addr']}
             {let $type: strContains($addr['value'], ':') ? 'v6' : 'v4' /}
             <host:addr ip="{$type}">{$addr['value']}</host:addr>
-          {/foreach}
+          {/for}
         {/if}
       </host:create>
     </create>
@@ -47,7 +47,7 @@
  * @param? addAddrs list of addrs to add.
  * @param? remAddrs list of addrs to remove.
  */
-{template .update}
+{template .update stricthtml="false"}
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <update>
@@ -79,7 +79,7 @@
  * @param clTrid
  * @param id The hostname (named "id" to preserve component API).
  */
-{template .info}
+{template .info stricthtml="false"}
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <info>
@@ -101,10 +101,10 @@
   {let $tagName: $isAdd ? 'host:add' : 'host:rem' /}
   {if length($addrs) > 0}
     <{$tagName}>
-      {foreach $addr in $addrs}
+      {for $addr in $addrs}
         {let $type: strContains($addr, ':') ? 'v6' : 'v4' /}
         <host:addr ip="{$type}">{$addr}</host:addr>
-      {/foreach}
+      {/for}
     </{$tagName}>
   {/if}
 {/template}

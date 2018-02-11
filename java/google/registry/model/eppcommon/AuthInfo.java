@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 package google.registry.model.eppcommon;
 
 import com.googlecode.objectify.annotation.Embed;
-import google.registry.model.EppResource;
 import google.registry.model.ImmutableObject;
 import javax.xml.bind.annotation.XmlAttribute;
 import javax.xml.bind.annotation.XmlTransient;
@@ -32,13 +31,6 @@ import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
  */
 @XmlTransient
 public abstract class AuthInfo extends ImmutableObject {
-
-  /**
-   * Verify that the authorization info is valid for the given resource in the given tld.
-   *
-   * @throws BadAuthInfoException if this authorization info is invalid for this resource
-   */
-  public abstract void verifyAuthorizedFor(EppResource eppResource) throws BadAuthInfoException;
 
   protected PasswordAuth pw;
 
@@ -77,12 +69,4 @@ public abstract class AuthInfo extends ImmutableObject {
       return create(value, null);
     }
   }
-
-  /** Returns the repoId for the contact this auth info is associated with. */
-  protected String getRepoId() {
-    return pw.getRepoId();
-  }
-
-  /** Exception to throw when an auth info can't be verified. */
-  public static class BadAuthInfoException extends Exception {}
 }

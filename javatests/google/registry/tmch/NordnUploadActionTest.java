@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,10 +19,14 @@ import static com.google.common.net.HttpHeaders.CONTENT_TYPE;
 import static com.google.common.net.HttpHeaders.LOCATION;
 import static com.google.common.net.MediaType.FORM_DATA;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.persistDomainAndEnqueueLordn;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
 import static google.registry.util.UrlFetchUtils.getHeaderFirst;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -36,21 +40,19 @@ import com.google.appengine.api.urlfetch.HTTPHeader;
 import com.google.appengine.api.urlfetch.HTTPRequest;
 import com.google.appengine.api.urlfetch.HTTPResponse;
 import com.google.appengine.api.urlfetch.URLFetchService;
-import com.google.common.base.Optional;
 import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.launch.LaunchNotice;
 import google.registry.model.ofy.Ofy;
-import google.registry.model.registrar.Registrar;
 import google.registry.model.registry.Registry;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.InjectRule;
 import google.registry.testing.TaskQueueHelper.TaskMatcher;
 import google.registry.util.UrlFetchException;
 import java.net.URL;
+import java.util.Optional;
 import org.joda.time.DateTime;
 import org.junit.Before;
 import org.junit.Rule;
@@ -85,10 +87,6 @@ public class NordnUploadActionTest {
 
   @Rule
   public final InjectRule inject = new InjectRule();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   @Mock
   private URLFetchService fetchService;
 
@@ -109,8 +107,7 @@ public class NordnUploadActionTest {
     when(httpResponse.getResponseCode()).thenReturn(SC_ACCEPTED);
     when(httpResponse.getHeadersUncombined())
         .thenReturn(ImmutableList.of(new HTTPHeader(LOCATION, "http://trololol")));
-    persistResource(
-        Registrar.loadByClientId("TheRegistrar").asBuilder().setIanaIdentifier(99999L).build());
+    persistResource(loadRegistrar("TheRegistrar").asBuilder().setIanaIdentifier(99999L).build());
     createTld("tld");
     persistResource(Registry.get("tld").asBuilder().setLordnUsername("lolcat").build());
     lordnRequestInitializer.marksdbLordnPassword = Optional.of("attack");
@@ -156,10 +153,10 @@ public class NordnUploadActionTest {
 
   @Test
   public void testRun_noPassword_doesntSendAuthorizationHeader() throws Exception {
-    lordnRequestInitializer.marksdbLordnPassword = Optional.absent();
+    lordnRequestInitializer.marksdbLordnPassword = Optional.empty();
     persistClaimsModeDomain();
     action.run();
-    assertThat(getHeaderFirst(getCapturedHttpRequest(), AUTHORIZATION)).isAbsent();
+    assertThat(getHeaderFirst(getCapturedHttpRequest(), AUTHORIZATION)).isEmpty();
   }
 
   @Test
@@ -202,16 +199,15 @@ public class NordnUploadActionTest {
   public void testFailure_nullRegistryUser() throws Exception {
     persistClaimsModeDomain();
     persistResource(Registry.get("tld").asBuilder().setLordnUsername(null).build());
-    thrown.expect(VerifyException.class, "lordnUsername is not set for tld.");
-    action.run();
+    VerifyException thrown = expectThrows(VerifyException.class, action::run);
+    assertThat(thrown).hasMessageThat().contains("lordnUsername is not set for tld.");
   }
 
   @Test
   public void testFetchFailure() throws Exception {
     persistClaimsModeDomain();
     when(httpResponse.getResponseCode()).thenReturn(SC_INTERNAL_SERVER_ERROR);
-    thrown.expect(UrlFetchException.class);
-    action.run();
+    assertThrows(UrlFetchException.class, action::run);
   }
 
   private HTTPRequest getCapturedHttpRequest() throws Exception {

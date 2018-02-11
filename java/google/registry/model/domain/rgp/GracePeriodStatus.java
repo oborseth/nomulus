@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,15 @@
 
 package google.registry.model.domain.rgp;
 
+import static com.google.common.base.Predicates.equalTo;
+import static com.google.common.base.Predicates.not;
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
+
+import com.google.common.collect.ImmutableMap;
 import google.registry.model.translators.EnumToAttributeAdapter;
 import google.registry.model.translators.EnumToAttributeAdapter.EppEnum;
+import java.util.stream.Stream;
+import javax.annotation.Nullable;
 import javax.xml.bind.annotation.XmlAttribute;
 import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
 
@@ -23,7 +30,8 @@ import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
  * Represents a Registry Grace Period status, as defined by
  * <a href="https://tools.ietf.org/html/rfc3915">RFC 3915</a>.
  *
- * @see "https://www.icann.org/resources/pages/epp-status-codes-2014-06-16-en"
+ * @see <a href="https://www.icann.org/resources/pages/epp-status-codes-2014-06-16-en">EPP Status
+ *     Codes</a>
  */
 @XmlJavaTypeAdapter(EnumToAttributeAdapter.class)
 public enum GracePeriodStatus implements EppEnum {
@@ -89,6 +97,15 @@ public enum GracePeriodStatus implements EppEnum {
    */
   TRANSFER("transferPeriod");
 
+  /** Provide a quick lookup of GracePeriodStatus from XML name. */
+  private static final ImmutableMap<String, GracePeriodStatus> XML_NAME_TO_GRACE_PERIOD_STATUS =
+      Stream.of(GracePeriodStatus.values())
+          .filter(not(equalTo(SUNRUSH_ADD)))
+          .collect(
+              toImmutableMap(
+                  (GracePeriodStatus gracePeriodStatus) -> gracePeriodStatus.xmlName,
+                  value -> value));
+
   @XmlAttribute(name = "s")
   private final String xmlName;
 
@@ -99,5 +116,15 @@ public enum GracePeriodStatus implements EppEnum {
   @Override
   public String getXmlName() {
     return xmlName;
+  }
+
+  /**
+   * Maps from xmlName to {@link GracePeriodStatus}.
+   *
+   * If no match is found for xmlName, null is returned.
+   */
+  @Nullable
+  public static GracePeriodStatus fromXmlName(String xmlName) {
+    return XML_NAME_TO_GRACE_PERIOD_STATUS.get(xmlName);
   }
 }

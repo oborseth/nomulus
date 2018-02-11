@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,10 +15,11 @@
 package google.registry.testing;
 
 import static google.registry.flows.EppXmlTransformer.unmarshal;
-import static google.registry.testing.TestDataHelper.loadFileWithSubstitutions;
+import static google.registry.testing.TestDataHelper.loadFile;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.collect.ImmutableMap;
+import google.registry.flows.EppException;
 import google.registry.model.eppinput.EppInput;
 import java.util.Map;
 
@@ -28,14 +29,14 @@ public class EppLoader {
   private String eppXml;
 
   public EppLoader(Object context, String eppXmlFilename) {
-    this(context, eppXmlFilename, ImmutableMap.<String, String>of());
+    this(context, eppXmlFilename, ImmutableMap.of());
   }
 
   public EppLoader(Object context, String eppXmlFilename, Map<String, String> substitutions) {
-    this.eppXml = loadFileWithSubstitutions(context.getClass(), eppXmlFilename, substitutions);
+    this.eppXml = loadFile(context.getClass(), eppXmlFilename, substitutions);
   }
 
-  public EppInput getEpp() throws Exception {
+  public EppInput getEpp() throws EppException {
     return unmarshal(EppInput.class, eppXml.getBytes(UTF_8));
   }
 

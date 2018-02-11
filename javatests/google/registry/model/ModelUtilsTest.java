@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ import static com.google.common.truth.Truth.assertThat;
 import com.google.common.collect.ImmutableMap;
 import com.googlecode.objectify.annotation.Id;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import java.lang.reflect.Field;
 import java.util.Map;
 import org.junit.Before;
@@ -31,9 +30,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link ModelUtils}. */
 @RunWith(JUnit4.class)
 public class ModelUtilsTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   @Rule
   public AppEngineRule appEngineRule = new AppEngineRule.Builder().build();
@@ -90,7 +86,7 @@ public class ModelUtilsTest {
 
   @Test
   public void testGetAllFields() throws Exception {
-    Map<String, Field> expected = ImmutableMap.<String, Field>of(
+    Map<String, Field> expected = ImmutableMap.of(
         "id", TestClass.class.getDeclaredField("id"),
         "a", TestClass.class.getDeclaredField("a"),
         "b", TestClass.class.getDeclaredField("b"));

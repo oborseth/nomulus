@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ package google.registry.model.domain.fee11;
 
 import static com.google.common.base.Preconditions.checkState;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import google.registry.model.ImmutableObject;
@@ -24,9 +23,9 @@ import google.registry.model.domain.Period;
 import google.registry.model.domain.fee.FeeCheckCommandExtension;
 import google.registry.model.domain.fee.FeeCheckCommandExtensionItem;
 import google.registry.model.domain.fee.FeeCheckResponseExtensionItem;
-import google.registry.model.domain.fee.FeeCheckResponseExtensionItem.Builder;
 import google.registry.model.domain.fee.FeeExtensionCommandDescriptor;
 import google.registry.model.domain.fee11.FeeCheckCommandExtensionV11.FeeCheckCommandExtensionItemV11;
+import java.util.Optional;
 import javax.xml.bind.annotation.XmlElement;
 import javax.xml.bind.annotation.XmlRootElement;
 import javax.xml.bind.annotation.XmlType;
@@ -88,7 +87,7 @@ public class FeeCheckCommandExtensionV11 extends ImmutableObject
   }
 
   /** Implementation of the item interface, returning values of the single "item". */
-  class FeeCheckCommandExtensionItemV11 implements FeeCheckCommandExtensionItem {
+  class FeeCheckCommandExtensionItemV11 extends FeeCheckCommandExtensionItem {
 
     /** The name of the command being checked. */
     @Override
@@ -116,7 +115,7 @@ public class FeeCheckCommandExtensionV11 extends ImmutableObject
 
     @Override
     public Period getPeriod() {
-      return Optional.fromNullable(period).or(DEFAULT_PERIOD);
+      return Optional.ofNullable(period).orElse(DEFAULT_PERIOD);
     }
 
     @Override
@@ -135,13 +134,13 @@ public class FeeCheckCommandExtensionV11 extends ImmutableObject
     }
 
     @Override
-    public Builder createResponseBuilder() {
+    public FeeCheckResponseExtensionItemV11.Builder createResponseBuilder() {
       return new FeeCheckResponseExtensionItemV11.Builder();
     }
 
     @Override
     public Optional<DateTime> getEffectiveDate() {
-      return Optional.absent();
+      return Optional.empty();
     }
   }
 }

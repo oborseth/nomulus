@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import static google.registry.testing.DatastoreHelper.newHostResource;
 import static google.registry.testing.DatastoreHelper.persistActiveHost;
 import static google.registry.testing.DatastoreHelper.persistDeletedHost;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.beust.jcommander.ParameterException;
@@ -50,7 +51,6 @@ public class GetHostCommandTest extends CommandTestCase<GetHostCommand> {
     runCommand("ns1.example.tld", "--expand");
     assertInStdout("fullyQualifiedHostName=ns1.example.tld");
     assertInStdout("Websafe key: agR0ZXN0chgLEgxIb3N0UmVzb3VyY2UiBjItUk9JRAw");
-    assertNotInStdout("ReferenceUnion");
     assertNotInStdout("LiveRef");
   }
 
@@ -107,7 +107,6 @@ public class GetHostCommandTest extends CommandTestCase<GetHostCommand> {
 
   @Test
   public void testFailure_noHostName() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand();
+    assertThrows(ParameterException.class, this::runCommand);
   }
 }

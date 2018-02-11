@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,11 +28,11 @@ import com.google.appengine.api.urlfetch.HTTPHeader;
 import com.google.appengine.api.urlfetch.HTTPRequest;
 import com.google.appengine.api.urlfetch.HTTPResponse;
 import com.google.appengine.api.urlfetch.URLFetchService;
-import google.registry.config.ConfigModule.Config;
-import google.registry.config.RegistryConfig;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.keyring.api.KeyModule.Key;
 import google.registry.request.HttpException.InternalServerErrorException;
 import google.registry.util.FormattingLogger;
+import google.registry.util.Retrier;
 import google.registry.util.UrlFetchException;
 import google.registry.xjc.XjcXmlTransformer;
 import google.registry.xjc.iirdea.XjcIirdeaResponseElement;
@@ -41,8 +41,8 @@ import google.registry.xjc.rdeheader.XjcRdeHeader;
 import google.registry.xjc.rdereport.XjcRdeReportReport;
 import google.registry.xml.XmlException;
 import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.net.MalformedURLException;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import javax.inject.Inject;
 
@@ -55,17 +55,18 @@ public class RdeReporter {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
 
-  /** @see "http://tools.ietf.org/html/draft-lozano-icann-registry-interfaces-05#section-4" */
+  /** @see <a href="http://tools.ietf.org/html/draft-lozano-icann-registry-interfaces-05#section-4">
+   *     ICANN Registry Interfaces - Interface details</a>*/
   private static final String REPORT_MIME = "text/xml";
 
-  @Inject RegistryConfig config;
+  @Inject Retrier retrier;
   @Inject URLFetchService urlFetchService;
   @Inject @Config("rdeReportUrlPrefix") String reportUrlPrefix;
   @Inject @Key("icannReportingPassword") String password;
   @Inject RdeReporter() {}
 
   /** Uploads {@code reportBytes} to ICANN. */
-  public void send(byte[] reportBytes) throws IOException, XmlException {
+  public void send(byte[] reportBytes) throws XmlException {
     XjcRdeReportReport report = XjcXmlTransformer.unmarshal(
         XjcRdeReportReport.class, new ByteArrayInputStream(reportBytes));
     XjcRdeHeader header = report.getHeader().getValue();
@@ -74,19 +75,25 @@ public class RdeReporter {
     URL url = makeReportUrl(header.getTld(), report.getId());
     String username = header.getTld() + "_ry";
     String token = base64().encode(String.format("%s:%s", username, password).getBytes(UTF_8));
-    HTTPRequest req = new HTTPRequest(url, PUT, validateCertificate().setDeadline(60d));
+    final HTTPRequest req = new HTTPRequest(url, PUT, validateCertificate().setDeadline(60d));
     req.addHeader(new HTTPHeader(CONTENT_TYPE, REPORT_MIME));
     req.addHeader(new HTTPHeader(AUTHORIZATION, "Basic " + token));
     req.setPayload(reportBytes);
     logger.infofmt("Sending report:\n%s", new String(reportBytes, UTF_8));
-    HTTPResponse rsp = urlFetchService.fetch(req);
-    switch (rsp.getResponseCode()) {
-      case SC_OK:
-      case SC_BAD_REQUEST:
-        break;
-      default:
-        throw new UrlFetchException("PUT failed", req, rsp);
-    }
+    HTTPResponse rsp =
+        retrier.callWithRetry(
+            () -> {
+              HTTPResponse rsp1 = urlFetchService.fetch(req);
+              switch (rsp1.getResponseCode()) {
+                case SC_OK:
+                case SC_BAD_REQUEST:
+                  break;
+                default:
+                  throw new UrlFetchException("PUT failed", req, rsp1);
+              }
+              return rsp1;
+            },
+            SocketTimeoutException.class);
 
     // Ensure the XML response is valid.
     XjcIirdeaResult result = parseResult(rsp);
@@ -102,15 +109,15 @@ public class RdeReporter {
   /**
    * Unmarshals IIRDEA XML result object from {@link HTTPResponse} payload.
    *
-   * @see "http://tools.ietf.org/html/draft-lozano-icann-registry-interfaces-05#section-4.1"
+   * @see <a href="http://tools.ietf.org/html/draft-lozano-icann-registry-interfaces-05#section-4.1">
+   *     ICANN Registry Interfaces - IIRDEA Result Object</a>
    */
   private XjcIirdeaResult parseResult(HTTPResponse rsp) throws XmlException {
     byte[] responseBytes = rsp.getContent();
     logger.infofmt("Received response:\n%s", new String(responseBytes, UTF_8));
     XjcIirdeaResponseElement response = XjcXmlTransformer.unmarshal(
         XjcIirdeaResponseElement.class, new ByteArrayInputStream(responseBytes));
-    XjcIirdeaResult result = response.getResult();
-    return result;
+    return response.getResult();
   }
 
   private URL makeReportUrl(String tld, String id) {

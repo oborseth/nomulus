@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,13 @@
 
 package google.registry.model.ofy;
 
-import static com.google.common.base.Functions.constant;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Maps.filterValues;
 import static com.google.common.collect.Maps.toMap;
-import static com.googlecode.objectify.ObjectifyService.ofy;
 import static google.registry.model.ofy.CommitLogBucket.getArbitraryBucketId;
+import static google.registry.model.ofy.ObjectifyService.ofy;
 
-import com.google.common.base.Predicate;
-import com.google.common.base.Predicates;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
@@ -32,8 +29,6 @@ import org.joda.time.DateTime;
 
 /** Metadata for an {@link Ofy} transaction that saves commit logs. */
 class TransactionInfo {
-
-  private static final Predicate<Object> IS_DELETE = Predicates.<Object>equalTo(Delete.SENTINEL);
 
   private enum Delete { SENTINEL }
 
@@ -76,7 +71,7 @@ class TransactionInfo {
 
   void putDeletes(Iterable<Key<?>> keys) {
     assertNotReadOnly();
-    changesBuilder.putAll(toMap(keys, constant(TransactionInfo.Delete.SENTINEL)));
+    changesBuilder.putAll(toMap(keys, k -> Delete.SENTINEL));
   }
 
   ImmutableSet<Key<?>> getTouchedKeys() {
@@ -84,13 +79,16 @@ class TransactionInfo {
   }
 
   ImmutableSet<Key<?>> getDeletes() {
-    return ImmutableSet.copyOf(filterValues(changesBuilder.build(), IS_DELETE).keySet());
+    return ImmutableSet.copyOf(
+        filterValues(changesBuilder.build(), Delete.SENTINEL::equals).keySet());
   }
 
   ImmutableSet<Object> getSaves() {
-    return FluentIterable
-        .from(changesBuilder.build().values())
-        .filter(Predicates.not(IS_DELETE))
-        .toSet();
+    return changesBuilder
+        .build()
+        .values()
+        .stream()
+        .filter(change -> !Delete.SENTINEL.equals(change))
+        .collect(toImmutableSet());
   }
 }

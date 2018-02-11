@@ -1,0 +1,38 @@
+{
+  "objectClassName" : "entity",
+  "handle" : "%NAME%",
+  "status" : ["removed"],
+  "links" :
+  [
+    {
+      "value" : "https://example.com/rdap/entity/%NAME%",
+      "rel" : "self",
+      "href": "https://example.com/rdap/entity/%NAME%",
+      "type" : "application/rdap+json"
+    }
+  ],
+  "events":
+  [
+    {
+      "eventAction": "registration",
+      "eventActor": "foo",
+      "eventDate": "1999-01-01T00:00:00.000Z"
+    },
+    {
+      "eventAction": "deletion",
+      "eventActor": "foo",
+      "eventDate": "1999-07-01T00:00:00.000Z"
+    },
+    {
+      "eventAction": "last update of RDAP database",
+      "eventDate": "2000-01-01T00:00:00.000Z"
+    }
+  ],
+  "vcardArray" :
+  [
+    "vcard",
+    [
+      ["version", {}, "text", "4.0"]
+    ]
+  ]
+}

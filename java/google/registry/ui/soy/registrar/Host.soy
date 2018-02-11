@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-{namespace registry.soy.registrar.host autoescape="strict"}
+{namespace registry.soy.registrar.host}
 
 
 /**
  * Set view for hosts.
  */
 {template .set}
-  <div class="{css set} {css host}">
+  <div class="{css('set')} {css('host')}">
     <p>Please enter a query for a single host in the form "host/[hostname]".
   </div>
 {/template}
@@ -31,7 +31,7 @@
  * @param? readonly passed through to field rendering.
  */
 {template .item}
-  <form name="item" class="{css item} {css host}">
+  <form name="item" class="{css('item')} {css('host')}">
     <h1>
       {if isNonnull($item['host:name'])}
         {$item['host:name']['keyValue']}
@@ -40,7 +40,7 @@
       {/if}
     </h1>
     <table>
-      <tr class="{css section-lead}">
+      <tr class="{css('section-lead')}">
         <th colspan="2"><h2>Host</h2></th>
       </tr>
       {call registry.soy.forms.inputFieldRowWithValue data="all"}
@@ -48,18 +48,18 @@
         {param name: isNonnull($item['host:name']) ? 'host:chgName' : 'host:name' /}
         {param value: $item['host:name'] /}
       {/call}
-      <tr class="{css section-lead}">
+      <tr class="{css('section-lead')}">
         <th colspan="2">
           <h3>Addresses</h3>
           <button id="domain-host-addr-add-button" type="button"
-                  class="{css kd-button} {css reg-add}"
+                  class="{css('kd-button')} {css('reg-add')}"
                   {if $readonly}disabled{/if}>
             Add Address
           </button>
         </th>
       </tr>
       {if isNonnull($item['host:addr'])}
-        {foreach $addr in $item['host:addr']}
+        {for $addr in $item['host:addr']}
           {if not $readonly}
             <input type="hidden"
                    name="host:oldAddr[{index($addr)}].value"
@@ -70,7 +70,7 @@
             {param name: 'host:addr[' + index($addr) + '].value' /}
             {param value: $item['host:addr'][index($addr)] /}
           {/call}
-        {/foreach}
+        {/for}
       {/if}
       <tr id="domain-host-addrs-footer"></tr>
     </table>
@@ -89,10 +89,10 @@
  * @param? readonly passed through to field rendering.
  */
 {template .update}
-  <form name="item" class="{css item} {css host}">
+  <form name="item" class="{css('item')} {css('host')}">
     <h1>{$item['host:name']['keyValue']}</h1>
     <table>
-      <tr class="{css section-lead}">
+      <tr class="{css('section-lead')}">
         <th colspan="2"><h2>Host</h2></th>
       </tr>
       {call registry.soy.forms.inputFieldRowWithValue data="all"}

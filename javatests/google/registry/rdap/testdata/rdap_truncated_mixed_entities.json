@@ -3,14 +3,14 @@
   [
     {
       "objectClassName" : "entity",
-      "handle" : "7-ROID",
+      "handle" : "0001-ROID",
       "status" : ["active"],
       "links" :
       [
         {
-          "value" : "https://example.com/rdap/entity/7-ROID",
+          "value" : "https://example.com/rdap/entity/0001-ROID",
           "rel" : "self",
-          "href": "https://example.com/rdap/entity/7-ROID",
+          "href": "https://example.com/rdap/entity/0001-ROID",
           "type" : "application/rdap+json"
         }
       ],
@@ -49,14 +49,14 @@
     },
     {
       "objectClassName" : "entity",
-      "handle" : "8-ROID",
+      "handle" : "0002-ROID",
       "status" : ["active"],
       "links" :
       [
         {
-          "value" : "https://example.com/rdap/entity/8-ROID",
+          "value" : "https://example.com/rdap/entity/0002-ROID",
           "rel" : "self",
-          "href": "https://example.com/rdap/entity/8-ROID",
+          "href": "https://example.com/rdap/entity/0002-ROID",
           "type" : "application/rdap+json"
         }
       ],
@@ -95,14 +95,14 @@
     },
     {
       "objectClassName" : "entity",
-      "handle" : "9-ROID",
+      "handle" : "0003-ROID",
       "status" : ["active"],
       "links" :
       [
         {
-          "value" : "https://example.com/rdap/entity/9-ROID",
+          "value" : "https://example.com/rdap/entity/0003-ROID",
           "rel" : "self",
-          "href": "https://example.com/rdap/entity/9-ROID",
+          "href": "https://example.com/rdap/entity/0003-ROID",
           "type" : "application/rdap+json"
         }
       ],
@@ -205,6 +205,18 @@
       ]
     },
     {
+      "title" : "Navigation Links",
+      "links" :
+      [
+        {
+          "type" : "application/rdap+json",
+          "href" : "https://example.com/rdap/entities?%NAME%",
+          "rel" : "next"
+        }
+      ],
+      "description" : [ "Links to related pages." ],
+    },
+    {
       "title" : "RDAP Terms of Service",
       "description" :
       [
@@ -212,7 +224,7 @@
         "Any information provided is 'as is' without any guarantee of accuracy.",
         "Please do not misuse the Domain Database. It is intended solely for query-based access.",
         "Don't use the Domain Database to allow, enable, or otherwise support the transmission of mass unsolicited, commercial advertising or solicitations.",
-        "Don't access our Domain Database through the use of high volume, automated electronic processes that send queries or data to the systems of Charleston Road Registry or any ICANN-accredited registrar.",
+        "Don't access our Domain Database through the use of high volume, automated electronic processes that send queries or data to the systems of any ICANN-accredited registrar.",
         "You may only use the information contained in the Domain Database for lawful purposes.",
         "Do not compile, repackage, disseminate, or otherwise use the information contained in the Domain Database in its entirety, or in any substantial portion, without our prior written permission.",
         "We may retain certain details about queries to our Domain Database for the purposes of detecting and preventing misuse.",
@@ -224,7 +236,7 @@
         {
           "value" : "https://example.com/rdap/help/tos",
           "rel" : "alternate",
-          "href" : "https://www.registry.google/about/rdap/tos.html",
+          "href" : "https://www.registry.tld/about/rdap/tos.html",
           "type" : "text/html"
         }
       ]

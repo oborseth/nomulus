@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,10 +14,13 @@
 
 package google.registry.tools;
 
+import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.newDomainApplication;
 import static google.registry.testing.DatastoreHelper.persistActiveContact;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.beust.jcommander.ParameterException;
@@ -60,8 +63,9 @@ public class GetApplicationIdsCommandTest extends CommandTestCase<GetApplication
 
   @Test
   public void testFailure_tldDoesNotExist() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "Domain name is not under a recognized TLD");
-    runCommand("example.foo");
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> runCommand("example.foo"));
+    assertThat(thrown).hasMessageThat().contains("Domain name is not under a recognized TLD");
   }
 
   @Test
@@ -74,8 +78,7 @@ public class GetApplicationIdsCommandTest extends CommandTestCase<GetApplication
 
   @Test
   public void testFailure_noDomainName() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand();
+    assertThrows(ParameterException.class, this::runCommand);
   }
 
   private void persistDomainApplication(String domainName, String repoId) {

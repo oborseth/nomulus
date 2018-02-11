@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,15 +15,14 @@
 package google.registry.xjc;
 
 import static com.google.common.truth.Truth.assertThat;
-import static google.registry.util.ResourceUtils.readResourceUtf8;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.xjc.XjcXmlTransformer.unmarshal;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
-import google.registry.testing.ExceptionRule;
+import google.registry.testing.TestDataHelper;
 import google.registry.xjc.epp.XjcEpp;
 import google.registry.xjc.rde.XjcRdeDeposit;
 import java.io.ByteArrayInputStream;
-import org.junit.Rule;
 import org.junit.experimental.theories.DataPoints;
 import org.junit.experimental.theories.Theories;
 import org.junit.experimental.theories.Theory;
@@ -35,16 +34,12 @@ import org.junit.runner.RunWith;
  */
 @RunWith(Theories.class)
 public class XmlTestdataTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   private static class Example {
     final ByteArrayInputStream xmlStream;
 
     private Example(String filename) {
       this.xmlStream = new ByteArrayInputStream(
-          readResourceUtf8(XmlTestdataTest.class, "testdata/" + filename).getBytes(UTF_8));
+          TestDataHelper.loadFile(XmlTestdataTest.class, filename).getBytes(UTF_8));
     }
   }
 
@@ -151,7 +146,7 @@ public class XmlTestdataTest {
 
   @Theory
   public void testInvalid(Evil v) throws Exception {
-    thrown.expect(Throwable.class, v.error);
-    unmarshal(XjcObject.class, v.xmlStream);
+    Throwable thrown = expectThrows(Throwable.class, () -> unmarshal(XjcObject.class, v.xmlStream));
+    assertThat(thrown).hasMessageThat().contains(v.error);
   }
 }

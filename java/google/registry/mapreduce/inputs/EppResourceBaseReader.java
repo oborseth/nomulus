@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,13 +14,12 @@
 
 package google.registry.mapreduce.inputs;
 
-import static google.registry.model.EntityClasses.CLASS_TO_KIND_FUNCTION;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 
 import com.google.appengine.api.datastore.Cursor;
 import com.google.appengine.api.datastore.QueryResultIterator;
 import com.google.appengine.tools.mapreduce.InputReader;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.cmd.Query;
@@ -137,7 +136,7 @@ abstract class EppResourceBaseReader<T> extends InputReader<T> {
       ImmutableSet<Class<? extends R>> resourceClasses) {
     // Ignore EppResource when finding kinds, since it doesn't have one and doesn't imply filtering.
     return resourceClasses.contains(EppResource.class)
-          ? ImmutableSet.<String>of()
-          : FluentIterable.from(resourceClasses).transform(CLASS_TO_KIND_FUNCTION).toSet();
+        ? ImmutableSet.of()
+        : resourceClasses.stream().map(Key::getKind).collect(toImmutableSet());
   }
 }

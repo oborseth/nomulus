@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,10 +15,9 @@
 package google.registry.xml;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.assertThrows;
 
-import google.registry.testing.ExceptionRule;
 import org.joda.time.LocalDate;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -26,9 +25,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link DateAdapter}. */
 @RunWith(JUnit4.class)
 public class DateAdapterTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   @Test
   public void testMarshal() {
@@ -61,7 +57,8 @@ public class DateAdapterTest {
 
   @Test
   public void testUnmarshalInvalid() {
-    thrown.expect(IllegalArgumentException.class);
-    assertThat((new DateAdapter()).unmarshal("oh my goth")).isNull();
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> assertThat((new DateAdapter()).unmarshal("oh my goth")).isNull());
   }
 }

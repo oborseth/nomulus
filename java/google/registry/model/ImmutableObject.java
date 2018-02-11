@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,14 +19,13 @@ import static com.google.common.collect.Maps.transformValues;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
+import static java.util.stream.Collectors.toCollection;
+import static java.util.stream.Collectors.toList;
 
-import com.google.common.base.Function;
 import com.google.common.base.Joiner;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.Maps;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.annotation.Ignore;
-import google.registry.model.domain.ReferenceUnion;
 import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
@@ -34,6 +33,7 @@ import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.NavigableMap;
@@ -52,7 +52,7 @@ public abstract class ImmutableObject implements Cloneable {
   @Documented
   @Retention(RUNTIME)
   @Target(FIELD)
-  public static @interface DoNotHydrate {}
+  public @interface DoNotHydrate {}
 
   @Ignore
   @XmlTransient
@@ -125,8 +125,7 @@ public abstract class ImmutableObject implements Cloneable {
       Field field = entry.getKey();
       Object value = entry.getValue();
       sortedFields.put(
-          field.getName(),
-          field.isAnnotationPresent(DoNotHydrate.class) ? value : HYDRATOR.apply(value));
+          field.getName(), field.isAnnotationPresent(DoNotHydrate.class) ? value : hydrate(value));
     }
     return toStringHelper(sortedFields);
   }
@@ -141,53 +140,60 @@ public abstract class ImmutableObject implements Cloneable {
   }
 
   /** Helper function to recursively hydrate an ImmutableObject. */
-  private static final Function<Object, Object> HYDRATOR =
-      new Function<Object, Object>() {
-        @Override
-        public Object apply(Object value) {
-          if (value instanceof ReferenceUnion) {
-            return apply(((ReferenceUnion<?>) value).getLinked());
-          } else if (value instanceof Key) {
-            return apply(ofy().load().key((Key<?>) value).now());
-          } else if (value instanceof Map) {
-            return transformValues((Map<?, ?>) value, this);
-          } else if (value instanceof Collection) {
-            return transform((Collection<?>) value, this);
-          } else if (value instanceof ImmutableObject) {
-            return ((ImmutableObject) value).toHydratedString();
-          }
-          return value;
-        }};
+  private static final Object hydrate(Object value) {
+    if (value instanceof Key) {
+      return hydrate(ofy().load().key((Key<?>) value).now());
+    } else if (value instanceof Map) {
+      return transformValues((Map<?, ?>) value, ImmutableObject::hydrate);
+    } else if (value instanceof Collection) {
+      return transform((Collection<?>) value, ImmutableObject::hydrate);
+    } else if (value instanceof ImmutableObject) {
+      return ((ImmutableObject) value).toHydratedString();
+    }
+    return value;
+  }
 
   /** Helper function to recursively convert a ImmutableObject to a Map of generic objects. */
-  private static final Function<Object, Object> TO_MAP_HELPER = new Function<Object, Object>() {
-    @Override
-    public Object apply(Object o) {
-      if (o == null) {
-        return null;
-      } else if (o instanceof ImmutableObject) {
-        // LinkedHashMap to preserve field ordering and because ImmutableMap forbids null values.
-        Map<String, Object> result = new LinkedHashMap<>();
-        for (Entry<Field, Object> entry : ModelUtils.getFieldValues(o).entrySet()) {
-          result.put(entry.getKey().getName(), apply(entry.getValue()));
-        }
-        return result;
-      } else if (o instanceof Map) {
-        return Maps.transformValues((Map<?, ?>) o, this);
-      } else if (o instanceof Set) {
-        return FluentIterable.from((Set<?>) o).transform(this).toSet();
-      } else if (o instanceof Collection) {
-        return FluentIterable.from((Collection<?>) o).transform(this).toList();
-      } else if (o instanceof Number || o instanceof Boolean) {
-        return o;
-      } else {
-        return o.toString();
+  private static Object toMapRecursive(Object o) {
+    if (o == null) {
+      return null;
+    } else if (o instanceof ImmutableObject) {
+      // LinkedHashMap to preserve field ordering and because ImmutableMap forbids null
+      // values.
+      Map<String, Object> result = new LinkedHashMap<>();
+      for (Entry<Field, Object> entry : ModelUtils.getFieldValues(o).entrySet()) {
+        result.put(entry.getKey().getName(), toMapRecursive(entry.getValue()));
       }
-    }};
+      return result;
+    } else if (o instanceof Map) {
+      return Maps.transformValues((Map<?, ?>) o, ImmutableObject::toMapRecursive);
+    } else if (o instanceof Set) {
+      return ((Set<?>) o)
+          .stream()
+          .map(ImmutableObject::toMapRecursive)
+          // We can't use toImmutableSet here, because values can be null (especially since the
+          // original ImmutableObject might have been the result of a cloneEmptyToNull call).
+          //
+          // We can't use toSet either, because we want to preserve order. So we use LinkedHashSet
+          // instead.
+          .collect(toCollection(LinkedHashSet::new));
+    } else if (o instanceof Collection) {
+      return ((Collection<?>) o)
+          .stream()
+          .map(ImmutableObject::toMapRecursive)
+          // We can't use toImmutableList here, because values can be null (especially since the
+          // original ImmutableObject might have been the result of a cloneEmptyToNull call).
+          .collect(toList());
+    } else if (o instanceof Number || o instanceof Boolean) {
+      return o;
+    } else {
+      return o.toString();
+    }
+  }
 
   /** Returns a map of all object fields (including sensitive data) that's used to produce diffs. */
   @SuppressWarnings("unchecked")
   public Map<String, Object> toDiffableFieldMap() {
-    return (Map<String, Object>) TO_MAP_HELPER.apply(this);
+    return (Map<String, Object>) toMapRecursive(this);
   }
 }

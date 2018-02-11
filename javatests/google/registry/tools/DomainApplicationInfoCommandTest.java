@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,8 @@
 
 package google.registry.tools;
 
+import static google.registry.testing.JUnitBackports.assertThrows;
+
 import com.beust.jcommander.ParameterException;
 import org.junit.Test;
 
@@ -25,7 +27,7 @@ public class DomainApplicationInfoCommandTest
   public void testSuccess() throws Exception {
     runCommandForced("--client=NewRegistrar", "--domain_name=example.tld",
         "--phase=landrush", "--id=123");
-    eppVerifier().verifySent("domain_info_landrush.xml");
+    eppVerifier.verifySent("domain_info_landrush.xml");
   }
 
   @Test
@@ -33,46 +35,67 @@ public class DomainApplicationInfoCommandTest
     // Sunrush: phase=sunrise, subphase=landrush
     runCommandForced("--client=NewRegistrar", "--domain_name=example.tld",
         "--phase=sunrush", "--id=123");
-    eppVerifier().verifySent("domain_info_sunrush.xml");
+    eppVerifier.verifySent("domain_info_sunrush.xml");
   }
 
   @Test
   public void testFailure_invalidPhase() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced("--client=NewRegistrar", "--domain_name=example.tld",
-        "--phase=landrise", "--id=123");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--client=NewRegistrar",
+                "--domain_name=example.tld",
+                "--phase=landrise",
+                "--id=123"));
   }
 
   @Test
   public void testFailure_missingClientId() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--domain_name=example.tld", "--phase=sunrush", "--id=123");
+    assertThrows(
+        ParameterException.class,
+        () -> runCommandForced("--domain_name=example.tld", "--phase=sunrush", "--id=123"));
   }
 
   @Test
   public void testFailure_missingPhase() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--client=NewRegistrar", "--domain_name=example.tld", "--id=123");
+    assertThrows(
+        ParameterException.class,
+        () -> runCommandForced("--client=NewRegistrar", "--domain_name=example.tld", "--id=123"));
   }
 
   @Test
   public void testFailure_missingApplicationId() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--client=NewRegistrar", "--domain_name=example.tld",
-        "--phase=landrush");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--client=NewRegistrar", "--domain_name=example.tld", "--phase=landrush"));
   }
 
   @Test
   public void testFailure_mainParameter() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--client=NewRegistrar", "--domain_name=example.tld",
-        "--phase=landrush", "--id=123", "foo");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--client=NewRegistrar",
+                "--domain_name=example.tld",
+                "--phase=landrush",
+                "--id=123",
+                "foo"));
   }
 
   @Test
   public void testFailure_unknownFlag() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--client=NewRegistrar", "--domain_name=example.tld",
-        "--phase=landrush", "--id=123", "--foo=bar");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--client=NewRegistrar",
+                "--domain_name=example.tld",
+                "--phase=landrush",
+                "--id=123",
+                "--foo=bar"));
   }
 }

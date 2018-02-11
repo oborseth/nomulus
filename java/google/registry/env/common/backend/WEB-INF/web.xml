@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <web-app xmlns="http://java.sun.com/xml/ns/javaee" version="2.5"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://java.sun.com/xml/ns/javaee
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://java.sun.com/xml/ns/javaee
                              http://java.sun.com/xml/ns/javaee/web-app_2_5.xsd">
   <!-- Servlets -->
 
@@ -55,6 +55,56 @@
   <servlet-mapping>
     <servlet-name>backend-servlet</servlet-name>
     <url-pattern>/_dr/task/brdaCopy</url-pattern>
+  </servlet-mapping>
+
+  <!-- Billing -->
+
+  <!--
+    Generates the invoice CSV for the month, which we send to billing to charge
+    registrars for their registrations.
+  -->
+  <servlet-mapping>
+    <servlet-name>backend-servlet</servlet-name>
+    <url-pattern>/_dr/task/generateInvoices</url-pattern>
+  </servlet-mapping>
+
+  <!--
+    Emails the month's invoice CSV to the internal billing team, and publishes
+    the detail reports to the individual registrars' drive accounts.
+  -->
+  <servlet-mapping>
+    <servlet-name>backend-servlet</servlet-name>
+    <url-pattern>/_dr/task/publishInvoices</url-pattern>
+  </servlet-mapping>
+
+  <!--
+    Copies invoice detail reports from GCS to the associated registrar's Drive folder.
+  -->
+  <servlet-mapping>
+    <servlet-name>backend-servlet</servlet-name>
+    <url-pattern>/_dr/task/copyDetailReports</url-pattern>
+  </servlet-mapping>
+
+  <!-- ICANN Monthly Reporting -->
+
+  <!--
+    Monthly ICANN transaction and activity reports. This task generates report
+    files (in CSV format) and stores them in GCS under
+    gs://domain-registry-reporting/icann/monthly/YYYY-MM
+    by default.
+  -->
+  <servlet-mapping>
+    <servlet-name>backend-servlet</servlet-name>
+    <url-pattern>/_dr/task/icannReportingStaging</url-pattern>
+  </servlet-mapping>
+
+  <!--
+    Monthly ICANN transaction and activity reports. This task uploads the generated
+    report files (in CSV format) via an HTTP PUT to ICANN's endpoint.
+  -->
+  <servlet-mapping>
+    <servlet-name>backend-servlet</servlet-name>
+    <url-pattern>/_dr/task/icannReportingUpload</url-pattern>
   </servlet-mapping>
 
   <!-- Trademark Clearinghouse -->
@@ -113,29 +163,19 @@
     <url-pattern>/_dr/task/verifyEntityIntegrity</url-pattern>
   </servlet-mapping>
 
-  <servlet>
-    <description>Exports a datastore backup snapshot to GCS.</description>
-    <display-name>Export snapshot to GCS</display-name>
-    <servlet-name>exportSnapshot</servlet-name>
-    <servlet-class>google.registry.export.ExportSnapshotServlet</servlet-class>
-  </servlet>
+  <!-- Exports a Datastore backup snapshot to GCS. -->
   <servlet-mapping>
-    <servlet-name>exportSnapshot</servlet-name>
+    <servlet-name>backend-servlet</servlet-name>
     <url-pattern>/_dr/task/exportSnapshot</url-pattern>
   </servlet-mapping>
 
-  <servlet>
-    <description>Checks the completion of a datastore backup snapshot.</description>
-    <display-name>Check on snapshot status</display-name>
-    <servlet-name>checkSnapshot</servlet-name>
-    <servlet-class>google.registry.export.CheckSnapshotServlet</servlet-class>
-  </servlet>
+  <!-- Checks the completion of a Datastore backup snapshot. -->
   <servlet-mapping>
-    <servlet-name>checkSnapshot</servlet-name>
+    <servlet-name>backend-servlet</servlet-name>
     <url-pattern>/_dr/task/checkSnapshot</url-pattern>
   </servlet-mapping>
 
-  <!-- Loads a datastore backup snapshot into BigQuery. -->
+  <!-- Loads a Datastore backup snapshot into BigQuery. -->
   <servlet-mapping>
     <servlet-name>backend-servlet</servlet-name>
     <url-pattern>/_dr/task/loadSnapshot</url-pattern>
@@ -153,6 +193,12 @@
     <url-pattern>/_dr/task/pollBigqueryJob</url-pattern>
   </servlet-mapping>
 
+  <!-- Cleans up old mapreduce entities. -->
+  <servlet-mapping>
+    <servlet-name>backend-servlet</servlet-name>
+    <url-pattern>/_dr/task/mapreduceEntityCleanup</url-pattern>
+  </servlet-mapping>
+
   <!-- Fans out a cron task over an adjustable range of TLDs. -->
   <servlet-mapping>
     <servlet-name>backend-servlet</servlet-name>
@@ -167,7 +213,7 @@
     <url-pattern>/_dr/cron/commitLogFanout</url-pattern>
   </servlet-mapping>
 
-  <!-- Deletes old commit logs from datastore. -->
+  <!-- Deletes old commit logs from Datastore. -->
   <servlet-mapping>
     <servlet-name>backend-servlet</servlet-name>
     <url-pattern>/_dr/task/deleteOldCommitLogs</url-pattern>
@@ -183,12 +229,6 @@
   <servlet-mapping>
     <servlet-name>backend-servlet</servlet-name>
     <url-pattern>/_dr/task/exportCommitLogDiff</url-pattern>
-  </servlet-mapping>
-
-  <!-- Restores commit logs. -->
-  <servlet-mapping>
-    <servlet-name>backend-servlet</servlet-name>
-    <url-pattern>/_dr/task/restoreCommitLogs</url-pattern>
   </servlet-mapping>
 
   <!-- Deletes commit logs. -->
@@ -246,6 +286,12 @@
     <url-pattern>/_dr/task/deleteProberData</url-pattern>
   </servlet-mapping>
 
+  <!--  Mapreduce to re-save all EppResources. -->
+  <servlet-mapping>
+    <servlet-name>backend-servlet</servlet-name>
+    <url-pattern>/_dr/task/resaveAllEppResources</url-pattern>
+  </servlet-mapping>
+
   <!--
     Deletes contacts and hosts enqueued for asynchronous deletion if they are
     not referenced by any domain.
@@ -279,15 +325,33 @@
     <url-pattern>/_dr/task/importRdeContacts</url-pattern>
   </servlet-mapping>
 
+  <!-- Mapreduce to import hosts from escrow file -->
+  <servlet-mapping>
+    <servlet-name>backend-servlet</servlet-name>
+    <url-pattern>/_dr/task/importRdeHosts</url-pattern>
+  </servlet-mapping>
+
+  <!-- Mapreduce to import domains from escrow file -->
+  <servlet-mapping>
+    <servlet-name>backend-servlet</servlet-name>
+    <url-pattern>/_dr/task/importRdeDomains</url-pattern>
+  </servlet-mapping>
+
+  <!-- Mapreduce to link hosts from escrow file to superordinate domains -->
+  <servlet-mapping>
+    <servlet-name>backend-servlet</servlet-name>
+    <url-pattern>/_dr/task/linkRdeHosts</url-pattern>
+  </servlet-mapping>
+
   <!-- Security config -->
   <security-constraint>
     <web-resource-collection>
       <web-resource-name>Internal</web-resource-name>
       <description>
-        Admin-only internal section.  Requests for paths covered by the URL patterns below will be
+        Admin-only internal section. Requests for paths covered by the URL patterns below will be
         checked for a logged-in user account that's allowed to access the AppEngine admin console
         (NOTE: this includes Editor/Viewer permissions in addition to Owner and the new IAM
-        App Engine Admin role.  See https://cloud.google.com/appengine/docs/java/access-control
+        App Engine Admin role. See https://cloud.google.com/appengine/docs/java/access-control
         specifically the "Access handlers that have a login:admin restriction" line.)
 
         TODO(b/28219927): lift some of these restrictions so that we can allow OAuth authentication
@@ -296,9 +360,6 @@
 
       <!-- Internal AppEngine endpoints.  The '_ah' is short for app hosting.  -->
       <url-pattern>/_ah/*</url-pattern>
-
-      <!-- Internal registry endpoints.  The '_dr' is short for domain registry. -->
-      <url-pattern>/_dr/*</url-pattern>
 
       <!-- Registrar console (should not be available on non-default module). -->
       <url-pattern>/registrar*</url-pattern>
@@ -350,5 +411,4 @@
     <filter-name>OfyFilter</filter-name>
     <url-pattern>/*</url-pattern>
   </filter-mapping>
-
 </web-app>

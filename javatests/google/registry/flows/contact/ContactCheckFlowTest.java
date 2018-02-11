@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,10 @@ package google.registry.flows.contact;
 import static google.registry.model.eppoutput.CheckData.ContactCheck.create;
 import static google.registry.testing.DatastoreHelper.persistActiveContact;
 import static google.registry.testing.DatastoreHelper.persistDeletedContact;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
+import google.registry.flows.EppException;
 import google.registry.flows.ResourceCheckFlowTestCase;
 import google.registry.flows.exceptions.TooManyResourceChecksException;
 import google.registry.model.contact.ContactResource;
@@ -63,7 +66,7 @@ public class ContactCheckFlowTest
   @Test
   public void testXmlMatches() throws Exception {
     persistActiveContact("sah8013");
-    runFlowAssertResponse(readFile("contact_check_response.xml"));
+    runFlowAssertResponse(loadFile("contact_check_response.xml"));
   }
 
   @Test
@@ -76,7 +79,13 @@ public class ContactCheckFlowTest
   @Test
   public void testTooManyIds() throws Exception {
     setEppInput("contact_check_51.xml");
-    thrown.expect(TooManyResourceChecksException.class);
+    EppException thrown = expectThrows(TooManyResourceChecksException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testIcannActivityReportField_getsLogged() throws Exception {
     runFlow();
+    assertIcannReportingActivityFieldLogged("srs-cont-check");
   }
 }

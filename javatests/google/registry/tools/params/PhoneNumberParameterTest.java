@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,10 +14,9 @@
 
 package google.registry.tools.params;
 
-import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
+import static google.registry.testing.JUnitBackports.assertThrows;
 
-import google.registry.testing.ExceptionRule;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -25,10 +24,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link PhoneNumberParameter}. */
 @RunWith(JUnit4.class)
 public class PhoneNumberParameterTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   private final OptionalPhoneNumberParameter instance = new OptionalPhoneNumberParameter();
 
   @Test
@@ -38,17 +33,16 @@ public class PhoneNumberParameterTest {
 
   @Test
   public void testConvert_sillyString_throws() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("foo");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert("foo"));
   }
 
   @Test
   public void testConvert_empty_returnsAbsent() throws Exception {
-    assertThat(instance.convert("")).isAbsent();
+    assertThat(instance.convert("")).isEmpty();
   }
 
   @Test
   public void testConvert_nullString_returnsAbsent() throws Exception {
-    assertThat(instance.convert("null")).isAbsent();
+    assertThat(instance.convert("null")).isEmpty();
   }
 }

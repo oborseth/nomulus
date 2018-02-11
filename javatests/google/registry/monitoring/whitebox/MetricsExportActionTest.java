@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package google.registry.monitoring.whitebox;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.mockito.Matchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -37,7 +38,6 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Matchers;
-import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
 
 /** Unit tests for {@link MetricsExportAction}. */
@@ -50,17 +50,10 @@ public class MetricsExportActionTest {
       .withTaskQueue()
       .build();
 
-  @Mock
-  BigqueryFactory bigqueryFactory;
-
-  @Mock
-  Bigquery bigquery;
-
-  @Mock
-  Tabledata tabledata;
-
-  @Mock
-  InsertAll insertAll;
+  private final BigqueryFactory bigqueryFactory = mock(BigqueryFactory.class);
+  private final Bigquery bigquery = mock(Bigquery.class);
+  private final Tabledata tabledata = mock(Tabledata.class);
+  private final InsertAll insertAll = mock(InsertAll.class);
 
   private TableDataInsertAllResponse response = new TableDataInsertAllResponse();
   private long currentTimeMillis = 1000000000000L;
@@ -111,7 +104,7 @@ public class MetricsExportActionTest {
   @Test
   public void testSuccess_emptyErrors() throws Exception {
     when(insertAll.execute()).thenReturn(response);
-    response.setInsertErrors(ImmutableList.<InsertErrors>of());
+    response.setInsertErrors(ImmutableList.of());
     action.run();
     verify(insertAll).execute();
   }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,8 @@
 // limitations under the License.
 
 package google.registry.tools;
+
+import static google.registry.testing.JUnitBackports.assertThrows;
 
 import com.beust.jcommander.ParameterException;
 import google.registry.testing.DeterministicStringGenerator;
@@ -45,7 +47,7 @@ public class CreateContactCommandTest extends EppToolCommandTestCase<CreateConta
         "--fax=+1.7035555556",
         "--email=jdoe@example.com",
         "--password=2fooBAR");
-    eppVerifier().verifySent("contact_create_complete.xml");
+    eppVerifier.verifySent("contact_create_complete.xml");
   }
 
   @Test
@@ -53,35 +55,36 @@ public class CreateContactCommandTest extends EppToolCommandTestCase<CreateConta
     // Will never be the case, but tests that each field can be omitted.
     // Also tests the auto-gen password.
     runCommandForced("--client=NewRegistrar");
-    eppVerifier().verifySent("contact_create_minimal.xml");
+    eppVerifier.verifySent("contact_create_minimal.xml");
   }
 
   @Test
   public void testFailure_missingClientId() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced();
+    assertThrows(ParameterException.class, this::runCommandForced);
   }
 
   @Test
   public void testFailure_tooManyStreetLines() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced(
-        "--client=NewRegistrar",
-        "--street=\"123 Example Dr.\"",
-        "--street=\"Floor 3\"",
-        "--street=\"Suite 100\"",
-        "--street=\"Office 1\"");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--client=NewRegistrar",
+                "--street=\"123 Example Dr.\"",
+                "--street=\"Floor 3\"",
+                "--street=\"Suite 100\"",
+                "--street=\"Office 1\""));
   }
 
   @Test
   public void testFailure_badPhone() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--client=NewRegistrar", "--phone=3");
+    assertThrows(
+        ParameterException.class, () -> runCommandForced("--client=NewRegistrar", "--phone=3"));
   }
 
   @Test
   public void testFailure_badFax() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--client=NewRegistrar", "--fax=3");
+    assertThrows(
+        ParameterException.class, () -> runCommandForced("--client=NewRegistrar", "--fax=3"));
   }
 }

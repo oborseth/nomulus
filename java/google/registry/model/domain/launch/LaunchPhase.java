@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ import static java.util.Objects.hash;
 import com.google.common.collect.ImmutableMap;
 import com.googlecode.objectify.annotation.Embed;
 import google.registry.model.ImmutableObject;
-import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
 import javax.xml.bind.annotation.XmlAttribute;
@@ -64,12 +63,12 @@ public class LaunchPhase extends ImmutableObject {
   /** A custom server launch phase that is defined using the "name" attribute. */
   public static final LaunchPhase CUSTOM = create("custom", null);
 
-  private static final Map<String, LaunchPhase> LAUNCH_PHASES = initEnumMapping();
+  private static final ImmutableMap<String, LaunchPhase> LAUNCH_PHASES = initEnumMapping();
 
   /**
    * Returns a map of the static final fields to their values, case-converted.
    */
-  private static final ImmutableMap<String, LaunchPhase> initEnumMapping() {
+  private static ImmutableMap<String, LaunchPhase> initEnumMapping() {
     ImmutableMap.Builder<String, LaunchPhase> builder = new ImmutableMap.Builder<>();
     for (Entry<String, LaunchPhase> entry : getTypesafeEnumMapping(LaunchPhase.class).entrySet()) {
       builder.put(UPPER_UNDERSCORE.to(LOWER_CAMEL, entry.getKey()), entry.getValue());

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,13 +17,13 @@ package google.registry.tldconfig.idn;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableRangeSet;
 import com.google.common.collect.Range;
 import com.google.common.collect.RangeSet;
 import com.google.re2j.Matcher;
 import com.google.re2j.Pattern;
 import java.net.URI;
+import java.util.Optional;
 
 /** An IDN table for a particular TLD. */
 public final class IdnTable {
@@ -40,7 +40,8 @@ public final class IdnTable {
   /**
    * Public URL of this IDN table, which is needed by RDE.
    *
-   * @see "https://tools.ietf.org/html/draft-arias-noguchi-dnrd-objects-mapping-05#section-5.5.1.1"
+   * @see <a href="https://tools.ietf.org/html/draft-arias-noguchi-dnrd-objects-mapping-05#section-5.5.1.1">
+   *     DNRD Objects Mapping - &ltrdeIDN:idnTableRef&gt object</a>
    */
   private final URI url;
 
@@ -121,7 +122,7 @@ public final class IdnTable {
       }
 
       int codepoint = readCodepoint(line);
-      rangeSet.add(Range.<Integer>singleton(codepoint));
+      rangeSet.add(Range.singleton(codepoint));
     }
     return new IdnTable(language, url, policy, rangeSet.build(), languageValidator);
   }

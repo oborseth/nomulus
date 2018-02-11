@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,30 +18,26 @@ import static com.google.appengine.api.datastore.DatastoreServiceFactory.getData
 import static com.google.common.truth.Truth.assertThat;
 import static com.googlecode.objectify.Key.create;
 import static google.registry.model.ofy.ObjectifyService.ofy;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import com.google.appengine.api.datastore.Entity;
 import com.google.appengine.api.datastore.KeyFactory;
 import google.registry.model.registry.label.ReservedList;
 import google.registry.request.HttpException.BadRequestException;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeResponse;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link DeleteEntityAction}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class DeleteEntityActionTest {
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder().withDatastore().build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   FakeResponse response = new FakeResponse();
   DeleteEntityAction action = new DeleteEntityAction();
 
@@ -89,8 +85,8 @@ public class DeleteEntityActionTest {
     Entity entity = new Entity("not", "here");
     String rawKey = KeyFactory.keyToString(entity.getKey());
     action.rawKeys = rawKey;
-    thrown.expect(BadRequestException.class, "Could not find entity with key " + rawKey);
-    action.run();
+    BadRequestException thrown = expectThrows(BadRequestException.class, action::run);
+    assertThat(thrown).hasMessageThat().contains("Could not find entity with key " + rawKey);
   }
 
   @Test
@@ -101,7 +97,7 @@ public class DeleteEntityActionTest {
     Entity entity = new Entity("non", "existent");
     String rawKey = KeyFactory.keyToString(entity.getKey());
     action.rawKeys = String.format("%s,%s", ofyKey, rawKey);
-    thrown.expect(BadRequestException.class, "Could not find entity with key " + rawKey);
-    action.run();
+    BadRequestException thrown = expectThrows(BadRequestException.class, action::run);
+    assertThat(thrown).hasMessageThat().contains("Could not find entity with key " + rawKey);
   }
 }

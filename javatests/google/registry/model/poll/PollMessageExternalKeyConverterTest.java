@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,13 +15,15 @@
 package google.registry.model.poll;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.model.poll.PollMessageExternalKeyConverter.makePollMessageExternalId;
+import static google.registry.model.poll.PollMessageExternalKeyConverter.parsePollMessageExternalId;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistActiveContact;
 import static google.registry.testing.DatastoreHelper.persistActiveDomain;
 import static google.registry.testing.DatastoreHelper.persistActiveHost;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.joda.time.DateTimeZone.UTC;
 
 import com.googlecode.objectify.Key;
 import google.registry.model.domain.Period;
@@ -30,7 +32,6 @@ import google.registry.model.ofy.Ofy;
 import google.registry.model.poll.PollMessageExternalKeyConverter.PollMessageExternalKeyParseException;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.InjectRule;
 import org.joda.time.DateTime;
@@ -52,12 +53,8 @@ public class PollMessageExternalKeyConverterTest {
   @Rule
   public InjectRule inject = new InjectRule();
 
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   HistoryEntry historyEntry;
-  FakeClock clock = new FakeClock(DateTime.now(UTC));
-  PollMessageExternalKeyConverter converter = new PollMessageExternalKeyConverter();
+  FakeClock clock = new FakeClock(DateTime.parse("2007-07-07T01:01:01Z"));
 
   @Before
   public void setUp() throws Exception {
@@ -70,7 +67,7 @@ public class PollMessageExternalKeyConverterTest {
       .setXmlBytes("<xml></xml>".getBytes(UTF_8))
       .setModificationTime(clock.nowUtc())
       .setClientId("foo")
-      .setTrid(Trid.create("ABC-123"))
+      .setTrid(Trid.create("ABC-123", "server-trid"))
       .setBySuperuser(false)
       .setReason("reason")
       .setRequestedByRegistrar(false)
@@ -79,48 +76,65 @@ public class PollMessageExternalKeyConverterTest {
 
   @Test
   public void testSuccess_domain() {
-    PollMessage.OneTime pollMessage = persistResource(
-        new PollMessage.OneTime.Builder()
-            .setClientId("TheRegistrar")
-            .setEventTime(clock.nowUtc())
-            .setMsg("Test poll message")
-            .setParent(historyEntry)
-            .build());
-    Key<PollMessage> key = Key.<PollMessage>create(pollMessage);
-    assertThat(converter.convert(key)).isEqualTo("1-2-FOOBAR-4-5");
-    assertThat(converter.reverse().convert("1-2-FOOBAR-4-5")).isEqualTo(key);
+    PollMessage.OneTime pollMessage =
+        persistResource(
+            new PollMessage.OneTime.Builder()
+                .setClientId("TheRegistrar")
+                .setEventTime(clock.nowUtc())
+                .setMsg("Test poll message")
+                .setParent(historyEntry)
+                .build());
+    assertThat(makePollMessageExternalId(pollMessage)).isEqualTo("1-2-FOOBAR-4-5-2007");
+    assertThat(parsePollMessageExternalId("1-2-FOOBAR-4-5-2007"))
+        .isEqualTo(Key.create(pollMessage));
   }
 
   @Test
   public void testSuccess_contact() {
     historyEntry =
         persistResource(historyEntry.asBuilder().setParent(persistActiveContact("tim")).build());
-    PollMessage.OneTime pollMessage = persistResource(
-        new PollMessage.OneTime.Builder()
-            .setClientId("TheRegistrar")
-            .setEventTime(clock.nowUtc())
-            .setMsg("Test poll message")
-            .setParent(historyEntry)
-            .build());
-    Key<PollMessage> key = Key.<PollMessage>create(pollMessage);
-    assertThat(converter.convert(key)).isEqualTo("2-5-ROID-4-6");
-    assertThat(converter.reverse().convert("2-5-ROID-4-6")).isEqualTo(key);
+    PollMessage.OneTime pollMessage =
+        persistResource(
+            new PollMessage.OneTime.Builder()
+                .setClientId("TheRegistrar")
+                .setEventTime(clock.nowUtc())
+                .setMsg("Test poll message")
+                .setParent(historyEntry)
+                .build());
+    assertThat(makePollMessageExternalId(pollMessage)).isEqualTo("2-5-ROID-4-6-2007");
+    assertThat(parsePollMessageExternalId("2-5-ROID-4-6-2007")).isEqualTo(Key.create(pollMessage));
   }
 
   @Test
   public void testSuccess_host() {
     historyEntry =
         persistResource(historyEntry.asBuilder().setParent(persistActiveHost("time.zyx")).build());
-    PollMessage.OneTime pollMessage = persistResource(
-        new PollMessage.OneTime.Builder()
-            .setClientId("TheRegistrar")
-            .setEventTime(clock.nowUtc())
-            .setMsg("Test poll message")
-            .setParent(historyEntry)
-            .build());
-    Key<PollMessage> key = Key.<PollMessage>create(pollMessage);
-    assertThat(converter.convert(key)).isEqualTo("3-5-ROID-4-6");
-    assertThat(converter.reverse().convert("3-5-ROID-4-6")).isEqualTo(key);
+    PollMessage.OneTime pollMessage =
+        persistResource(
+            new PollMessage.OneTime.Builder()
+                .setClientId("TheRegistrar")
+                .setEventTime(clock.nowUtc())
+                .setMsg("Test poll message")
+                .setParent(historyEntry)
+                .build());
+    assertThat(makePollMessageExternalId(pollMessage)).isEqualTo("3-5-ROID-4-6-2007");
+    assertThat(parsePollMessageExternalId("3-5-ROID-4-6-2007")).isEqualTo(Key.create(pollMessage));
+  }
+
+  @Test
+  // TODO(b/68953444): Remove leniency when backwards compatibility with missing field is no longer
+  //                   required.
+  public void testSuccess_stillParsesWithMissingYearField() {
+    PollMessage.OneTime pollMessage =
+        persistResource(
+            new PollMessage.OneTime.Builder()
+                .setClientId("TheRegistrar")
+                .setEventTime(clock.nowUtc())
+                .setMsg("Test poll message")
+                .setParent(historyEntry)
+                .build());
+    assertThat(makePollMessageExternalId(pollMessage)).isEqualTo("1-2-FOOBAR-4-5-2007");
+    assertThat(parsePollMessageExternalId("1-2-FOOBAR-4-5")).isEqualTo(Key.create(pollMessage));
   }
 
   @Test
@@ -128,19 +142,30 @@ public class PollMessageExternalKeyConverterTest {
     // Populate the testdata correctly as for 1-2-FOOBAR-4-5 so we know that the only thing that
     // is wrong here is the EppResourceTypeId.
     testSuccess_domain();
-    thrown.expect(PollMessageExternalKeyParseException.class);
-    converter.reverse().convert("4-2-FOOBAR-4-5");
+    assertThrows(
+        PollMessageExternalKeyParseException.class,
+        () -> parsePollMessageExternalId("4-2-FOOBAR-4-5-2007"));
   }
 
   @Test
   public void testFailure_tooFewComponentParts() throws Exception {
-    thrown.expect(PollMessageExternalKeyParseException.class);
-    converter.reverse().convert("1-3-EXAMPLE");
+    assertThrows(
+        PollMessageExternalKeyParseException.class,
+        () -> parsePollMessageExternalId("1-3-EXAMPLE"));
   }
 
   @Test
+  public void testFailure_tooManyComponentParts() throws Exception {
+    assertThrows(
+        PollMessageExternalKeyParseException.class,
+        () -> parsePollMessageExternalId("1-3-EXAMPLE-4-5-2007-2009"));
+  }
+
+
+  @Test
   public void testFailure_nonNumericIds() throws Exception {
-    thrown.expect(PollMessageExternalKeyParseException.class);
-    converter.reverse().convert("A-B-FOOBAR-D-E");
+    assertThrows(
+        PollMessageExternalKeyParseException.class,
+        () -> parsePollMessageExternalId("A-B-FOOBAR-D-E-F"));
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,24 +14,23 @@
 
 package google.registry.monitoring.whitebox;
 
-import com.google.api.client.http.HttpRequestInitializer;
-import com.google.api.client.http.HttpTransport;
+import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
+import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.JsonFactory;
 import com.google.api.services.monitoring.v3.Monitoring;
 import com.google.api.services.monitoring.v3.MonitoringScopes;
 import com.google.api.services.monitoring.v3.model.MonitoredResource;
-import com.google.appengine.api.ThreadManager;
 import com.google.appengine.api.modules.ModulesService;
-import com.google.common.base.Function;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import com.google.monitoring.metrics.MetricReporter;
+import com.google.monitoring.metrics.MetricWriter;
+import com.google.monitoring.metrics.stackdriver.StackdriverWriter;
 import dagger.Module;
 import dagger.Provides;
-import google.registry.config.ConfigModule.Config;
-import google.registry.monitoring.metrics.MetricWriter;
-import google.registry.monitoring.metrics.StackdriverWriter;
+import google.registry.config.RegistryConfig.Config;
 import java.util.Set;
-import java.util.concurrent.ThreadFactory;
-import javax.inject.Named;
+import java.util.function.Function;
 import org.joda.time.Duration;
 
 /** Dagger module for Google Stackdriver service connection objects. */
@@ -44,9 +43,9 @@ public final class StackdriverModule {
 
   @Provides
   static Monitoring provideMonitoring(
-      HttpTransport transport,
+      NetHttpTransport transport,
       JsonFactory jsonFactory,
-      Function<Set<String>, ? extends HttpRequestInitializer> credential,
+      Function<Set<String>, GoogleCredential> credential,
       @Config("projectId") String projectId) {
     return new Monitoring.Builder(transport, jsonFactory, credential.apply(MonitoringScopes.all()))
         .setApplicationName(projectId)
@@ -85,15 +84,11 @@ public final class StackdriverModule {
   }
 
   @Provides
-  @Named("metricsBackgroundThreadFactory")
-  static ThreadFactory provideThreadFactory() {
-    return ThreadManager.backgroundThreadFactory();
-  }
-
-  @Provides
-  @Named("metricsWriteInterval")
-  static long provideMetricsWriteInterval(
-      @Config("metricsWriteInterval") Duration metricsWriteInterval) {
-    return metricsWriteInterval.getStandardSeconds();
+  static MetricReporter provideMetricReporter(
+      MetricWriter metricWriter, @Config("metricsWriteInterval") Duration writeInterval) {
+    return new MetricReporter(
+        metricWriter,
+        writeInterval.getStandardSeconds(),
+        new ThreadFactoryBuilder().setDaemon(true).build());
   }
 }

@@ -60,8 +60,8 @@ Updated 1 entities.
     testing purposes, where `REAL` identifies the TLD is a live TLD.
 *   `roid_suffix` is the suffix that will be used for repository ids of domains
     on the TLD. This suffix must be all uppercase and a maximum of eight ASCII
-    characters and can be set t the upper-case equivalent of our TLD name (if it
-    is 8 characters or fewer), such as "EXAMPLE." You can also abbreviate the
+    characters and can be set to the upper-case equivalent of our TLD name (if
+    it is 8 characters or fewer), such as "EXAMPLE." You can also abbreviate the
     upper-case TLD name down to 8 characters. Refer to the [gTLD Registry
     Advisory: Correction of non-compliant ROIDs][roids] for further information.
 
@@ -160,21 +160,20 @@ To tie it all together, let's create a domain name that uses the above contact
 and host.
 
 ```shell
-$ nomulus -e alpha create_domain -c acme --domain fake.example \
-  --admin abcd1234 --tech abcd1234 --registrant abcd1234 \
-  --nameservers ns1.google.com
+$ nomulus -e alpha create_domain fake.example --client acme --admins abcd1234 \
+  --techs abcd1234 --registrant abcd1234 --nameservers ns1.google.com
 [ ... snip EPP response ... ]
 ```
 
 Where:
 
-*   `create_domain` is the subcommand to create a domain name.
-*   `-c` is used to define the registrar.
-*   `--domain` is used to identify the domain name to be created.
-*   `--admin` is the administrative contact's id.
-*   `--tech` is the technical contact's id.
+*   `create_domain` is the subcommand to create a domain name. It accepts a
+    whitespace-separted list of domain names to be created
+*   `--client` is used to define the registrar.
+*   `--admins` is the administrative contact's id(s).
+*   `--techs` is the technical contact's id(s).
 *   `--registrant` is the registrant contact's id.
-*   `--nameservers` identifies the host.
+*   `--nameservers` is a comma-separated list of hosts.
 
 Note how the same contact id is used for the administrative, technical, and
 registrant contact. It is common for domain names to use the same details for

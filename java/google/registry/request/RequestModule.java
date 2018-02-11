@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,6 +26,11 @@ import dagger.Module;
 import dagger.Provides;
 import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.UnsupportedMediaTypeException;
+import google.registry.request.auth.AuthResult;
+import google.registry.request.lock.LockHandler;
+import google.registry.request.lock.LockHandlerImpl;
+import google.registry.util.RequestStatusChecker;
+import google.registry.util.RequestStatusCheckerImpl;
 import java.io.IOException;
 import java.util.Map;
 import javax.servlet.http.HttpServletRequest;
@@ -40,10 +45,18 @@ public final class RequestModule {
 
   private final HttpServletRequest req;
   private final HttpServletResponse rsp;
+  private final AuthResult authResult;
 
-  public RequestModule(HttpServletRequest req, HttpServletResponse rsp) {
+  public RequestModule(
+      HttpServletRequest req, HttpServletResponse rsp) {
+    this(req, rsp, AuthResult.NOT_AUTHENTICATED);
+  }
+
+  public RequestModule(
+      HttpServletRequest req, HttpServletResponse rsp, AuthResult authResult) {
     this.req = req;
     this.rsp = rsp;
+    this.authResult = authResult;
   }
 
   @Provides
@@ -67,9 +80,34 @@ public final class RequestModule {
   }
 
   @Provides
+  AuthResult provideAuthResult() {
+    return authResult;
+  }
+
+  @Provides
+  @RequestUrl
+  static String provideRequestUrl(HttpServletRequest req) {
+    return req.getRequestURL().toString();
+  }
+
+  @Provides
   @RequestPath
   static String provideRequestPath(HttpServletRequest req) {
     return req.getRequestURI();
+  }
+
+  @Provides
+  @FullServletPath
+  static String provideFullServletPath(HttpServletRequest req) {
+    // Include the port only if it differs from the default for the scheme.
+    if ((req.getScheme().equals("http") && (req.getServerPort() == 80))
+        || (req.getScheme().equals("https") && (req.getServerPort() == 443))) {
+      return String.format("%s://%s%s", req.getScheme(), req.getServerName(), req.getServletPath());
+    } else {
+      return String.format(
+          "%s://%s:%d%s",
+          req.getScheme(), req.getServerName(), req.getServerPort(), req.getServletPath());
+    }
   }
 
   @Provides
@@ -106,6 +144,23 @@ public final class RequestModule {
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
+  }
+
+  @Provides
+  static LockHandler provideLockHandler(LockHandlerImpl lockHandler) {
+    return lockHandler;
+  }
+
+  @Provides
+  static RequestStatusChecker provideRequestStatusChecker(
+      RequestStatusCheckerImpl requestStatusChecker) {
+    return requestStatusChecker;
+  }
+
+  @Provides
+  @RequestLogId
+  static String provideRequestLogId(RequestStatusChecker requestStatusChecker) {
+    return requestStatusChecker.getLogId();
   }
 
   @Provides

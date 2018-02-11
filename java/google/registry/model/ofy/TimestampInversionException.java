@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,20 +14,16 @@
 
 package google.registry.model.ofy;
 
-import static java.util.Arrays.asList;
-
-import com.google.common.base.Joiner;
-import com.google.common.base.Predicate;
-import com.google.common.collect.FluentIterable;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.Objectify;
 import google.registry.model.BackupGroupRoot;
+import java.util.Arrays;
 import java.util.Map;
 import org.joda.time.DateTime;
 
 /**
- * Exception when trying to write to the datastore with a timestamp that is inconsistent with
- * a partial ordering on transactions that touch the same entities.
+ * Exception when trying to write to Datastore with a timestamp that is inconsistent with a partial
+ * ordering on transactions that touch the same entities.
  */
 class TimestampInversionException extends RuntimeException {
 
@@ -45,17 +41,20 @@ class TimestampInversionException extends RuntimeException {
   }
 
   private TimestampInversionException(DateTime transactionTime, String problem) {
-    super(Joiner.on('\n').join(
+    super(
         String.format(
-            "Timestamp inversion between transaction time (%s) and %s",
+            "Timestamp inversion between transaction time (%s) and %s\n%s",
             transactionTime,
-            problem),
-        getFileAndLine(FluentIterable.from(asList(new Exception().getStackTrace()))
-          .firstMatch(new Predicate<StackTraceElement>() {
-            @Override
-            public boolean apply(StackTraceElement element) {
-              return !element.getClassName().startsWith(Objectify.class.getPackage().getName())
-                  && !element.getClassName().startsWith(Ofy.class.getName());
-            }}).get())));
+            problem,
+            getFileAndLine(
+                Arrays.stream(new Exception().getStackTrace())
+                    .filter(
+                        element ->
+                            !element
+                                    .getClassName()
+                                    .startsWith(Objectify.class.getPackage().getName())
+                                && !element.getClassName().startsWith(Ofy.class.getName()))
+                    .findFirst()
+                    .get())));
   }
 }

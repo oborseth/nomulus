@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,110 +15,100 @@
 package google.registry.model.contact;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static google.registry.model.EppResourceUtils.projectResourceOntoBuilderAtTime;
-import static google.registry.model.ofy.Ofy.RECOMMENDED_MEMCACHE_EXPIRATION;
 
-import com.google.common.base.Predicates;
-import com.google.common.collect.FluentIterable;
-import com.google.common.collect.Lists;
-import com.googlecode.objectify.annotation.Cache;
+import com.google.common.collect.ImmutableList;
 import com.googlecode.objectify.annotation.Entity;
 import com.googlecode.objectify.annotation.IgnoreSave;
 import com.googlecode.objectify.annotation.Index;
 import com.googlecode.objectify.condition.IfNull;
 import google.registry.model.EppResource;
 import google.registry.model.EppResource.ForeignKeyedEppResource;
+import google.registry.model.EppResource.ResourceWithTransferData;
 import google.registry.model.annotations.ExternalMessagingName;
+import google.registry.model.annotations.ReportedOn;
 import google.registry.model.contact.PostalInfo.Type;
-import google.registry.model.eppcommon.AuthInfo;
-import java.util.List;
+import google.registry.model.transfer.TransferData;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.stream.Stream;
 import javax.xml.bind.annotation.XmlElement;
-import javax.xml.bind.annotation.XmlRootElement;
-import javax.xml.bind.annotation.XmlTransient;
-import javax.xml.bind.annotation.XmlType;
-import javax.xml.bind.annotation.adapters.CollapsedStringAdapter;
-import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
 import org.joda.time.DateTime;
 
-/** A persistable Contact resource including mutable and non-mutable fields. */
-@XmlRootElement(name = "infData")
-@XmlType(propOrder = {
-    "contactId",
-    "repoId",
-    "status",
-    "postalInfosAsList",
-    "voice",
-    "fax",
-    "email",
-    "currentSponsorClientId",
-    "creationClientId",
-    "creationTime",
-    "lastEppUpdateClientId",
-    "lastEppUpdateTime",
-    "lastTransferTime",
-    "authInfo",
-    "disclose" })
-@Cache(expirationSeconds = RECOMMENDED_MEMCACHE_EXPIRATION)
+/**
+ * A persistable contact resource including mutable and non-mutable fields.
+ *
+ * @see <a href="https://tools.ietf.org/html/rfc5733">RFC 5733</a>
+ */
+@ReportedOn
 @Entity
 @ExternalMessagingName("contact")
-public class ContactResource extends EppResource implements ForeignKeyedEppResource {
+public class ContactResource extends EppResource implements
+    ForeignKeyedEppResource, ResourceWithTransferData {
 
   /**
    * Unique identifier for this contact.
    *
    * <p>This is only unique in the sense that for any given lifetime specified as the time range
-   * from (creationTime, deletionTime) there can only be one contact in the datastore with this id.
+   * from (creationTime, deletionTime) there can only be one contact in Datastore with this id.
    * However, there can be many contacts with the same id and non-overlapping lifetimes.
    */
-  @XmlTransient
   String contactId;
 
   /**
    * Localized postal info for the contact. All contained values must be representable in the 7-bit
-   * US-ASCII character set. Personal info; cleared by wipeOut().
+   * US-ASCII character set. Personal info; cleared by {@link Builder#wipeOut}.
    */
   @IgnoreSave(IfNull.class)
-  @XmlTransient
   PostalInfo localizedPostalInfo;
 
-  /** Internationalized postal info for the contact. Personal info; cleared by wipeOut(). */
+  /**
+   * Internationalized postal info for the contact. Personal info; cleared by
+   * {@link Builder#wipeOut}.
+   */
   @IgnoreSave(IfNull.class)
-  @XmlTransient
   PostalInfo internationalizedPostalInfo;
 
   /**
    * Contact name used for name searches. This is set automatically to be the internationalized
    * postal name, or if null, the localized postal name, or if that is null as well, null. Personal
-   * info; cleared by wipeOut().
+   * info; cleared by {@link Builder#wipeOut}.
    */
   @Index
-  @XmlTransient
   String searchName;
 
-  /** Contact’s voice number. Personal info; cleared by wipeOut(). */
+  /** Contact’s voice number. Personal info; cleared by {@link Builder#wipeOut}. */
   @IgnoreSave(IfNull.class)
   ContactPhoneNumber voice;
 
-  /** Contact’s fax number. Personal info; cleared by wipeOut(). */
+  /** Contact’s fax number. Personal info; cleared by {@link Builder#wipeOut}. */
   @IgnoreSave(IfNull.class)
   ContactPhoneNumber fax;
 
-  /** Contact’s email address. Personal info; cleared by wipeOut(). */
+  /** Contact’s email address. Personal info; cleared by {@link Builder#wipeOut}. */
   @IgnoreSave(IfNull.class)
-  @XmlJavaTypeAdapter(CollapsedStringAdapter.class)
   String email;
 
   /** Authorization info (aka transfer secret) of the contact. */
   ContactAuthInfo authInfo;
 
+  /** Data about any pending or past transfers on this contact. */
+  TransferData transferData;
+
+  /**
+   * The time that this resource was last transferred.
+   *
+   * <p>Can be null if the resource has never been transferred.
+   */
+  DateTime lastTransferTime;
+
   // If any new fields are added which contain personal information, make sure they are cleared by
   // the wipeOut() function, so that data is not kept around for deleted contacts.
 
   /** Disclosure policy. */
-  @IgnoreSave(IfNull.class)
   Disclose disclose;
 
-  @XmlElement(name = "id")
   public String getContactId() {
     return contactId;
   }
@@ -129,6 +119,10 @@ public class ContactResource extends EppResource implements ForeignKeyedEppResou
 
   public PostalInfo getInternationalizedPostalInfo() {
     return internationalizedPostalInfo;
+  }
+
+  public String getSearchName() {
+    return searchName;
   }
 
   public ContactPhoneNumber getVoiceNumber() {
@@ -143,12 +137,26 @@ public class ContactResource extends EppResource implements ForeignKeyedEppResou
     return email;
   }
 
-  public AuthInfo getAuthInfo() {
+  public ContactAuthInfo getAuthInfo() {
     return authInfo;
   }
 
   public Disclose getDisclose() {
     return disclose;
+  }
+
+  public final String getCurrentSponsorClientId() {
+    return getPersistedCurrentSponsorClientId();
+  }
+
+  @Override
+  public final TransferData getTransferData() {
+    return Optional.ofNullable(transferData).orElse(TransferData.EMPTY);
+  }
+
+  @Override
+  public DateTime getLastTransferTime() {
+    return lastTransferTime;
   }
 
   @Override
@@ -160,16 +168,15 @@ public class ContactResource extends EppResource implements ForeignKeyedEppResou
    * Postal info for the contact.
    *
    * <p>The XML marshalling expects the {@link PostalInfo} objects in a list, but we can't actually
-   * persist them to datastore that way because Objectify can't handle collections of embedded
+   * persist them to Datastore that way because Objectify can't handle collections of embedded
    * objects that themselves contain collections, and there's a list of streets inside. This method
    * transforms the persisted format to the XML format for marshalling.
    */
   @XmlElement(name = "postalInfo")
-  public List<PostalInfo> getPostalInfosAsList() {
-    return FluentIterable
-        .from(Lists.newArrayList(localizedPostalInfo, internationalizedPostalInfo))
-        .filter(Predicates.notNull())
-        .toList();
+  public ImmutableList<PostalInfo> getPostalInfosAsList() {
+    return Stream.of(localizedPostalInfo, internationalizedPostalInfo)
+        .filter(Objects::nonNull)
+        .collect(toImmutableList());
   }
 
   @Override
@@ -185,7 +192,9 @@ public class ContactResource extends EppResource implements ForeignKeyedEppResou
   }
 
   /** A builder for constructing {@link ContactResource}, since it is immutable. */
-  public static class Builder extends EppResource.Builder<ContactResource, Builder> {
+  public static class Builder extends EppResource.Builder<ContactResource, Builder>
+      implements BuilderWithTransferData<Builder>{
+
     public Builder() {}
 
     private Builder(ContactResource instance) {
@@ -249,26 +258,48 @@ public class ContactResource extends EppResource implements ForeignKeyedEppResou
     }
 
     @Override
+    public Builder setTransferData(TransferData transferData) {
+      getInstance().transferData = transferData;
+      return this;
+    }
+
+    @Override
+    public Builder setLastTransferTime(DateTime lastTransferTime) {
+      getInstance().lastTransferTime = lastTransferTime;
+      return thisCastToDerived();
+    }
+
+    /**
+     * Remove all personally identifying information about a contact.
+     *
+     * <p>This should be used when deleting a contact so that the soft-deleted entity doesn't
+     * contain information that the registrant requested to be deleted.
+     */
     public Builder wipeOut() {
-      this.setEmailAddress(null);
-      this.setFaxNumber(null);
-      this.setInternationalizedPostalInfo(null);
-      this.setLocalizedPostalInfo(null);
-      this.setVoiceNumber(null);
-      return super.wipeOut();
+      setEmailAddress(null);
+      setFaxNumber(null);
+      setInternationalizedPostalInfo(null);
+      setLocalizedPostalInfo(null);
+      setVoiceNumber(null);
+      return this;
     }
 
     @Override
     public ContactResource build() {
+      ContactResource instance = getInstance();
+      // If TransferData is totally empty, set it to null.
+      if (TransferData.EMPTY.equals(instance.transferData)) {
+        setTransferData(null);
+      }
       // Set the searchName using the internationalized and localized postal info names.
-      if ((getInstance().internationalizedPostalInfo != null)
-          && (getInstance().internationalizedPostalInfo.getName() != null)) {
-        getInstance().searchName = getInstance().internationalizedPostalInfo.getName();
-      } else if ((getInstance().localizedPostalInfo != null)
-          && (getInstance().localizedPostalInfo.getName() != null)) {
-        getInstance().searchName = getInstance().localizedPostalInfo.getName();
+      if ((instance.internationalizedPostalInfo != null)
+          && (instance.internationalizedPostalInfo.getName() != null)) {
+        instance.searchName = instance.internationalizedPostalInfo.getName();
+      } else if ((instance.localizedPostalInfo != null)
+          && (instance.localizedPostalInfo.getName() != null)) {
+        instance.searchName = instance.localizedPostalInfo.getName();
       } else {
-        getInstance().searchName = null;
+        instance.searchName = null;
       }
       return super.build();
     }

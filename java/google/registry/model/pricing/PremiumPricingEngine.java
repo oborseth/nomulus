@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 package google.registry.model.pricing;
 
-import com.google.common.base.Optional;
+import java.util.Optional;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 
@@ -32,14 +32,14 @@ public interface PremiumPricingEngine {
    * <p>Note that the fullyQualifiedDomainName must only contain a single part left of the TLD, i.e.
    * subdomains are not allowed, but multi-part TLDs are.
    */
-  public DomainPrices getDomainPrices(String fullyQualifiedDomainName, DateTime priceTime);
+  DomainPrices getDomainPrices(String fullyQualifiedDomainName, DateTime priceTime);
 
   /**
    * A class containing information on premium prices for a specific domain name.
    *
    * <p>Any implementation of PremiumPricingEngine is responsible for determining all of these.
    */
-  public static class DomainPrices {
+  class DomainPrices {
 
     private boolean isPremium;
     // TODO(b/26901539): Refactor return values to support an arbitrary list of costs for each of

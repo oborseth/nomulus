@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,59 +21,47 @@ import static google.registry.export.UpdateSnapshotViewAction.UPDATE_SNAPSHOT_DA
 import static google.registry.export.UpdateSnapshotViewAction.UPDATE_SNAPSHOT_KIND_PARAM;
 import static google.registry.export.UpdateSnapshotViewAction.UPDATE_SNAPSHOT_TABLE_ID_PARAM;
 import static google.registry.export.UpdateSnapshotViewAction.createViewUpdateTask;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.eq;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.google.api.services.bigquery.Bigquery;
 import com.google.api.services.bigquery.model.Dataset;
 import com.google.api.services.bigquery.model.Table;
+import com.google.common.collect.Iterables;
 import google.registry.bigquery.BigqueryFactory;
 import google.registry.request.HttpException.InternalServerErrorException;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.TaskQueueHelper.TaskMatcher;
 import java.io.IOException;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.mockito.InOrder;
 
 /** Unit tests for {@link UpdateSnapshotViewAction}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class UpdateSnapshotViewActionTest {
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder()
       .withTaskQueue()
       .build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Mock
-  private BigqueryFactory bigqueryFactory;
-
-  @Mock
-  private Bigquery bigquery;
-
-  @Mock
-  private Bigquery.Datasets bigqueryDatasets;
-
-  @Mock
-  private Bigquery.Datasets.Insert bigqueryDatasetsInsert;
-
-  @Mock
-  private Bigquery.Tables bigqueryTables;
-
-  @Mock
-  private Bigquery.Tables.Update bigqueryTablesUpdate;
+  private final BigqueryFactory bigqueryFactory = mock(BigqueryFactory.class);
+  private final Bigquery bigquery = mock(Bigquery.class);
+  private final Bigquery.Datasets bigqueryDatasets = mock(Bigquery.Datasets.class);
+  private final Bigquery.Datasets.Insert bigqueryDatasetsInsert =
+      mock(Bigquery.Datasets.Insert.class);
+  private final Bigquery.Tables bigqueryTables = mock(Bigquery.Tables.class);
+  private final Bigquery.Tables.Update bigqueryTablesUpdate = mock(Bigquery.Tables.Update.class);
 
   private UpdateSnapshotViewAction action;
 
@@ -111,23 +99,32 @@ public class UpdateSnapshotViewActionTest {
   public void testSuccess_doPost() throws Exception {
     action.run();
 
+    InOrder factoryOrder = inOrder(bigqueryFactory);
     // Check that the BigQuery factory was called in such a way that the dataset would be created
     // if it didn't already exist.
-    verify(bigqueryFactory).create("myproject", "latest_snapshot");
+    factoryOrder.verify(bigqueryFactory).create("myproject", "latest_snapshot");
+    factoryOrder.verify(bigqueryFactory).create("myproject", "latest_datastore_export");
 
-    // Check that we updated the view.
+    // Check that we updated both views
+    InOrder tableOrder = inOrder(bigqueryTables);
     ArgumentCaptor<Table> tableArg = ArgumentCaptor.forClass(Table.class);
-    verify(bigqueryTables).update(
-        eq("myproject"), eq("latest_snapshot"), eq("fookind"), tableArg.capture());
-    assertThat(tableArg.getValue().getView().getQuery())
-        .isEqualTo("SELECT * FROM [myproject:some_dataset.12345_fookind]");
+    tableOrder.verify(bigqueryTables)
+        .update(eq("myproject"), eq("latest_snapshot"), eq("fookind"), tableArg.capture());
+    tableOrder.verify(bigqueryTables)
+        .update(eq("myproject"), eq("latest_datastore_export"), eq("fookind"), tableArg.capture());
+    Iterable<String> actualQueries =
+        Iterables.transform(tableArg.getAllValues(), table -> table.getView().getQuery());
+    assertThat(actualQueries).containsExactly(
+        "#legacySQL\nSELECT * FROM [myproject:some_dataset.12345_fookind]",
+        "#standardSQL\nSELECT * FROM `myproject.some_dataset.12345_fookind`");
   }
 
   @Test
   public void testFailure_bigqueryConnectionThrowsError() throws Exception {
     when(bigqueryTables.update(anyString(), anyString(), anyString(), any(Table.class)))
         .thenThrow(new IOException("I'm sorry Dave, I can't let you do that"));
-    thrown.expect(InternalServerErrorException.class, "Error in update snapshot view action");
-    action.run();
+    InternalServerErrorException thrown =
+        expectThrows(InternalServerErrorException.class, action::run);
+    assertThat(thrown).hasMessageThat().contains("Error in update snapshot view action");
   }
 }

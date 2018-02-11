@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,18 +18,17 @@ import com.google.appengine.api.users.UserService;
 import google.registry.request.Action;
 import google.registry.request.Action.Method;
 import google.registry.request.Payload;
+import google.registry.request.auth.Auth;
 import javax.inject.Inject;
 import javax.servlet.http.HttpSession;
 
 /** Runs EPP from the console and requires GAE user authentication. */
 @Action(
-    path = "/registrar-xhr",
-    xsrfProtection = true,
-    xsrfScope = EppConsoleAction.XSRF_SCOPE,
-    method = Method.POST)
+  path = "/registrar-xhr",
+  method = Method.POST,
+  auth = Auth.AUTH_PUBLIC_LOGGED_IN
+)
 public class EppConsoleAction implements Runnable {
-
-  public static final String XSRF_SCOPE = "console";
 
   @Inject @Payload byte[] inputXmlBytes;
   @Inject HttpSession session;

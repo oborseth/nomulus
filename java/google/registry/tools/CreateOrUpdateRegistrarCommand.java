@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,20 +18,23 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Predicates.isNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static google.registry.util.DomainNameUtils.canonicalizeDomainName;
 import static google.registry.util.RegistrarUtils.normalizeRegistrarName;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.beust.jcommander.Parameter;
-import com.google.common.base.Optional;
+import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
+import com.google.common.collect.Sets;
 import google.registry.model.billing.RegistrarBillingUtils;
 import google.registry.model.registrar.Registrar;
 import google.registry.model.registrar.Registrar.BillingMethod;
 import google.registry.model.registrar.RegistrarAddress;
+import google.registry.model.registry.Registry;
+import google.registry.tools.params.KeyValueMapParameter.CurrencyUnitToStringMap;
 import google.registry.tools.params.OptionalLongParameter;
 import google.registry.tools.params.OptionalPhoneNumberParameter;
 import google.registry.tools.params.OptionalStringParameter;
@@ -41,8 +44,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import javax.annotation.Nullable;
 import org.joda.money.CurrencyUnit;
 import org.joda.money.Money;
@@ -171,6 +177,19 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
 
   @Nullable
   @Parameter(
+    names = "--billing_account_map",
+    description =
+        "Registrar Billing Account key-value pairs (formatted as key=value[,key=value...]), "
+            + "where key is a currency unit (USD, JPY, etc) and value is the registrar's billing "
+            + "account id for that currency. During update, only the pairs that need updating need "
+            + "to be provided.",
+    converter = CurrencyUnitToStringMap.class,
+    validateWith = CurrencyUnitToStringMap.class
+  )
+  private Map<CurrencyUnit, String> billingAccountMap;
+
+  @Nullable
+  @Parameter(
       names = "--billing_method",
       description = "Method by which registry bills this registrar customer")
   private BillingMethod billingMethod;
@@ -240,6 +259,13 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
       description = "Hostname of registrar WHOIS server. (Default: whois.nic.google)")
   String whoisServer;
 
+  @Nullable
+  @Parameter(
+      names = "--premium_price_ack_required",
+      description = "Whether operations on premium domains require explicit ack of prices",
+      arity = 1)
+  private Boolean premiumPriceAckRequired;
+
   /** Returns the existing registrar (for update) or null (for creates). */
   @Nullable
   abstract Registrar getOldRegistrar(String clientId);
@@ -263,16 +289,16 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
         builder.setRegistrarName(registrarName);
       }
       if (email != null) {
-        builder.setEmailAddress(email.orNull());
+        builder.setEmailAddress(email.orElse(null));
       }
       if (url != null) {
-        builder.setUrl(url.orNull());
+        builder.setUrl(url.orElse(null));
       }
       if (phone != null) {
-        builder.setPhoneNumber(phone.orNull());
+        builder.setPhoneNumber(phone.orElse(null));
       }
       if (fax != null) {
-        builder.setFaxNumber(fax.orNull());
+        builder.setFaxNumber(fax.orElse(null));
       }
       if (registrarType != null) {
         builder.setType(registrarType);
@@ -281,7 +307,7 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
         builder.setState(registrarState);
       }
       if (driveFolderId != null) {
-        builder.setDriveFolderId(driveFolderId.orNull());
+        builder.setDriveFolderId(driveFolderId.orElse(null));
       }
       if (!allowedTlds.isEmpty()) {
         checkArgument(addAllowedTlds.isEmpty(),
@@ -329,10 +355,18 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
         builder.setClientCertificateHash(clientCertificateHash);
       }
       if (ianaId != null) {
-        builder.setIanaIdentifier(ianaId.orNull());
+        builder.setIanaIdentifier(ianaId.orElse(null));
       }
       if (billingId != null) {
-        builder.setBillingIdentifier(billingId.orNull());
+        builder.setBillingIdentifier(billingId.orElse(null));
+      }
+      if (billingAccountMap != null) {
+        LinkedHashMap<CurrencyUnit, String> newBillingAccountMap = new LinkedHashMap<>();
+        if (oldRegistrar != null && oldRegistrar.getBillingAccountMap() != null) {
+          newBillingAccountMap.putAll(oldRegistrar.getBillingAccountMap());
+        }
+        newBillingAccountMap.putAll(billingAccountMap);
+        builder.setBillingAccountMap(newBillingAccountMap);
       }
       if (billingMethod != null) {
         if (oldRegistrar != null && !billingMethod.equals(oldRegistrar.getBillingMethod())) {
@@ -347,8 +381,9 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
         builder.setBillingMethod(billingMethod);
       }
       List<Object> streetAddressFields = Arrays.asList(street, city, state, zip, countryCode);
-      checkArgument(Iterables.any(streetAddressFields, isNull())
-          == Iterables.all(streetAddressFields, isNull()),
+      checkArgument(
+          streetAddressFields.stream().anyMatch(isNull())
+              == streetAddressFields.stream().allMatch(isNull()),
           "Must specify all fields of address");
       if (street != null) {
         // We always set the localized address for now. That should be safe to do since it supports
@@ -361,27 +396,12 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
             .setCountryCode(countryCode)
             .build());
       }
-      if (blockPremiumNames != null) {
-        builder.setBlockPremiumNames(blockPremiumNames);
-      }
-      if (contactsRequireSyncing != null) {
-        builder.setContactsRequireSyncing(contactsRequireSyncing);
-      }
-      // When creating a new REAL registrar or changing the type to REAL, a passcode is required.
-      // Leave existing REAL registrars alone.
-      if (Registrar.Type.REAL.equals(registrarType)
-          && (oldRegistrar == null || oldRegistrar.getPhonePasscode() == null)) {
-        checkArgument(phonePasscode != null, "--passcode is required for REAL registrars.");
-      }
-      if (phonePasscode != null) {
-        builder.setPhonePasscode(phonePasscode);
-      }
-      if (icannReferralEmail != null) {
-        builder.setIcannReferralEmail(icannReferralEmail);
-      }
-      if (whoisServer != null) {
-        builder.setWhoisServer(whoisServer);
-      }
+      Optional.ofNullable(blockPremiumNames).ifPresent(builder::setBlockPremiumNames);
+      Optional.ofNullable(contactsRequireSyncing).ifPresent(builder::setContactsRequireSyncing);
+      Optional.ofNullable(phonePasscode).ifPresent(builder::setPhonePasscode);
+      Optional.ofNullable(icannReferralEmail).ifPresent(builder::setIcannReferralEmail);
+      Optional.ofNullable(whoisServer).ifPresent(builder::setWhoisServer);
+      Optional.ofNullable(premiumPriceAckRequired).ifPresent(builder::setPremiumPriceAckRequired);
 
       // If the registrarName is being set, verify that it is either null or it normalizes uniquely.
       String oldRegistrarName = (oldRegistrar == null) ? null : oldRegistrar.getRegistrarName();
@@ -398,7 +418,33 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
         }
       }
 
-      stageEntityChange(oldRegistrar, builder.build());
+      Registrar newRegistrar = builder.build();
+
+      // Apply some extra validation when creating a new REAL registrar or changing the type of a
+      // registrar to REAL. Leave existing REAL registrars alone.
+      if (Registrar.Type.REAL.equals(registrarType)) {
+        // Require a phone passcode.
+        checkArgument(
+            newRegistrar.getPhonePasscode() != null, "--passcode is required for REAL registrars.");
+        // Check if registrar has billing account IDs for the currency of the TLDs that it is
+        // allowed to register.
+        ImmutableSet<CurrencyUnit> tldCurrencies =
+            newRegistrar
+                .getAllowedTlds()
+                .stream()
+                .map(tld -> Registry.get(tld).getCurrency())
+                .collect(toImmutableSet());
+        Set<CurrencyUnit> currenciesWithoutBillingAccountId =
+            newRegistrar.getBillingAccountMap() == null
+                ? tldCurrencies
+                : Sets.difference(tldCurrencies, newRegistrar.getBillingAccountMap().keySet());
+        checkArgument(
+            currenciesWithoutBillingAccountId.isEmpty(),
+            "Need billing account map entries for currencies: %s",
+            Joiner.on(' ').join(currenciesWithoutBillingAccountId));
+      }
+
+      stageEntityChange(oldRegistrar, newRegistrar);
     }
   }
 }

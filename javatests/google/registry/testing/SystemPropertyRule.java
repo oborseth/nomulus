@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,11 +17,11 @@ package google.registry.testing;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
-import com.google.common.base.Optional;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import javax.annotation.Nullable;
 import org.junit.rules.ExternalResource;
 
@@ -64,10 +64,9 @@ public final class SystemPropertyRule extends ExternalResource {
    * @see java.lang.System#setProperty(String, String)
    */
   public SystemPropertyRule override(String key, @Nullable String value) {
-    if (!originals.containsKey(key)) {
-      originals.put(key, new Property(key, Optional.fromNullable(System.getProperty(key))));
-    }
-    Property property = new Property(key, Optional.fromNullable(value));
+    originals.computeIfAbsent(
+        key, k -> new Property(k, Optional.ofNullable(System.getProperty(k))));
+    Property property = new Property(key, Optional.ofNullable(value));
     if (isRunning) {
       property.set();
     } else {

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,10 @@
 package google.registry.util;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.SerializeUtils.deserialize;
 import static google.registry.util.SerializeUtils.serialize;
 
-import google.registry.testing.ExceptionRule;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -28,16 +27,12 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class SerializeUtilsTest {
 
-  class Lol {
+  static class Lol {
     @Override
     public String toString() {
       return "LOL_VALUE";
     }
   }
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   @Test
   public void testSerialize_nullValue_returnsNull() throws Exception {
     assertThat(serialize(null)).isNull();
@@ -55,13 +50,17 @@ public class SerializeUtilsTest {
 
   @Test
   public void testSerialize_objectDoesntImplementSerialize_hasInformativeError() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "Unable to serialize: LOL_VALUE");
-    serialize(new Lol());
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> serialize(new Lol()));
+    assertThat(thrown).hasMessageThat().contains("Unable to serialize: LOL_VALUE");
   }
 
   @Test
   public void testDeserialize_badValue_hasInformativeError() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "Unable to deserialize: objectBytes=FF");
-    deserialize(String.class, new byte[] { (byte) 0xff });
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> deserialize(String.class, new byte[] {(byte) 0xff}));
+    assertThat(thrown).hasMessageThat().contains("Unable to deserialize: objectBytes=FF");
   }
 }

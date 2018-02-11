@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static org.joda.time.Duration.standardDays;
 import static org.joda.time.Duration.standardSeconds;
 import static org.mockito.Mockito.mock;
@@ -26,14 +27,12 @@ import static org.mockito.Mockito.verify;
 import google.registry.model.common.Cursor;
 import google.registry.model.common.Cursor.CursorType;
 import google.registry.model.registry.Registry;
-import google.registry.model.server.Lock;
 import google.registry.rde.EscrowTaskRunner.EscrowTask;
 import google.registry.request.HttpException.NoContentException;
 import google.registry.request.HttpException.ServiceUnavailableException;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
-import java.util.concurrent.Callable;
+import google.registry.testing.FakeLockHandler;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 import org.junit.Before;
@@ -45,9 +44,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link EscrowTaskRunner}. */
 @RunWith(JUnit4.class)
 public class EscrowTaskRunnerTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder()
@@ -67,7 +63,7 @@ public class EscrowTaskRunnerTest {
     registry = Registry.get("lol");
     runner = new EscrowTaskRunner();
     runner.clock = clock;
-    runner.tld = "lol";
+    runner.lockHandler = new FakeLockHandler(true);
     DateTimeZone.setDefault(DateTimeZone.forID("America/New_York"));  // Make sure UTC stuff works.
   }
 
@@ -100,29 +96,29 @@ public class EscrowTaskRunnerTest {
     clock.setTo(DateTime.parse("2006-06-06T00:30:00Z"));
     persistResource(
         Cursor.create(CursorType.RDE_STAGING, DateTime.parse("2006-06-07TZ"), registry));
-    thrown.expect(NoContentException.class, "Already completed");
-    runner.lockRunAndRollForward(
-        task, registry, standardSeconds(30), CursorType.RDE_STAGING, standardDays(1));
+    NoContentException thrown =
+        expectThrows(
+            NoContentException.class,
+            () ->
+                runner.lockRunAndRollForward(
+                    task, registry, standardSeconds(30), CursorType.RDE_STAGING, standardDays(1)));
+    assertThat(thrown).hasMessageThat().contains("Already completed");
   }
 
   @Test
   public void testRun_lockIsntAvailable_throws503() throws Exception {
-    String lockName = task.getClass().getSimpleName() + " lol";
+    String lockName = "EscrowTaskRunner " + task.getClass().getSimpleName();
     clock.setTo(DateTime.parse("2006-06-06T00:30:00Z"));
     persistResource(
         Cursor.create(CursorType.RDE_STAGING, DateTime.parse("2006-06-06TZ"), registry));
-    thrown.expect(ServiceUnavailableException.class, "Lock in use: " + lockName);
-    Lock.executeWithLocks(
-        new Callable<Void>() {
-          @Override
-          public Void call() throws Exception {
-            runner.lockRunAndRollForward(
-                task, registry, standardSeconds(30), CursorType.RDE_STAGING, standardDays(1));
-            return null;
-          }},
-        null,
-        "lol",
-        standardSeconds(30),
-        lockName);
+    ServiceUnavailableException thrown =
+        expectThrows(
+            ServiceUnavailableException.class,
+            () -> {
+              runner.lockHandler = new FakeLockHandler(false);
+              runner.lockRunAndRollForward(
+                  task, registry, standardSeconds(30), CursorType.RDE_STAGING, standardDays(1));
+            });
+    assertThat(thrown).hasMessageThat().contains("Lock in use: " + lockName + " for TLD: lol");
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,9 +17,10 @@ package google.registry.tmch;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Throwables.getRootCause;
-import static com.google.common.base.Throwables.propagateIfInstanceOf;
+import static com.google.common.base.Throwables.throwIfInstanceOf;
 import static google.registry.xml.XmlTransformer.loadXmlSchemas;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -32,6 +33,7 @@ import java.security.cert.X509Certificate;
 import java.util.List;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
+import javax.inject.Inject;
 import javax.xml.crypto.AlgorithmMethod;
 import javax.xml.crypto.KeySelector;
 import javax.xml.crypto.KeySelectorException;
@@ -54,7 +56,15 @@ import org.xml.sax.SAXException;
 
 /** Helper class for verifying TMCH certificates and XML signatures. */
 @ThreadSafe
-public final class TmchXmlSignature {
+public class TmchXmlSignature {
+
+  @VisibleForTesting
+  final TmchCertificateAuthority tmchCertificateAuthority;
+
+  @Inject
+  public TmchXmlSignature(TmchCertificateAuthority tmchCertificateAuthority) {
+    this.tmchCertificateAuthority = tmchCertificateAuthority;
+  }
 
   private static final Schema SCHEMA =
       loadXmlSchemas(ImmutableList.of("mark.xsd", "dsig.xsd", "smd.xsd"));
@@ -66,19 +76,15 @@ public final class TmchXmlSignature {
    * cryptographic stuff.
    *
    * @throws GeneralSecurityException for unsupported protocols, certs not signed by the TMCH,
-   *         incorrect keys, and for invalid, old, not-yet-valid or revoked certificates.
+   *     incorrect keys, and for invalid, old, not-yet-valid or revoked certificates.
    * @throws IOException
    * @throws MarshalException
    * @throws ParserConfigurationException
    * @throws SAXException
    */
-  public static void verify(byte[] smdXml)
-      throws GeneralSecurityException,
-             IOException,
-             MarshalException,
-             ParserConfigurationException,
-             SAXException,
-             XMLSignatureException {
+  public void verify(byte[] smdXml)
+      throws GeneralSecurityException, IOException, MarshalException, ParserConfigurationException,
+          SAXException, XMLSignatureException {
     checkArgument(smdXml.length > 0);
     Document doc = parseSmdDocument(new ByteArrayInputStream(smdXml));
 
@@ -87,7 +93,7 @@ public final class TmchXmlSignature {
       throw new XMLSignatureException("Expected exactly one <ds:Signature> element.");
     }
     XMLSignatureFactory factory = XMLSignatureFactory.getInstance("DOM");
-    KeyValueKeySelector selector = new KeyValueKeySelector();
+    KeyValueKeySelector selector = new KeyValueKeySelector(tmchCertificateAuthority);
     DOMValidateContext context = new DOMValidateContext(selector, signatureNodes.item(0));
     XMLSignature signature = factory.unmarshalXMLSignature(context);
 
@@ -95,8 +101,7 @@ public final class TmchXmlSignature {
     try {
       isValid = signature.validate(context);
     } catch (XMLSignatureException e) {
-      Throwable cause = getRootCause(e);
-      propagateIfInstanceOf(cause, GeneralSecurityException.class);
+      throwIfInstanceOf(getRootCause(e), GeneralSecurityException.class);
       throw e;
     }
     if (!isValid) {
@@ -134,13 +139,21 @@ public final class TmchXmlSignature {
 
   /** Callback class for DOM validator checks validity of {@code <ds:KeyInfo>} elements. */
   private static final class KeyValueKeySelector extends KeySelector {
+
+    private final TmchCertificateAuthority tmchCertificateAuthority;
+
+    KeyValueKeySelector(TmchCertificateAuthority tmchCertificateAuthority) {
+      this.tmchCertificateAuthority = tmchCertificateAuthority;
+    }
+
     @Nullable
     @Override
     public KeySelectorResult select(
         @Nullable KeyInfo keyInfo,
         KeySelector.Purpose purpose,
         AlgorithmMethod method,
-        XMLCryptoContext context) throws KeySelectorException {
+        XMLCryptoContext context)
+        throws KeySelectorException {
       if (keyInfo == null) {
         return null;
       }
@@ -151,7 +164,7 @@ public final class TmchXmlSignature {
             if (x509DataChild instanceof X509Certificate) {
               X509Certificate cert = (X509Certificate) x509DataChild;
               try {
-                TmchCertificateAuthority.verify(cert);
+                tmchCertificateAuthority.verify(cert);
               } catch (SignatureException e) {
                 throw new KeySelectorException(new CertificateSignatureException(e.getMessage()));
               } catch (GeneralSecurityException e) {

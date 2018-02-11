@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ import com.google.api.services.groupssettings.model.Groups;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableSet;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.util.FormattingLogger;
 import java.io.IOException;
 import java.util.Set;
@@ -63,7 +63,7 @@ public class DirectoryGroupsConnection implements GroupsConnection {
 
   @Inject Directory directory;
   @Inject Groupssettings groupsSettings;
-  @Inject @Config("googleAppsAdminEmailAddress") String googleAppsAdminEmailAddress;
+  @Inject @Config("gSuiteAdminAccountEmailAddress") String gSuiteAdminAccountEmailAddress;
   @Inject DirectoryGroupsConnection() {}
 
   @Override
@@ -152,7 +152,7 @@ public class DirectoryGroupsConnection implements GroupsConnection {
     group.setEmail(groupKey);
     try {
       Group createdGroup = directory.groups().insert(group).execute();
-      addMemberToGroup(groupKey, googleAppsAdminEmailAddress, Role.OWNER);
+      addMemberToGroup(groupKey, gSuiteAdminAccountEmailAddress, Role.OWNER);
       groupsSettings.groups().patch(groupKey, defaultGroupPermissions).execute();
       return createdGroup;
     } catch (GoogleJsonResponseException e) {

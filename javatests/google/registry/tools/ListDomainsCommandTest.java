@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,14 @@
 
 package google.registry.tools;
 
+import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.expectThrows;
+
+import com.google.common.base.Strings;
+import com.google.common.collect.ImmutableList;
 import google.registry.tools.server.ListDomainsAction;
+import java.util.List;
+import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.runners.MockitoJUnitRunner;
 
@@ -32,7 +39,17 @@ public class ListDomainsCommandTest extends ListObjectsCommandTestCase<ListDomai
   }
 
   @Override
-  final String getTld() {
-    return "foo";
+  protected List<String> getTlds() {
+    return ImmutableList.of("foo");
+  }
+
+  @Test
+  public void test_tldsParamTooLong() throws Exception {
+    String tldsParam = "--tld=foo,bar" + Strings.repeat(",baz", 300);
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> runCommand(tldsParam));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Total length of TLDs is too long for URL parameter");
   }
 }

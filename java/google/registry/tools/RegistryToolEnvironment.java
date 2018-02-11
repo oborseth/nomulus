@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,15 +40,15 @@ enum RegistryToolEnvironment {
   private final RegistryEnvironment actualEnvironment;
   private final ImmutableMap<String, String> extraProperties;
 
-  private RegistryToolEnvironment(
+  RegistryToolEnvironment(
       RegistryEnvironment actualEnvironment,
       ImmutableMap<String, String> extraProperties) {
     this.actualEnvironment = actualEnvironment;
     this.extraProperties = extraProperties;
   }
 
-  private RegistryToolEnvironment(RegistryEnvironment actualEnvironment) {
-    this(actualEnvironment, ImmutableMap.<String, String>of());
+  RegistryToolEnvironment(RegistryEnvironment actualEnvironment) {
+    this(actualEnvironment, ImmutableMap.of());
   }
 
   /**

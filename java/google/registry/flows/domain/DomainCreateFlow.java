@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,211 +14,498 @@
 
 package google.registry.flows.domain;
 
+import static google.registry.flows.FlowUtils.persistEntityChanges;
+import static google.registry.flows.FlowUtils.validateClientIsLoggedIn;
+import static google.registry.flows.ResourceFlowUtils.verifyResourceDoesNotExist;
+import static google.registry.flows.domain.DomainFlowUtils.checkAllowedAccessToTld;
+import static google.registry.flows.domain.DomainFlowUtils.cloneAndLinkReferences;
+import static google.registry.flows.domain.DomainFlowUtils.createFeeCreateResponse;
+import static google.registry.flows.domain.DomainFlowUtils.prepareMarkedLrpTokenEntity;
+import static google.registry.flows.domain.DomainFlowUtils.validateCreateCommandContactsAndNameservers;
+import static google.registry.flows.domain.DomainFlowUtils.validateDomainAllowedOnCreateRestrictedTld;
+import static google.registry.flows.domain.DomainFlowUtils.validateDomainName;
+import static google.registry.flows.domain.DomainFlowUtils.validateDomainNameWithIdnTables;
 import static google.registry.flows.domain.DomainFlowUtils.validateFeeChallenge;
+import static google.registry.flows.domain.DomainFlowUtils.validateLaunchCreateNotice;
+import static google.registry.flows.domain.DomainFlowUtils.validateRegistrationPeriod;
+import static google.registry.flows.domain.DomainFlowUtils.validateSecDnsExtension;
+import static google.registry.flows.domain.DomainFlowUtils.verifyClaimsNoticeIfAndOnlyIfNeeded;
+import static google.registry.flows.domain.DomainFlowUtils.verifyClaimsPeriodNotEnded;
+import static google.registry.flows.domain.DomainFlowUtils.verifyLaunchPhaseMatchesRegistryPhase;
+import static google.registry.flows.domain.DomainFlowUtils.verifyNoCodeMarks;
+import static google.registry.flows.domain.DomainFlowUtils.verifyNotReserved;
+import static google.registry.flows.domain.DomainFlowUtils.verifyPremiumNameIsNotBlocked;
+import static google.registry.flows.domain.DomainFlowUtils.verifyRegistrarIsActive;
+import static google.registry.flows.domain.DomainFlowUtils.verifyUnitIsYears;
+import static google.registry.model.EppResourceUtils.createDomainRepoId;
+import static google.registry.model.eppcommon.StatusValue.SERVER_TRANSFER_PROHIBITED;
+import static google.registry.model.eppcommon.StatusValue.SERVER_UPDATE_PROHIBITED;
 import static google.registry.model.index.DomainApplicationIndex.loadActiveApplicationsByDomainName;
 import static google.registry.model.ofy.ObjectifyService.ofy;
+import static google.registry.model.registry.label.ReservedList.matchesAnchorTenantReservation;
+import static google.registry.util.DateTimeUtils.END_OF_TIME;
+import static google.registry.util.DateTimeUtils.leapSafeAddYears;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
+import com.google.common.net.InternetDomainName;
+import com.googlecode.objectify.Key;
+import google.registry.dns.DnsQueue;
 import google.registry.flows.EppException;
 import google.registry.flows.EppException.CommandUseErrorException;
 import google.registry.flows.EppException.StatusProhibitsOperationException;
+import google.registry.flows.ExtensionManager;
+import google.registry.flows.FlowModule.ClientId;
+import google.registry.flows.FlowModule.Superuser;
+import google.registry.flows.FlowModule.TargetId;
+import google.registry.flows.TransactionalFlow;
+import google.registry.flows.annotations.ReportingSpec;
+import google.registry.flows.custom.DomainCreateFlowCustomLogic;
+import google.registry.flows.custom.DomainCreateFlowCustomLogic.BeforeResponseParameters;
+import google.registry.flows.custom.DomainCreateFlowCustomLogic.BeforeResponseReturnData;
+import google.registry.flows.custom.EntityChanges;
+import google.registry.flows.domain.token.AllocationTokenFlowUtils;
+import google.registry.model.ImmutableObject;
 import google.registry.model.billing.BillingEvent;
+import google.registry.model.billing.BillingEvent.Flag;
+import google.registry.model.billing.BillingEvent.OneTime;
 import google.registry.model.billing.BillingEvent.Reason;
+import google.registry.model.billing.BillingEvent.Recurring;
+import google.registry.model.domain.AllocationToken;
 import google.registry.model.domain.DomainApplication;
-import google.registry.model.domain.DomainResource.Builder;
+import google.registry.model.domain.DomainCommand.Create;
+import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.GracePeriod;
+import google.registry.model.domain.Period;
+import google.registry.model.domain.fee.FeeCreateCommandExtension;
+import google.registry.model.domain.fee.FeeTransformResponseExtension;
 import google.registry.model.domain.launch.LaunchCreateExtension;
+import google.registry.model.domain.metadata.MetadataExtension;
 import google.registry.model.domain.rgp.GracePeriodStatus;
+import google.registry.model.domain.secdns.SecDnsCreateExtension;
+import google.registry.model.domain.token.AllocationTokenExtension;
+import google.registry.model.eppcommon.AuthInfo;
+import google.registry.model.eppinput.EppInput;
+import google.registry.model.eppinput.ResourceCommand;
+import google.registry.model.eppoutput.CreateData.DomainCreateData;
+import google.registry.model.eppoutput.EppResponse;
+import google.registry.model.index.EppResourceIndex;
+import google.registry.model.index.ForeignKeyIndex;
+import google.registry.model.ofy.ObjectifyService;
+import google.registry.model.poll.PollMessage;
+import google.registry.model.poll.PollMessage.Autorenew;
 import google.registry.model.registry.Registry;
 import google.registry.model.registry.Registry.TldState;
+import google.registry.model.registry.Registry.TldType;
+import google.registry.model.reporting.DomainTransactionRecord;
+import google.registry.model.reporting.DomainTransactionRecord.TransactionReportField;
 import google.registry.model.reporting.HistoryEntry;
+import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
 import google.registry.tmch.LordnTask;
-import java.util.Set;
+import java.util.Optional;
 import javax.inject.Inject;
+import org.joda.time.DateTime;
+import org.joda.time.Duration;
 
 /**
  * An EPP flow that creates a new domain resource.
  *
+ * @error {@link google.registry.flows.domain.token.AllocationTokenFlowUtils.AlreadyRedeemedAllocationTokenException}
+ * @error {@link google.registry.flows.domain.token.AllocationTokenFlowUtils.InvalidAllocationTokenException}
+ * @error {@link google.registry.flows.exceptions.OnlyToolCanPassMetadataException}
+ * @error {@link google.registry.flows.exceptions.ResourceAlreadyExistsException}
  * @error {@link google.registry.flows.EppException.UnimplementedExtensionException}
- * @error {@link google.registry.flows.LoggedInFlow.UndeclaredServiceExtensionException}
- * @error {@link google.registry.flows.ResourceCreateFlow.ResourceAlreadyExistsException}
- * @error {@link google.registry.flows.ResourceCreateOrMutateFlow.OnlyToolCanPassMetadataException}
- * @error {@link google.registry.flows.domain.DomainFlowUtils.NotAuthorizedForTldException}
- * @error {@link BaseDomainCreateFlow.AcceptedTooLongAgoException}
- * @error {@link BaseDomainCreateFlow.ClaimsPeriodEndedException}
- * @error {@link BaseDomainCreateFlow.ExpiredClaimException}
- * @error {@link BaseDomainCreateFlow.InvalidTcnIdChecksumException}
- * @error {@link BaseDomainCreateFlow.InvalidTrademarkValidatorException}
- * @error {@link BaseDomainCreateFlow.MalformedTcnIdException}
- * @error {@link BaseDomainCreateFlow.MaxSigLifeNotSupportedException}
- * @error {@link BaseDomainCreateFlow.MissingClaimsNoticeException}
- * @error {@link BaseDomainCreateFlow.UnexpectedClaimsNoticeException}
- * @error {@link BaseDomainCreateFlow.UnsupportedMarkTypeException}
- * @error {@link DomainCreateFlow.SignedMarksNotAcceptedInCurrentPhaseException}
+ * @error {@link google.registry.flows.ExtensionManager.UndeclaredServiceExtensionException}
+ * @error {@link DomainCreateFlow.DomainHasOpenApplicationsException}
+ * @error {@link DomainCreateFlow.NoGeneralRegistrationsInCurrentPhaseException}
+ * @error {@link DomainFlowUtils.NotAuthorizedForTldException}
+ * @error {@link DomainFlowUtils.AcceptedTooLongAgoException}
  * @error {@link DomainFlowUtils.BadDomainNameCharacterException}
  * @error {@link DomainFlowUtils.BadDomainNamePartsCountException}
+ * @error {@link DomainFlowUtils.DomainNameExistsAsTldException}
  * @error {@link DomainFlowUtils.BadPeriodUnitException}
+ * @error {@link DomainFlowUtils.ClaimsPeriodEndedException}
  * @error {@link DomainFlowUtils.CurrencyUnitMismatchException}
  * @error {@link DomainFlowUtils.CurrencyValueScaleException}
  * @error {@link DomainFlowUtils.DashesInThirdAndFourthException}
  * @error {@link DomainFlowUtils.DomainLabelTooLongException}
+ * @error {@link DomainFlowUtils.DomainNotAllowedForTldWithCreateRestrictionException}
  * @error {@link DomainFlowUtils.DomainReservedException}
  * @error {@link DomainFlowUtils.DuplicateContactForRoleException}
  * @error {@link DomainFlowUtils.EmptyDomainNamePartException}
+ * @error {@link DomainFlowUtils.ExceedsMaxRegistrationYearsException}
+ * @error {@link DomainFlowUtils.ExpiredClaimException}
  * @error {@link DomainFlowUtils.FeesMismatchException}
+ * @error {@link DomainFlowUtils.FeesRequiredDuringEarlyAccessProgramException}
  * @error {@link DomainFlowUtils.FeesRequiredForPremiumNameException}
  * @error {@link DomainFlowUtils.InvalidIdnDomainLabelException}
+ * @error {@link DomainFlowUtils.InvalidLrpTokenException}
  * @error {@link DomainFlowUtils.InvalidPunycodeException}
+ * @error {@link DomainFlowUtils.InvalidTcnIdChecksumException}
+ * @error {@link DomainFlowUtils.InvalidTrademarkValidatorException}
  * @error {@link DomainFlowUtils.LeadingDashException}
  * @error {@link DomainFlowUtils.LinkedResourcesDoNotExistException}
  * @error {@link DomainFlowUtils.LinkedResourceInPendingDeleteProhibitsOperationException}
+ * @error {@link DomainFlowUtils.MalformedTcnIdException}
+ * @error {@link DomainFlowUtils.MaxSigLifeNotSupportedException}
  * @error {@link DomainFlowUtils.MissingAdminContactException}
+ * @error {@link DomainFlowUtils.MissingClaimsNoticeException}
  * @error {@link DomainFlowUtils.MissingContactTypeException}
  * @error {@link DomainFlowUtils.MissingRegistrantException}
  * @error {@link DomainFlowUtils.MissingTechnicalContactException}
- * @error {@link DomainFlowUtils.NameserversNotAllowedException}
- * @error {@link DomainFlowUtils.NameserversNotSpecifiedException}
+ * @error {@link DomainFlowUtils.NameserversNotAllowedForDomainException}
+ * @error {@link DomainFlowUtils.NameserversNotAllowedForTldException}
+ * @error {@link DomainFlowUtils.NameserversNotSpecifiedForNameserverRestrictedDomainException}
+ * @error {@link DomainFlowUtils.NameserversNotSpecifiedForTldWithNameserverWhitelistException}
  * @error {@link DomainFlowUtils.PremiumNameBlockedException}
  * @error {@link DomainFlowUtils.RegistrantNotAllowedException}
+ * @error {@link DomainFlowUtils.RegistrarMustBeActiveToCreateDomainsException}
  * @error {@link DomainFlowUtils.TldDoesNotExistException}
  * @error {@link DomainFlowUtils.TooManyDsRecordsException}
  * @error {@link DomainFlowUtils.TooManyNameserversException}
  * @error {@link DomainFlowUtils.TrailingDashException}
+ * @error {@link DomainFlowUtils.UnexpectedClaimsNoticeException}
  * @error {@link DomainFlowUtils.UnsupportedFeeAttributeException}
- * @error {@link DomainCreateFlow.DomainHasOpenApplicationsException}
- * @error {@link DomainCreateFlow.NoGeneralRegistrationsInCurrentPhaseException}
+ * @error {@link DomainFlowUtils.UnsupportedMarkTypeException}
  */
+@ReportingSpec(ActivityReportField.DOMAIN_CREATE)
+public class DomainCreateFlow implements TransactionalFlow {
 
-public class DomainCreateFlow extends DomainCreateOrAllocateFlow {
-
-  private static final Set<TldState> QLP_SMD_ALLOWED_STATES =
+  private static final ImmutableSet<TldState> SUNRISE_STATES =
       Sets.immutableEnumSet(TldState.SUNRISE, TldState.SUNRUSH);
 
+  @Inject ExtensionManager extensionManager;
+  @Inject EppInput eppInput;
+  @Inject AuthInfo authInfo;
+  @Inject ResourceCommand resourceCommand;
+  @Inject @ClientId String clientId;
+  @Inject @TargetId String targetId;
+  @Inject @Superuser boolean isSuperuser;
+  @Inject HistoryEntry.Builder historyBuilder;
+  @Inject EppResponse.Builder responseBuilder;
+  @Inject AllocationTokenFlowUtils allocationTokenFlowUtils;
+  @Inject DomainCreateFlowCustomLogic flowCustomLogic;
+  @Inject DomainFlowTmchUtils tmchUtils;
+  @Inject DomainPricingLogic pricingLogic;
+  @Inject DnsQueue dnsQueue;
   @Inject DomainCreateFlow() {}
 
-  private boolean isAnchorTenant() {
-    return isAnchorTenantViaReservation || isAnchorTenantViaExtension;
-  }
-
   @Override
-  protected final void verifyDomainCreateIsAllowed() throws EppException {
-    String tld = getTld();
-    validateFeeChallenge(targetId, tld, now, feeCreate, commandOperations.getTotalCost());
+  public final EppResponse run() throws EppException {
+    extensionManager.register(
+        FeeCreateCommandExtension.class,
+        SecDnsCreateExtension.class,
+        MetadataExtension.class,
+        LaunchCreateExtension.class,
+        AllocationTokenExtension.class);
+    flowCustomLogic.beforeValidation();
+    extensionManager.validate();
+    validateClientIsLoggedIn(clientId);
+    verifyRegistrarIsActive(clientId);
+    DateTime now = ofy().getTransactionTime();
+    Create command = cloneAndLinkReferences((Create) resourceCommand, now);
+    Period period = command.getPeriod();
+    verifyUnitIsYears(period);
+    int years = period.getValue();
+    validateRegistrationPeriod(years);
+    verifyResourceDoesNotExist(DomainResource.class, targetId, now);
+    // Validate that this is actually a legal domain name on a TLD that the registrar has access to.
+    InternetDomainName domainName = validateDomainName(command.getFullyQualifiedDomainName());
+    String domainLabel = domainName.parts().get(0);
+    Registry registry = Registry.get(domainName.parent().toString());
+    validateCreateCommandContactsAndNameservers(command, registry, domainName);
+    if (registry.getDomainCreateRestricted()) {
+      validateDomainAllowedOnCreateRestrictedTld(domainName);
+    }
+    TldState tldState = registry.getTldState(now);
+    boolean isAnchorTenant = isAnchorTenant(domainName);
+    Optional<LaunchCreateExtension> launchCreate =
+        eppInput.getSingleExtension(LaunchCreateExtension.class);
+    boolean hasSignedMarks =
+        launchCreate.isPresent() && !launchCreate.get().getSignedMarks().isEmpty();
+    boolean hasClaimsNotice = launchCreate.isPresent() && launchCreate.get().getNotice() != null;
+    if (launchCreate.isPresent()) {
+      verifyNoCodeMarks(launchCreate.get());
+      validateLaunchCreateNotice(launchCreate.get().getNotice(), domainLabel, isSuperuser, now);
+    }
+    boolean isSunriseCreate = hasSignedMarks && SUNRISE_STATES.contains(tldState);
+    String signedMarkId = null;
+    // Superusers can create reserved domains, force creations on domains that require a claims
+    // notice without specifying a claims key, ignore the registry phase, and override blocks on
+    // registering premium domains.
     if (!isSuperuser) {
-      // Prohibit creating a domain if there is an open application for the same name.
-      for (DomainApplication application : loadActiveApplicationsByDomainName(targetId, now)) {
-        if (!application.getApplicationStatus().isFinalStatus()) {
-          throw new DomainHasOpenApplicationsException();
-        }
+      checkAllowedAccessToTld(clientId, registry.getTldStr());
+      if (launchCreate.isPresent()) {
+        verifyLaunchPhaseMatchesRegistryPhase(registry, launchCreate.get(), now);
       }
-      // Prohibit registrations for non-qlp and non-superuser outside of GA.
-      if (!isAnchorTenant()
-          && Registry.get(tld).getTldState(now) != TldState.GENERAL_AVAILABILITY) {
-        throw new NoGeneralRegistrationsInCurrentPhaseException();
+      if (!isAnchorTenant) {
+        verifyNotReserved(domainName, isSunriseCreate);
+      }
+      if (hasClaimsNotice) {
+        verifyClaimsPeriodNotEnded(registry, now);
+      }
+      if (now.isBefore(registry.getClaimsPeriodEnd())) {
+        verifyClaimsNoticeIfAndOnlyIfNeeded(domainName, hasSignedMarks, hasClaimsNotice);
+      }
+      verifyPremiumNameIsNotBlocked(targetId, now, clientId);
+      verifyNoOpenApplications(now);
+      verifyIsGaOrIsSpecialCase(tldState, isAnchorTenant);
+      if (hasSignedMarks) {
+        // If a signed mark was provided, then it must match the desired domain label. Get the mark
+        // at this point so that we can verify it before the "after validation" extension point.
+        signedMarkId =
+            tmchUtils
+                .verifySignedMarks(launchCreate.get().getSignedMarks(), domainLabel, now)
+                .getId();
       }
     }
-  }
-
-  @Override
-  protected final void initDomainCreateOrAllocateFlow() {
-    registerExtensions(LaunchCreateExtension.class);
-  }
-
-  @Override
-  protected final void validateDomainLaunchCreateExtension() throws EppException {
-    // We can assume launchCreate is not null here.
-    // Only QLP domains can have a signed mark on a domain create, and only in sunrise or sunrush.
-    if (hasSignedMarks) {
-      if (isAnchorTenant() && QLP_SMD_ALLOWED_STATES.contains(
-          Registry.get(getTld()).getTldState(now))) {
-        return;
-      }
-      throw new SignedMarksNotAcceptedInCurrentPhaseException();
-    }
-  }
-
-  @Override
-  protected final void setDomainCreateOrAllocateProperties(Builder builder) throws EppException {
-    Registry registry = Registry.get(getTld());
-
+    Optional<AllocationToken> allocationToken =
+        verifyAllocationTokenIfPresent(domainName, registry, clientId);
+    flowCustomLogic.afterValidation(
+        DomainCreateFlowCustomLogic.AfterValidationParameters.newBuilder()
+            .setDomainName(domainName)
+            .setYears(years)
+            .setSignedMarkId(Optional.ofNullable(signedMarkId))
+            .build());
+    Optional<FeeCreateCommandExtension> feeCreate =
+        eppInput.getSingleExtension(FeeCreateCommandExtension.class);
+    FeesAndCredits feesAndCredits = pricingLogic.getCreatePrice(registry, targetId, now, years);
+    validateFeeChallenge(targetId, registry.getTldStr(), clientId, now, feeCreate, feesAndCredits);
+    Optional<SecDnsCreateExtension> secDnsCreate =
+        validateSecDnsExtension(eppInput.getSingleExtension(SecDnsCreateExtension.class));
+    String repoId = createDomainRepoId(ObjectifyService.allocateId(), registry.getTldStr());
+    DateTime registrationExpirationTime = leapSafeAddYears(now, years);
+    HistoryEntry historyEntry = buildHistoryEntry(
+        repoId, registry, now, period, registry.getAddGracePeriodLength());
     // Bill for the create.
-    BillingEvent.OneTime createEvent =
-        new BillingEvent.OneTime.Builder()
-            .setReason(Reason.CREATE)
-            .setTargetId(targetId)
-            .setClientId(getClientId())
-            .setPeriodYears(command.getPeriod().getValue())
-            .setCost(commandOperations.getCreateCost())
-            .setEventTime(now)
-            .setBillingTime(now.plus(isAnchorTenant()
-                ? registry.getAnchorTenantAddGracePeriodLength()
-                : registry.getAddGracePeriodLength()))
-            .setFlags(isAnchorTenant()
-                ? ImmutableSet.of(BillingEvent.Flag.ANCHOR_TENANT)
-                : ImmutableSet.<BillingEvent.Flag>of())
-            .setParent(historyEntry)
-            .build();
-    ofy().save().entity(createEvent);
-
+    BillingEvent.OneTime createBillingEvent =
+        createOneTimeBillingEvent(
+            registry, isAnchorTenant, years, feesAndCredits, historyEntry, now);
+    // Create a new autorenew billing event and poll message starting at the expiration time.
+    BillingEvent.Recurring autorenewBillingEvent =
+        createAutorenewBillingEvent(historyEntry, registrationExpirationTime);
+    PollMessage.Autorenew autorenewPollMessage =
+        createAutorenewPollMessage(historyEntry, registrationExpirationTime);
+    ImmutableSet.Builder<ImmutableObject> entitiesToSave = new ImmutableSet.Builder<>();
+    entitiesToSave.add(
+        historyEntry,
+        createBillingEvent,
+        autorenewBillingEvent,
+        autorenewPollMessage);
     // Bill for EAP cost, if any.
-    if (!commandOperations.getEapCost().isZero()) {
-      BillingEvent.OneTime eapEvent =
-          new BillingEvent.OneTime.Builder()
-              .setReason(Reason.FEE_EARLY_ACCESS)
-              .setTargetId(createEvent.getTargetId())
-              .setClientId(createEvent.getClientId())
-              .setCost(commandOperations.getEapCost())
-              .setEventTime(createEvent.getEventTime())
-              .setBillingTime(createEvent.getBillingTime())
-              .setFlags(createEvent.getFlags())
-              .setParent(createEvent.getParentKey())
-              .build();
-      ofy().save().entity(eapEvent);
+    if (!feesAndCredits.getEapCost().isZero()) {
+      entitiesToSave.add(createEapBillingEvent(feesAndCredits, createBillingEvent));
     }
+    DomainResource newDomain =
+        new DomainResource.Builder()
+            .setCreationClientId(clientId)
+            .setPersistedCurrentSponsorClientId(clientId)
+            .setRepoId(repoId)
+            .setIdnTableName(validateDomainNameWithIdnTables(domainName))
+            .setRegistrationExpirationTime(registrationExpirationTime)
+            .setAutorenewBillingEvent(Key.create(autorenewBillingEvent))
+            .setAutorenewPollMessage(Key.create(autorenewPollMessage))
+            .setLaunchNotice(hasClaimsNotice ? launchCreate.get().getNotice() : null)
+            .setSmdId(signedMarkId)
+            .setDsData(secDnsCreate.isPresent() ? secDnsCreate.get().getDsData() : null)
+            .setRegistrant(command.getRegistrant())
+            .setAuthInfo(command.getAuthInfo())
+            .setFullyQualifiedDomainName(targetId)
+            .setNameservers(command.getNameservers())
+            .setStatusValues(
+                registry.getDomainCreateRestricted()
+                    ? ImmutableSet.of(SERVER_UPDATE_PROHIBITED, SERVER_TRANSFER_PROHIBITED)
+                    : ImmutableSet.of())
+            .setContacts(command.getContacts())
+            .addGracePeriod(GracePeriod.forBillingEvent(GracePeriodStatus.ADD, createBillingEvent))
+            .build();
+    entitiesToSave.add(
+        newDomain,
+        ForeignKeyIndex.create(newDomain, newDomain.getDeletionTime()),
+        EppResourceIndex.create(Key.create(newDomain)));
 
-    builder.addGracePeriod(GracePeriod.forBillingEvent(GracePeriodStatus.ADD, createEvent));
-    if (launchCreate != null && (launchCreate.getNotice() != null || hasSignedMarks)) {
-      builder
-          .setLaunchNotice(launchCreate.getNotice())
-          .setSmdId(signedMark == null ? null : signedMark.getId());
+    allocationToken.ifPresent(
+        t -> entitiesToSave.add(allocationTokenFlowUtils.redeemToken(t, Key.create(historyEntry))));
+    // Anchor tenant registrations override LRP, and landrush applications can skip it.
+    // If a token is passed in outside of an LRP phase, it is simply ignored (i.e. never redeemed).
+    if (isLrpCreate(registry, isAnchorTenant, now)) {
+      entitiesToSave.add(
+          prepareMarkedLrpTokenEntity(authInfo.getPw().getValue(), domainName, historyEntry));
     }
-    // Handle extra flow logic, if any. The initialization and commit are performed higher up in the
-    // flow hierarchy, in BaseDomainCreateFlow.
-    if (extraFlowLogic.isPresent()) {
-      extraFlowLogic.get().performAdditionalDomainCreateLogic(
-          existingResource,
-          getClientId(),
-          now,
-          command.getPeriod().getValue(),
-          eppInput,
-          historyEntry);
+    enqueueTasks(isSunriseCreate, hasClaimsNotice, newDomain);
+
+    EntityChanges entityChanges =
+        flowCustomLogic.beforeSave(
+            DomainCreateFlowCustomLogic.BeforeSaveParameters.newBuilder()
+                .setNewDomain(newDomain)
+                .setHistoryEntry(historyEntry)
+                .setEntityChanges(
+                    EntityChanges.newBuilder().setSaves(entitiesToSave.build()).build())
+                .setYears(years)
+                .build());
+    persistEntityChanges(entityChanges);
+
+    BeforeResponseReturnData responseData =
+        flowCustomLogic.beforeResponse(
+            BeforeResponseParameters.newBuilder()
+                .setResData(DomainCreateData.create(targetId, now, registrationExpirationTime))
+                .setResponseExtensions(createResponseExtensions(feeCreate, feesAndCredits))
+                .build());
+    return responseBuilder
+        .setResData(responseData.resData())
+        .setExtensions(responseData.responseExtensions())
+        .build();
+  }
+
+  private boolean isAnchorTenant(InternetDomainName domainName) {
+    Optional<MetadataExtension> metadataExtension =
+        eppInput.getSingleExtension(MetadataExtension.class);
+    return matchesAnchorTenantReservation(domainName, authInfo.getPw().getValue())
+        || (metadataExtension.isPresent() && metadataExtension.get().getIsAnchorTenant());
+  }
+
+  /** Prohibit creating a domain if there is an open application for the same name. */
+  private void verifyNoOpenApplications(DateTime now) throws DomainHasOpenApplicationsException {
+    for (DomainApplication application : loadActiveApplicationsByDomainName(targetId, now)) {
+      if (!application.getApplicationStatus().isFinalStatus()) {
+        throw new DomainHasOpenApplicationsException();
+      }
     }
   }
 
-  @Override
-  protected void enqueueLordnTaskIfNeeded() {
-    if (launchCreate != null && (launchCreate.getNotice() != null || hasSignedMarks)) {
-      LordnTask.enqueueDomainResourceTask(newResource);
+  /** Prohibit registrations for non-QLP and non-superuser outside of General Availability. **/
+  private void verifyIsGaOrIsSpecialCase(TldState tldState, boolean isAnchorTenant)
+      throws NoGeneralRegistrationsInCurrentPhaseException {
+    if (!isAnchorTenant && tldState != TldState.GENERAL_AVAILABILITY) {
+      throw new NoGeneralRegistrationsInCurrentPhaseException();
     }
   }
 
-  @Override
-  protected final HistoryEntry.Type getHistoryEntryType() {
-    return HistoryEntry.Type.DOMAIN_CREATE;
+  /** Verifies and returns the allocation token if one is specified, otherwise does nothing. */
+  private Optional<AllocationToken> verifyAllocationTokenIfPresent(
+      InternetDomainName domainName, Registry registry, String clientId)
+      throws EppException {
+    Optional<AllocationTokenExtension> extension =
+        eppInput.getSingleExtension(AllocationTokenExtension.class);
+    return Optional.ofNullable(
+        extension.isPresent()
+            ? allocationTokenFlowUtils.verifyToken(
+                domainName, extension.get().getAllocationToken(), registry, clientId)
+            : null);
+  }
+
+  private HistoryEntry buildHistoryEntry(
+      String repoId, Registry registry, DateTime now, Period period, Duration addGracePeriod) {
+    // We ignore prober transactions
+    if (registry.getTldType() == TldType.REAL) {
+      historyBuilder
+          .setDomainTransactionRecords(
+              ImmutableSet.of(
+                  DomainTransactionRecord.create(
+                      registry.getTldStr(),
+                      now.plus(addGracePeriod),
+                      TransactionReportField.netAddsFieldFromYears(period.getValue()),
+                      1)));
+    }
+    return historyBuilder
+        .setType(HistoryEntry.Type.DOMAIN_CREATE)
+        .setPeriod(period)
+        .setModificationTime(now)
+        .setParent(Key.create(DomainResource.class, repoId))
+        .build();
+  }
+
+  private OneTime createOneTimeBillingEvent(
+      Registry registry,
+      boolean isAnchorTenant,
+      int years,
+      FeesAndCredits feesAndCredits,
+      HistoryEntry historyEntry,
+      DateTime now) {
+    return new BillingEvent.OneTime.Builder()
+        .setReason(Reason.CREATE)
+        .setTargetId(targetId)
+        .setClientId(clientId)
+        .setPeriodYears(years)
+        .setCost(feesAndCredits.getCreateCost())
+        .setEventTime(now)
+        .setBillingTime(
+            now.plus(
+                isAnchorTenant
+                    ? registry.getAnchorTenantAddGracePeriodLength()
+                    : registry.getAddGracePeriodLength()))
+        .setFlags(
+            isAnchorTenant
+                ? ImmutableSet.of(BillingEvent.Flag.ANCHOR_TENANT)
+                : ImmutableSet.of())
+        .setParent(historyEntry)
+        .build();
+  }
+
+  private Recurring createAutorenewBillingEvent(
+      HistoryEntry historyEntry, DateTime registrationExpirationTime) {
+    return new BillingEvent.Recurring.Builder()
+        .setReason(Reason.RENEW)
+        .setFlags(ImmutableSet.of(Flag.AUTO_RENEW))
+        .setTargetId(targetId)
+        .setClientId(clientId)
+        .setEventTime(registrationExpirationTime)
+        .setRecurrenceEndTime(END_OF_TIME)
+        .setParent(historyEntry)
+        .build();
+  }
+
+  private Autorenew createAutorenewPollMessage(
+      HistoryEntry historyEntry, DateTime registrationExpirationTime) {
+    return new PollMessage.Autorenew.Builder()
+        .setTargetId(targetId)
+        .setClientId(clientId)
+        .setEventTime(registrationExpirationTime)
+        .setMsg("Domain was auto-renewed.")
+        .setParent(historyEntry)
+        .build();
+  }
+
+  private static OneTime createEapBillingEvent(
+      FeesAndCredits feesAndCredits, BillingEvent.OneTime createBillingEvent) {
+    return new BillingEvent.OneTime.Builder()
+        .setReason(Reason.FEE_EARLY_ACCESS)
+        .setTargetId(createBillingEvent.getTargetId())
+        .setClientId(createBillingEvent.getClientId())
+        .setCost(feesAndCredits.getEapCost())
+        .setEventTime(createBillingEvent.getEventTime())
+        .setBillingTime(createBillingEvent.getBillingTime())
+        .setFlags(createBillingEvent.getFlags())
+        .setParent(createBillingEvent.getParentKey())
+        .build();
+  }
+
+  private boolean isLrpCreate(Registry registry, boolean isAnchorTenant, DateTime now) {
+    return registry.getLrpPeriod().contains(now) && !isAnchorTenant;
+  }
+
+  private void enqueueTasks(
+      boolean isSunriseCreate, boolean hasClaimsNotice, DomainResource newDomain) {
+    if (newDomain.shouldPublishToDns()) {
+      dnsQueue.addDomainRefreshTask(newDomain.getFullyQualifiedDomainName());
+    }
+    if (hasClaimsNotice || isSunriseCreate) {
+      LordnTask.enqueueDomainResourceTask(newDomain);
+    }
+  }
+
+  private static ImmutableList<FeeTransformResponseExtension> createResponseExtensions(
+      Optional<FeeCreateCommandExtension> feeCreate, FeesAndCredits feesAndCredits) {
+    return feeCreate.isPresent()
+        ? ImmutableList.of(createFeeCreateResponse(feeCreate.get(), feesAndCredits))
+        : ImmutableList.of();
   }
 
   /** There is an open application for this domain. */
   static class DomainHasOpenApplicationsException extends StatusProhibitsOperationException {
     public DomainHasOpenApplicationsException() {
       super("There is an open application for this domain");
-    }
-  }
-
-  /** Signed marks are not accepted in the current registry phase. */
-  static class SignedMarksNotAcceptedInCurrentPhaseException extends CommandUseErrorException {
-    public SignedMarksNotAcceptedInCurrentPhaseException() {
-      super("Signed marks are not accepted in the current registry phase");
     }
   }
 

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ public enum RdeMode {
    * <p>This mode of operation provides ICANN with minimal information about registered domains
    * and their associated registrars, per gTLD Registry Agreement, Specification 4 § 3.1.
    *
-   * @see "http://newgtlds.icann.org/en/applicants/agb/agreement-approved-09jan14-en.htm"
+   * @see <a href="http://newgtlds.icann.org/en/applicants/agb/agreement-approved-09jan14-en.htm">Registry Agreement</a>
    */
   THIN;
 

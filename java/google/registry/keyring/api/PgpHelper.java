@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,10 +22,10 @@ import static org.bouncycastle.bcpg.PublicKeyAlgorithmTags.ELGAMAL_GENERAL;
 import static org.bouncycastle.bcpg.PublicKeyAlgorithmTags.RSA_GENERAL;
 import static org.bouncycastle.bcpg.PublicKeyAlgorithmTags.RSA_SIGN;
 
-import com.google.common.base.Optional;
 import com.google.common.base.VerifyException;
 import java.io.IOException;
 import java.util.Iterator;
+import java.util.Optional;
 import org.bouncycastle.openpgp.PGPException;
 import org.bouncycastle.openpgp.PGPKeyPair;
 import org.bouncycastle.openpgp.PGPPrivateKey;
@@ -45,7 +45,7 @@ public final class PgpHelper {
    * Narrowed key search requirements.
    * @see PgpHelper#lookupPublicKey
    */
-  public static enum KeyRequirement { ENCRYPT, SIGN, ENCRYPT_SIGN }
+  public enum KeyRequirement { ENCRYPT, SIGN, ENCRYPT_SIGN }
 
   /** Converts {@code publicKey} to bytes. */
   public static byte[] convertPublicKeyToBytes(PGPPublicKey publicKey) {
@@ -156,7 +156,7 @@ public final class PgpHelper {
           throw new AssertionError();
       }
     }
-    return Optional.absent();
+    return Optional.empty();
   }
 
   /** Returns {@code true} if this key can be used for signing. */

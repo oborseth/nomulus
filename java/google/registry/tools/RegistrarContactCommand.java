@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,17 +17,16 @@ package google.registry.tools;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
-import static com.google.common.collect.Iterables.transform;
-import static com.google.common.collect.Sets.newHashSet;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static google.registry.util.CollectionUtils.nullToEmpty;
 import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
+import static google.registry.util.PreconditionsUtils.checkArgumentPresent;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.google.common.base.Enums;
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import google.registry.model.common.GaeUserIdConverter;
@@ -45,6 +44,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
 
@@ -53,8 +53,6 @@ import javax.annotation.Nullable;
     separators = " =",
     commandDescription = "Create/read/update/delete the various contact lists for a Registrar.")
 final class RegistrarContactCommand extends MutatingCommand {
-
-  private enum Mode { LIST, CREATE, UPDATE, DELETE }
 
   @Parameter(
       description = "Client identifier of the registrar account.",
@@ -112,7 +110,7 @@ final class RegistrarContactCommand extends MutatingCommand {
   @Nullable
   @Parameter(
       names = "--visible_in_whois_as_admin",
-      description = " Whether this contact is publically visible in WHOIS results as an "
+      description = " Whether this contact is publicly visible in WHOIS results as an "
           + "Admin contact.",
       arity = 1)
   private Boolean visibleInWhoisAsAdmin;
@@ -120,10 +118,19 @@ final class RegistrarContactCommand extends MutatingCommand {
   @Nullable
   @Parameter(
       names = "--visible_in_whois_as_tech",
-      description = " Whether this contact is publically visible in WHOIS results as a "
+      description = " Whether this contact is publicly visible in WHOIS results as a "
           + "Tech contact.",
       arity = 1)
   private Boolean visibleInWhoisAsTech;
+
+  @Nullable
+  @Parameter(
+      names = "--visible_in_domain_whois_as_abuse",
+      description = " Whether this contact is publicly visible in WHOIS domain results as the "
+          + "registry abuse phone and email. If this flag is set, it will be cleared from all "
+          + "other contacts for the same registrar.",
+      arity = 1)
+  private Boolean visibleInDomainWhoisAsAbuse;
 
   @Parameter(
       names = {"-o", "--output"},
@@ -131,8 +138,13 @@ final class RegistrarContactCommand extends MutatingCommand {
       validateWith = PathParameter.OutputFile.class)
   private Path output = Paths.get("/dev/stdout");
 
+  private enum Mode { LIST, CREATE, UPDATE, DELETE }
+
+  private static final ImmutableSet<Mode> MODES_REQUIRING_CONTACT_SYNC =
+      ImmutableSet.of(Mode.CREATE, Mode.UPDATE, Mode.DELETE);
+
   @Nullable
-  private Set<RegistrarContact.Type> contactTypes;
+  private ImmutableSet<RegistrarContact.Type> contactTypes;
 
   @Override
   protected void init() throws Exception {
@@ -140,11 +152,26 @@ final class RegistrarContactCommand extends MutatingCommand {
         "Must specify exactly one client identifier: %s", ImmutableList.copyOf(mainParameters));
     String clientId = mainParameters.get(0);
     Registrar registrar =
-        checkNotNull(Registrar.loadByClientId(clientId), "Registrar %s not found", clientId);
-    contactTypes =
-        newHashSet(
-            transform(
-                nullToEmpty(contactTypeNames), Enums.stringConverter(RegistrarContact.Type.class)));
+        checkArgumentPresent(
+            Registrar.loadByClientId(clientId), "Registrar %s not found", clientId);
+    // If the contact_type parameter is not specified, we should not make any changes.
+    if (contactTypeNames == null) {
+      contactTypes = null;
+    // It appears that when the user specifies "--contact_type=" with no types following, JCommander
+    // sets contactTypeNames to a one-element list containing the empty string. This is strange, but
+    // we need to handle this by setting the contact types to the empty set. Also do this if
+    // contactTypeNames is empty, which is what I would hope JCommander would return in some future,
+    // better world.
+    } else if (contactTypeNames.isEmpty()
+        || ((contactTypeNames.size() == 1) && contactTypeNames.get(0).isEmpty())) {
+      contactTypes = ImmutableSet.of();
+    } else {
+      contactTypes =
+          contactTypeNames
+              .stream()
+              .map(Enums.stringConverter(RegistrarContact.Type.class))
+              .collect(toImmutableSet());
+    }
     ImmutableSet<RegistrarContact> contacts = registrar.getContacts();
     Map<String, RegistrarContact> contactsMap = new LinkedHashMap<>();
     for (RegistrarContact rc : contacts) {
@@ -157,6 +184,9 @@ final class RegistrarContactCommand extends MutatingCommand {
         break;
       case CREATE:
         stageEntityChange(null, createContact(registrar));
+        if ((visibleInDomainWhoisAsAbuse != null) && visibleInDomainWhoisAsAbuse) {
+          unsetOtherWhoisAbuseFlags(contacts, null /* emailAddressNotToChange */ );
+        }
         break;
       case UPDATE:
         oldContact =
@@ -165,7 +195,15 @@ final class RegistrarContactCommand extends MutatingCommand {
                 "No contact with the given email: %s",
                 email);
         RegistrarContact newContact = updateContact(oldContact, registrar);
+        checkArgument(
+            !oldContact.getVisibleInDomainWhoisAsAbuse()
+                || newContact.getVisibleInDomainWhoisAsAbuse(),
+            "Cannot clear visible_in_domain_whois_as_abuse flag, as that would leave no domain"
+                + " WHOIS abuse contacts; instead, set the flag on another contact");
         stageEntityChange(oldContact, newContact);
+        if ((visibleInDomainWhoisAsAbuse != null) && visibleInDomainWhoisAsAbuse) {
+          unsetOtherWhoisAbuseFlags(contacts, oldContact.getEmailAddress());
+        }
         break;
       case DELETE:
         oldContact =
@@ -173,12 +211,15 @@ final class RegistrarContactCommand extends MutatingCommand {
                 contactsMap.get(checkNotNull(email, "--email is required when --mode=DELETE")),
                 "No contact with the given email: %s",
                 email);
+        checkArgument(
+            !oldContact.getVisibleInDomainWhoisAsAbuse(),
+            "Cannot delete the domain WHOIS abuse contact; set the flag on another contact first");
         stageEntityChange(oldContact, null);
         break;
       default:
         throw new AssertionError();
     }
-    if (mode == Mode.CREATE || mode == Mode.UPDATE || mode == Mode.DELETE) {
+    if (MODES_REQUIRING_CONTACT_SYNC.contains(mode)) {
       stageEntityChange(registrar, registrar.asBuilder().setContactsRequireSyncing(true).build());
     }
   }
@@ -199,12 +240,12 @@ final class RegistrarContactCommand extends MutatingCommand {
     builder.setName(name);
     builder.setEmailAddress(email);
     if (phone != null) {
-      builder.setPhoneNumber(phone.orNull());
+      builder.setPhoneNumber(phone.orElse(null));
     }
     if (fax != null) {
-      builder.setFaxNumber(fax.orNull());
+      builder.setFaxNumber(fax.orElse(null));
     }
-    builder.setTypes(contactTypes);
+    builder.setTypes(nullToEmpty(contactTypes));
 
     if (Objects.equals(allowConsoleAccess, Boolean.TRUE)) {
       builder.setGaeUserId(checkArgumentNotNull(
@@ -216,6 +257,9 @@ final class RegistrarContactCommand extends MutatingCommand {
     }
     if (visibleInWhoisAsTech != null) {
       builder.setVisibleInWhoisAsTech(visibleInWhoisAsTech);
+    }
+    if (visibleInDomainWhoisAsAbuse != null) {
+      builder.setVisibleInDomainWhoisAsAbuse(visibleInDomainWhoisAsAbuse);
     }
     return builder.build();
   }
@@ -232,10 +276,10 @@ final class RegistrarContactCommand extends MutatingCommand {
       builder.setEmailAddress(email);
     }
     if (phone != null) {
-      builder.setPhoneNumber(phone.orNull());
+      builder.setPhoneNumber(phone.orElse(null));
     }
     if (fax != null) {
-      builder.setFaxNumber(fax.orNull());
+      builder.setFaxNumber(fax.orElse(null));
     }
     if (contactTypes != null) {
       builder.setTypes(contactTypes);
@@ -245,6 +289,9 @@ final class RegistrarContactCommand extends MutatingCommand {
     }
     if (visibleInWhoisAsTech != null) {
       builder.setVisibleInWhoisAsTech(visibleInWhoisAsTech);
+    }
+    if (visibleInDomainWhoisAsAbuse != null) {
+      builder.setVisibleInDomainWhoisAsAbuse(visibleInDomainWhoisAsAbuse);
     }
     if (allowConsoleAccess != null) {
       if (allowConsoleAccess.equals(Boolean.TRUE)) {
@@ -256,5 +303,18 @@ final class RegistrarContactCommand extends MutatingCommand {
       }
     }
     return builder.build();
+  }
+
+  private void unsetOtherWhoisAbuseFlags(
+      ImmutableSet<RegistrarContact> contacts, @Nullable String emailAddressNotToChange) {
+    for (RegistrarContact contact : contacts) {
+      if (((emailAddressNotToChange == null)
+              || !contact.getEmailAddress().equals(emailAddressNotToChange))
+          && contact.getVisibleInDomainWhoisAsAbuse()) {
+        RegistrarContact newContact =
+            contact.asBuilder().setVisibleInDomainWhoisAsAbuse(false).build();
+        stageEntityChange(contact, newContact);
+      }
+    }
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 package google.registry.tools.server;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.request.Action.Method.POST;
 import static google.registry.util.PipelineUtils.createJobPath;
@@ -22,9 +23,9 @@ import static google.registry.util.PipelineUtils.createJobPath;
 import com.google.appengine.tools.mapreduce.Input;
 import com.google.appengine.tools.mapreduce.Mapper;
 import com.google.appengine.tools.mapreduce.inputs.InMemoryInput;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Streams;
 import com.googlecode.objectify.Key;
 import google.registry.config.RegistryEnvironment;
 import google.registry.mapreduce.MapreduceRunner;
@@ -32,11 +33,23 @@ import google.registry.model.ofy.CommitLogBucket;
 import google.registry.model.ofy.CommitLogCheckpointRoot;
 import google.registry.request.Action;
 import google.registry.request.Response;
-import java.util.Arrays;
+import google.registry.request.auth.Auth;
+import java.util.stream.Stream;
 import javax.inject.Inject;
 
-/** Deletes all commit logs in datastore. */
-@Action(path = "/_dr/task/killAllCommitLogs", method = POST)
+/**
+ * Deletes all commit logs in Datastore.
+ *
+ * <p>Because there are no auth settings in the {@link Action} annotation, this command can only be
+ * run internally, or by pretending to be internal by setting the X-AppEngine-QueueName header,
+ * which only admin users can do. That makes this command hard to use, which is appropriate, given
+ * the drastic consequences of accidental execution.
+ */
+@Action(
+  path = "/_dr/task/killAllCommitLogs",
+  method = POST,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public class KillAllCommitLogsAction implements Runnable {
 
   @Inject MapreduceRunner mrRunner;
@@ -51,13 +64,14 @@ public class KillAllCommitLogsAction implements Runnable {
         "DO NOT RUN ANYWHERE ELSE EXCEPT CRASH OR TESTS.");
     // Create a in-memory input, assigning each bucket to its own shard for maximum parallelization,
     // with one extra shard for the CommitLogCheckpointRoot.
-    Input<Key<?>> input = new InMemoryInput<>(
-        Lists.partition(
-            FluentIterable
-                .from(Arrays.<Key<?>>asList(CommitLogCheckpointRoot.getKey()))
-                .append(CommitLogBucket.getAllBucketKeys())
-                .toList(),
-            1));
+    Input<Key<?>> input =
+        new InMemoryInput<>(
+            Lists.partition(
+                Streams.concat(
+                        Stream.of(CommitLogCheckpointRoot.getKey()),
+                        CommitLogBucket.getAllBucketKeys().stream())
+                    .collect(toImmutableList()),
+                1));
     response.sendJavaScriptRedirect(createJobPath(mrRunner
         .setJobName("Delete all commit logs")
         .setModuleName("tools")

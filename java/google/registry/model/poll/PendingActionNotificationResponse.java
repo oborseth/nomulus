@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 // limitations under the License.
 
 package google.registry.model.poll;
-
 
 import com.google.common.annotations.VisibleForTesting;
 import com.googlecode.objectify.annotation.Embed;
@@ -120,6 +119,32 @@ public abstract class PendingActionNotificationResponse
       return init(
           new ContactPendingActionNotificationResponse(),
           contactId,
+          actionResult,
+          trid,
+          processedDate);
+    }
+  }
+
+  /** An adapter to output the XML in response to resolving a pending command on a host. */
+  @Embed
+  @XmlRootElement(name = "panData", namespace = "urn:ietf:params:xml:ns:domain-1.0")
+  @XmlType(
+    propOrder = {"name", "trid", "processedDate"},
+    namespace = "urn:ietf:params:xml:ns:domain-1.0"
+  )
+  public static class HostPendingActionNotificationResponse
+      extends PendingActionNotificationResponse {
+
+    @XmlElement
+    NameOrId getName() {
+      return nameOrId;
+    }
+
+    public static HostPendingActionNotificationResponse create(
+        String fullyQualifiedHostName, boolean actionResult, Trid trid, DateTime processedDate) {
+      return init(
+          new HostPendingActionNotificationResponse(),
+          fullyQualifiedHostName,
           actionResult,
           trid,
           processedDate);

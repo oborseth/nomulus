@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import static google.registry.testing.DatastoreHelper.newDomainApplication;
 import static google.registry.testing.DatastoreHelper.persistActiveDomainApplication;
 import static google.registry.testing.DatastoreHelper.persistDeletedDomainApplication;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.beust.jcommander.ParameterException;
@@ -41,7 +42,7 @@ public class GetApplicationCommandTest extends CommandTestCase<GetApplicationCom
     persistActiveDomainApplication("example.tld");
     runCommand("2-TLD");
     assertInStdout("fullyQualifiedDomainName=example.tld");
-    assertInStdout("contactId=ReferenceUnion");
+    assertInStdout("contact=Key<?>(ContactResource(\"3-ROID\"))");
   }
 
   @Test
@@ -50,7 +51,6 @@ public class GetApplicationCommandTest extends CommandTestCase<GetApplicationCom
     runCommand("2-TLD", "--expand");
     assertInStdout("fullyQualifiedDomainName=example.tld");
     assertInStdout("contactId=contact1234");
-    assertNotInStdout("ReferenceUnion");
     assertNotInStdout("LiveRef");
   }
 
@@ -88,8 +88,7 @@ public class GetApplicationCommandTest extends CommandTestCase<GetApplicationCom
 
   @Test
   public void testFailure_noApplicationId() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand();
+    assertThrows(ParameterException.class, this::runCommand);
   }
 
   @Test

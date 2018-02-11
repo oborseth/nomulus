@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,31 +14,35 @@
 
 package google.registry.flows.contact;
 
+import static google.registry.flows.FlowUtils.validateClientIsLoggedIn;
 import static google.registry.flows.ResourceFlowUtils.verifyResourceDoesNotExist;
 import static google.registry.flows.contact.ContactFlowUtils.validateAsciiPostalInfo;
 import static google.registry.flows.contact.ContactFlowUtils.validateContactAgainstPolicy;
-import static google.registry.model.EppResourceUtils.createContactHostRoid;
-import static google.registry.model.eppoutput.Result.Code.SUCCESS;
+import static google.registry.model.EppResourceUtils.createRepoId;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 
 import com.googlecode.objectify.Key;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.flows.EppException;
+import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.ClientId;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.LoggedInFlow;
 import google.registry.flows.TransactionalFlow;
+import google.registry.flows.annotations.ReportingSpec;
 import google.registry.model.contact.ContactCommand.Create;
 import google.registry.model.contact.ContactResource;
 import google.registry.model.contact.ContactResource.Builder;
 import google.registry.model.domain.metadata.MetadataExtension;
 import google.registry.model.eppinput.ResourceCommand;
 import google.registry.model.eppoutput.CreateData.ContactCreateData;
-import google.registry.model.eppoutput.EppOutput;
+import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.index.EppResourceIndex;
 import google.registry.model.index.ForeignKeyIndex;
 import google.registry.model.ofy.ObjectifyService;
 import google.registry.model.reporting.HistoryEntry;
+import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
 import javax.inject.Inject;
+import org.joda.time.DateTime;
 
 /**
  * An EPP flow that creates a new contact.
@@ -47,29 +51,38 @@ import javax.inject.Inject;
  * @error {@link ContactFlowUtils.BadInternationalizedPostalInfoException}
  * @error {@link ContactFlowUtils.DeclineContactDisclosureFieldDisallowedPolicyException}
  */
-public final class ContactCreateFlow extends LoggedInFlow implements TransactionalFlow {
+@ReportingSpec(ActivityReportField.CONTACT_CREATE)
+public final class ContactCreateFlow implements TransactionalFlow {
 
   @Inject ResourceCommand resourceCommand;
+  @Inject ExtensionManager extensionManager;
   @Inject @ClientId String clientId;
   @Inject @TargetId String targetId;
   @Inject HistoryEntry.Builder historyBuilder;
+  @Inject EppResponse.Builder responseBuilder;
+  @Inject @Config("contactAndHostRoidSuffix") String roidSuffix;
   @Inject ContactCreateFlow() {}
 
   @Override
-  protected final void initLoggedInFlow() throws EppException {
-    registerExtensions(MetadataExtension.class);
-  }
-
-  @Override
-  protected final EppOutput run() throws EppException {
+  public final EppResponse run() throws EppException {
+    extensionManager.register(MetadataExtension.class);
+    extensionManager.validate();
+    validateClientIsLoggedIn(clientId);
     Create command = (Create) resourceCommand;
+    DateTime now = ofy().getTransactionTime();
     verifyResourceDoesNotExist(ContactResource.class, targetId, now);
-    Builder builder = new Builder();
-    command.applyTo(builder);
-    ContactResource newContact = builder
+    ContactResource newContact = new Builder()
+        .setContactId(targetId)
+        .setAuthInfo(command.getAuthInfo())
         .setCreationClientId(clientId)
-        .setCurrentSponsorClientId(clientId)
-        .setRepoId(createContactHostRoid(ObjectifyService.allocateId()))
+        .setPersistedCurrentSponsorClientId(clientId)
+        .setRepoId(createRepoId(ObjectifyService.allocateId(), roidSuffix))
+        .setFaxNumber(command.getFax())
+        .setVoiceNumber(command.getVoice())
+        .setDisclose(command.getDisclose())
+        .setEmailAddress(command.getEmail())
+        .setInternationalizedPostalInfo(command.getInternationalizedPostalInfo())
+        .setLocalizedPostalInfo(command.getLocalizedPostalInfo())
         .build();
     validateAsciiPostalInfo(newContact.getInternationalizedPostalInfo());
     validateContactAgainstPolicy(newContact);
@@ -83,6 +96,8 @@ public final class ContactCreateFlow extends LoggedInFlow implements Transaction
         historyBuilder.build(),
         ForeignKeyIndex.create(newContact, newContact.getDeletionTime()),
         EppResourceIndex.create(Key.create(newContact)));
-    return createOutput(SUCCESS, ContactCreateData.create(newContact.getContactId(), now));
+    return responseBuilder
+        .setResData(ContactCreateData.create(newContact.getContactId(), now))
+        .build();
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,8 @@ package google.registry.model.ofy;
 
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.ofy.ObjectifyService.initOfy;
-import static org.junit.Assert.fail;
+import static google.registry.testing.DatastoreHelper.newContactResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import com.google.appengine.tools.development.testing.LocalDatastoreServiceTestConfig;
 import com.google.appengine.tools.development.testing.LocalServiceTestHelper;
@@ -26,12 +27,9 @@ import com.googlecode.objectify.ObjectifyFilter;
 import com.googlecode.objectify.ObjectifyService;
 import com.googlecode.objectify.annotation.Entity;
 import com.googlecode.objectify.annotation.Id;
-import google.registry.model.registrar.Registrar;
-import google.registry.model.registrar.Registrar.Type;
-import google.registry.testing.ExceptionRule;
+import google.registry.model.contact.ContactResource;
 import org.junit.After;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -63,9 +61,6 @@ public class OfyFilterTest {
     helper.tearDown();
   }
 
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   /**
    * Key.create looks up kind metadata for the class of the object it is given. If this happens
    * before the first reference to ObjectifyService, which statically triggers type registrations,
@@ -77,23 +72,20 @@ public class OfyFilterTest {
   @Test
   public void testFilterRegistersTypes() throws Exception {
     UnregisteredEntity entity = new UnregisteredEntity(5L);
-    try {
-      Key.create(entity);
-      fail("Should not be able to create key for unregistered entity");
-    } catch (IllegalStateException e) {
-      assertThat(e).hasMessage(
-          "class google.registry.model.ofy.OfyFilterTest$UnregisteredEntity "
-              + "has not been registered");
-    }
+    IllegalStateException e = expectThrows(IllegalStateException.class, () -> Key.create(entity));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo(
+            "class google.registry.model.ofy.OfyFilterTest$UnregisteredEntity "
+                + "has not been registered");
   }
 
   /** The filter should register all types for us. */
   @Test
   public void testKeyCreateAfterFilter() throws Exception {
     new OfyFilter().init(null);
-    Registrar registrar =
-        new Registrar.Builder().setType(Type.TEST).setClientId("clientId").build();
-    Key.create(registrar);
+    ContactResource contact = newContactResource("contact1234");
+    Key.create(contact);
   }
 
   @Entity

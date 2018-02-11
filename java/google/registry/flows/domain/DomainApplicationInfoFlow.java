@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,35 +14,44 @@
 
 package google.registry.flows.domain;
 
+import static com.google.common.collect.Sets.union;
 import static google.registry.flows.EppXmlTransformer.unmarshal;
+import static google.registry.flows.FlowUtils.validateClientIsLoggedIn;
 import static google.registry.flows.ResourceFlowUtils.verifyExistence;
-import static google.registry.flows.ResourceFlowUtils.verifyOptionalAuthInfoForResource;
+import static google.registry.flows.ResourceFlowUtils.verifyOptionalAuthInfo;
 import static google.registry.flows.ResourceFlowUtils.verifyResourceOwnership;
 import static google.registry.flows.domain.DomainFlowUtils.addSecDnsExtensionIfPresent;
+import static google.registry.flows.domain.DomainFlowUtils.loadForeignKeyedDesignatedContacts;
 import static google.registry.flows.domain.DomainFlowUtils.verifyApplicationDomainMatchesTargetId;
-import static google.registry.model.EppResourceUtils.loadDomainApplication;
-import static google.registry.model.eppoutput.Result.Code.SUCCESS;
+import static google.registry.model.ofy.ObjectifyService.ofy;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
+import com.googlecode.objectify.Key;
 import google.registry.flows.EppException;
 import google.registry.flows.EppException.ParameterValuePolicyErrorException;
 import google.registry.flows.EppException.RequiredParameterMissingException;
+import google.registry.flows.ExtensionManager;
+import google.registry.flows.Flow;
 import google.registry.flows.FlowModule.ApplicationId;
 import google.registry.flows.FlowModule.ClientId;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.LoggedInFlow;
+import google.registry.flows.annotations.ReportingSpec;
 import google.registry.model.domain.DomainApplication;
 import google.registry.model.domain.DomainCommand.Info;
+import google.registry.model.domain.DomainInfoData;
 import google.registry.model.domain.launch.LaunchInfoExtension;
 import google.registry.model.domain.launch.LaunchInfoResponseExtension;
 import google.registry.model.eppcommon.AuthInfo;
+import google.registry.model.eppinput.EppInput;
 import google.registry.model.eppinput.ResourceCommand;
-import google.registry.model.eppoutput.EppOutput;
+import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.eppoutput.EppResponse.ResponseExtension;
 import google.registry.model.mark.Mark;
+import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
 import google.registry.model.smd.EncodedSignedMark;
 import google.registry.model.smd.SignedMark;
+import google.registry.util.Clock;
+import java.util.Optional;
 import javax.inject.Inject;
 
 /**
@@ -57,51 +66,68 @@ import javax.inject.Inject;
  * @error {@link DomainApplicationInfoFlow.ApplicationLaunchPhaseMismatchException}
  * @error {@link MissingApplicationIdException}
  */
-public final class DomainApplicationInfoFlow extends LoggedInFlow {
+@ReportingSpec(ActivityReportField.DOMAIN_INFO) // Applications are technically domains in EPP.
+public final class DomainApplicationInfoFlow implements Flow {
 
   @Inject ResourceCommand resourceCommand;
+  @Inject ExtensionManager extensionManager;
+  @Inject EppInput eppInput;
   @Inject Optional<AuthInfo> authInfo;
   @Inject @ClientId String clientId;
   @Inject @TargetId String targetId;
   @Inject @ApplicationId String applicationId;
+  @Inject Clock clock;
+  @Inject EppResponse.Builder responseBuilder;
   @Inject DomainApplicationInfoFlow() {}
 
   @Override
-  protected final void initLoggedInFlow() throws EppException {
-    registerExtensions(LaunchInfoExtension.class);
-  }
-
-  @Override
-  public final EppOutput run() throws EppException {
+  public final EppResponse run() throws EppException {
+    extensionManager.register(LaunchInfoExtension.class);
+    extensionManager.validate();
+    validateClientIsLoggedIn(clientId);
     if (applicationId.isEmpty()) {
       throw new MissingApplicationIdException();
     }
-    DomainApplication application = verifyExistence(
-        DomainApplication.class, applicationId, loadDomainApplication(applicationId, now));
+    DomainApplication application =
+        ofy().load().key(Key.create(DomainApplication.class, applicationId)).now();
+    verifyExistence(
+        DomainApplication.class,
+        applicationId,
+        application != null &&  clock.nowUtc().isBefore(application.getDeletionTime())
+            ? application
+            : null);
     verifyApplicationDomainMatchesTargetId(application, targetId);
-    verifyOptionalAuthInfoForResource(authInfo, application);
-    LaunchInfoExtension launchInfo = eppInput.getSingleExtension(LaunchInfoExtension.class);
+    verifyOptionalAuthInfo(authInfo, application);
+    LaunchInfoExtension launchInfo = eppInput.getSingleExtension(LaunchInfoExtension.class).get();
     if (!application.getPhase().equals(launchInfo.getPhase())) {
       throw new ApplicationLaunchPhaseMismatchException();
     }
     // We don't support authInfo for applications, so if it's another registrar always fail.
     verifyResourceOwnership(clientId, application);
-    return createOutput(
-        SUCCESS,
-        getResourceInfo(application),
-        getDomainResponseExtensions(application, launchInfo));
-  }
-
-  DomainApplication getResourceInfo(DomainApplication application) {
-    if (!((Info) resourceCommand).getHostsRequest().requestDelegated()) {
-      // Delegated hosts are present by default, so clear them out if they aren't wanted.
-      // This requires overriding the implicit status values so that we don't get INACTIVE added due
-      // to the missing nameservers.
-      return application.asBuilder()
-          .setNameservers(null)
-          .buildWithoutImplicitStatusValues();
-    }
-    return application;
+    boolean showDelegatedHosts = ((Info) resourceCommand).getHostsRequest().requestDelegated();
+    // Prefetch all referenced resources. Calling values() blocks until loading is done.
+    ofy().load()
+        .values(union(application.getNameservers(), application.getReferencedContacts())).values();
+    return responseBuilder
+        .setResData(DomainInfoData.newBuilder()
+            .setFullyQualifiedDomainName(application.getFullyQualifiedDomainName())
+            .setRepoId(application.getRepoId())
+            .setStatusValues(application.getStatusValues())
+            .setRegistrant(
+                ofy().load().key(application.getRegistrant()).now().getContactId())
+            .setContacts(loadForeignKeyedDesignatedContacts(application.getContacts()))
+            .setNameservers(showDelegatedHosts
+                ? application.loadNameserverFullyQualifiedHostNames()
+                : null)
+            .setCurrentSponsorClientId(application.getCurrentSponsorClientId())
+            .setCreationClientId(application.getCreationClientId())
+            .setCreationTime(application.getCreationTime())
+            .setLastEppUpdateClientId(application.getLastEppUpdateClientId())
+            .setLastEppUpdateTime(application.getLastEppUpdateTime())
+            .setAuthInfo(application.getAuthInfo())
+            .build())
+        .setExtensions(getDomainResponseExtensions(application, launchInfo))
+        .build();
   }
 
   ImmutableList<ResponseExtension> getDomainResponseExtensions(

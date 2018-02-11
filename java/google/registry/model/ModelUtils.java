@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,30 +14,22 @@
 
 package google.registry.model;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Predicates.instanceOf;
 import static com.google.common.base.Predicates.isNull;
 import static com.google.common.base.Predicates.or;
-import static com.google.common.collect.Iterables.all;
-import static com.google.common.collect.Lists.newArrayList;
 import static com.google.common.collect.Maps.transformValues;
-import static com.google.common.collect.Sets.newLinkedHashSet;
-import static java.util.Arrays.asList;
+import static java.util.stream.Collectors.toCollection;
+import static java.util.stream.Collectors.toList;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Function;
-import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
-import com.google.common.collect.Maps;
-import com.google.common.collect.Ordering;
+import com.google.common.collect.Streams;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.annotation.Id;
 import com.googlecode.objectify.annotation.Ignore;
@@ -48,60 +40,50 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.AbstractList;
+import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Deque;
 import java.util.LinkedHashMap;
-import java.util.LinkedList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /** A collection of static methods that deal with reflection on model classes. */
 public class ModelUtils {
 
   /** Caches all instance fields on an object, including non-public and inherited fields. */
   private static final LoadingCache<Class<?>, ImmutableMap<String, Field>> ALL_FIELDS_CACHE =
-      CacheBuilder.newBuilder().build(new CacheLoader<Class<?>, ImmutableMap<String, Field>>() {
-          @Override
-          public ImmutableMap<String, Field> load(Class<?> clazz) {
-            Deque<Class<?>> hierarchy = new LinkedList<>();
-            // Walk the hierarchy up to but not including ImmutableObject (to ignore hashCode).
-            for (; clazz != ImmutableObject.class; clazz = clazz.getSuperclass()) {
-              // Add to the front, so that shadowed fields show up later in the list.
-              // This will mean that getFieldValues will show the most derived value.
-              hierarchy.addFirst(clazz);
-            }
-            Map<String, Field> fields = new LinkedHashMap<>();
-            for (Class<?> hierarchyClass : hierarchy) {
-              Package pakkage = hierarchyClass.getPackage();
-              // Don't use hierarchyClass.getFields() because it only picks up public fields.
-              for (Field field : hierarchyClass.getDeclaredFields()) {
-                if (Modifier.isStatic(field.getModifiers())) {
-                  continue;
+      CacheBuilder.newBuilder()
+          .build(
+              new CacheLoader<Class<?>, ImmutableMap<String, Field>>() {
+                @Override
+                public ImmutableMap<String, Field> load(Class<?> clazz) {
+                  Deque<Class<?>> hierarchy = new ArrayDeque<>();
+                  // Walk the hierarchy up to but not including ImmutableObject (to ignore
+                  // hashCode).
+                  for (; clazz != ImmutableObject.class; clazz = clazz.getSuperclass()) {
+                    // Add to the front, so that shadowed fields show up later in the list.
+                    // This will mean that getFieldValues will show the most derived value.
+                    hierarchy.addFirst(clazz);
+                  }
+                  Map<String, Field> fields = new LinkedHashMap<>();
+                  for (Class<?> hierarchyClass : hierarchy) {
+                    // Don't use hierarchyClass.getFields() because it only picks up public fields.
+                    for (Field field : hierarchyClass.getDeclaredFields()) {
+                      if (!Modifier.isStatic(field.getModifiers())) {
+                        field.setAccessible(true);
+                        fields.put(field.getName(), field);
+                      }
+                    }
+                  }
+                  return ImmutableMap.copyOf(fields);
                 }
-                // Strictly speaking this shouldn't be necessary since all of these fields
-                // are already accessible to their FieldExposer, but it is more performant
-                // to access fields if they are marked accessible this way because it skips
-                // various security checks.
-                checkNotNull(
-                    FIELD_EXPOSERS.get(pakkage),
-                    "No FieldExposer registered for %s", pakkage.getName())
-                        .setAccessible(field);
-                fields.put(field.getName(), field);
-              }
-            }
-            return ImmutableMap.copyOf(fields);
-          }});
-
-  /** Per-package trampolines to expose package-private fields for reflection. */
-  private static final Map<Package, AbstractFieldExposer> FIELD_EXPOSERS = Maps.uniqueIndex(
-      FieldExposerRegistry.getFieldExposers(),
-      new Function<AbstractFieldExposer, Package>() {
-        @Override
-        public Package apply(AbstractFieldExposer exposer) {
-          return exposer.getClass().getPackage();
-        }});
+              });
 
   /** Lists all instance fields on an object, including non-public and inherited fields. */
   static Map<String, Field> getAllFields(Class<?> clazz) {
@@ -111,35 +93,34 @@ public class ModelUtils {
   /** Return a string representing the persisted schema of a type or enum. */
   static String getSchema(Class<?> clazz) {
     StringBuilder stringBuilder = new StringBuilder();
-    Iterable<?> body;
+    Stream<?> body;
     if (clazz.isEnum()) {
       stringBuilder.append("enum ");
-      body = FluentIterable.from(asList(clazz.getEnumConstants()));
+      body = Arrays.stream(clazz.getEnumConstants());
     } else {
       stringBuilder.append("class ");
-      body = FluentIterable.from(getAllFields(clazz).values())
-          .filter(new Predicate<Field>() {
-            @Override
-            public boolean apply(Field field) {
-              return !field.isAnnotationPresent(Ignore.class);
-            }})
-          .transform(new Function<Field, Object>() {
-            @Override
-            public Object apply(Field field) {
-              String annotation = field.isAnnotationPresent(Id.class)
-                  ?  "@Id "
-                  : field.isAnnotationPresent(Parent.class)
-                      ? "@Parent "
-                      : "";
-              String type = field.getType().isArray()
-                  ? field.getType().getComponentType().getName() + "[]"
-                  : field.getGenericType().toString().replaceFirst("class ", "");
-              return String.format("%s%s %s", annotation, type, field.getName());
-            }});
+      body =
+          getAllFields(clazz)
+              .values()
+              .stream()
+              .filter(field -> !field.isAnnotationPresent(Ignore.class))
+              .map(
+                  field -> {
+                    String annotation =
+                        field.isAnnotationPresent(Id.class)
+                            ? "@Id "
+                            : field.isAnnotationPresent(Parent.class) ? "@Parent " : "";
+                    String type =
+                        field.getType().isArray()
+                            ? field.getType().getComponentType().getName() + "[]"
+                            : field.getGenericType().toString().replaceFirst("class ", "");
+                    return String.format("%s%s %s", annotation, type, field.getName());
+                  });
     }
     return stringBuilder
-        .append(clazz.getName()).append(" {\n  ")
-        .append(Joiner.on(";\n  ").join(Ordering.usingToString().sortedCopy(body)))
+        .append(clazz.getName())
+        .append(" {\n  ")
+        .append(body.map(Object::toString).sorted().collect(Collectors.joining(";\n  ")))
         .append(";\n}")
         .toString();
   }
@@ -151,7 +132,7 @@ public class ModelUtils {
   static Set<Class<?>> getPersistedFieldTypes(Class<?> clazz) {
     ImmutableSet.Builder<Class<?>> builder = new ImmutableSet.Builder<>();
     for (Field field : getAllFields(clazz).values()) {
-      // Skip fields that aren't persisted to datastore.
+      // Skip fields that aren't persisted to Datastore.
       if (field.isAnnotationPresent(Ignore.class)) {
         continue;
       }
@@ -187,10 +168,7 @@ public class ModelUtils {
   /** Retrieves a field value via reflection. */
   static Object getFieldValue(Object instance, Field field) {
     try {
-      return Preconditions.checkNotNull(
-          FIELD_EXPOSERS.get(field.getDeclaringClass().getPackage()),
-          "No FieldExposer registered for %s", field.getDeclaringClass().getPackage().getName())
-              .getFieldValue(instance, field);
+      return field.get(instance);
     } catch (IllegalAccessException e) {
       throw new IllegalStateException(e);
     }
@@ -199,10 +177,7 @@ public class ModelUtils {
   /** Sets a field value via reflection. */
   static void setFieldValue(Object instance, Field field, Object value) {
     try {
-      Preconditions.checkNotNull(
-          FIELD_EXPOSERS.get(field.getDeclaringClass().getPackage()),
-          "No FieldExposer registered for %s", field.getDeclaringClass().getPackage().getName())
-              .setFieldValue(instance, field, value);
+      field.set(instance, value);
     } catch (IllegalAccessException e) {
       throw new IllegalStateException(e);
     }
@@ -240,50 +215,55 @@ public class ModelUtils {
   }
 
   /** Functional helper for {@link #cloneEmptyToNull}. */
-  private static final Function<Object, ?> CLONE_EMPTY_TO_NULL = new Function<Object, Object>() {
-    @Override
-      public Object apply(Object obj) {
-        if (obj instanceof ImmutableSortedMap) {
-          // ImmutableSortedMapTranslatorFactory handles empty for us. If the object is null, then
-          // its on-save hook can't run.
-          return obj;
+  private static Object cloneEmptyToNullRecursive(Object obj) {
+    if (obj instanceof ImmutableSortedMap) {
+      // ImmutableSortedMapTranslatorFactory handles empty for us. If the object is null, then
+      // its on-save hook can't run.
+      return obj;
+    }
+    if (obj == null
+        || obj.equals("")
+        || (obj instanceof Collection && ((Collection<?>) obj).isEmpty())
+        || (obj instanceof Map && ((Map<?, ?>) obj).isEmpty())
+        || (obj.getClass().isArray() && Array.getLength(obj) == 0)) {
+      return null;
+    }
+    Predicate<Object> immutableObjectOrNull = or(isNull(), instanceOf(ImmutableObject.class));
+    if ((obj instanceof Set || obj instanceof List)
+        && Streams.stream((Iterable<?>) obj).allMatch(immutableObjectOrNull)) {
+      // Recurse into sets and lists, but only if they contain ImmutableObjects.
+      Stream<?> stream =
+          Streams.stream((Iterable<?>) obj).map(ModelUtils::cloneEmptyToNullRecursive);
+      // We can't use toImmutable(List/Set) because the values can be null.
+      // We can't use toSet because we have to preserve order in the Set.
+      // So we use toList (accepts null) and LinkedHashSet (preserves order and accepts null)
+      return (obj instanceof List)
+          ? stream.collect(toList())
+          : stream.collect(toCollection(LinkedHashSet::new));
+    }
+    if (obj instanceof Map && ((Map<?, ?>) obj).values().stream().allMatch(immutableObjectOrNull)) {
+      // Recurse into maps with ImmutableObject values.
+      return transformValues((Map<?, ?>) obj, ModelUtils::cloneEmptyToNullRecursive);
+    }
+    if (obj instanceof ImmutableObject) {
+      // Recurse on the fields of an ImmutableObject.
+      ImmutableObject copy = ImmutableObject.clone((ImmutableObject) obj);
+      for (Field field : getAllFields(obj.getClass()).values()) {
+        Object oldValue = getFieldValue(obj, field);
+        Object newValue = cloneEmptyToNullRecursive(oldValue);
+        if (!Objects.equals(oldValue, newValue)) {
+          setFieldValue(copy, field, newValue);
         }
-        if ("".equals(obj)
-            || (obj instanceof Collection && ((Collection<?>) obj).isEmpty())
-            || (obj instanceof Map && ((Map<?, ?>) obj).isEmpty())
-            || (obj != null && obj.getClass().isArray() && Array.getLength(obj) == 0)) {
-          return null;
-        }
-        Predicate<Object> immutableObjectOrNull = or(isNull(), instanceOf(ImmutableObject.class));
-        if ((obj instanceof Set || obj instanceof List)
-            && all((Iterable<?>) obj, immutableObjectOrNull)) {
-          // Recurse into sets and lists, but only if they contain ImmutableObjects.
-          FluentIterable<?> fluent = FluentIterable.from((Iterable<?>) obj).transform(this);
-          return (obj instanceof List) ? newArrayList(fluent) : newLinkedHashSet(fluent);
-        }
-        if (obj instanceof Map && all(((Map<?, ?>) obj).values(), immutableObjectOrNull)) {
-          // Recurse into maps with ImmutableObject values.
-          return transformValues((Map<?, ?>) obj, this);
-        }
-        if (obj instanceof ImmutableObject) {
-          // Recurse on the fields of an ImmutableObject.
-          ImmutableObject copy = ImmutableObject.clone((ImmutableObject) obj);
-          for (Field field : getAllFields(obj.getClass()).values()) {
-            Object oldValue = getFieldValue(obj, field);
-            Object newValue = apply(oldValue);
-            if (!Objects.equals(oldValue, newValue)) {
-              setFieldValue(copy, field, newValue);
-            }
-          }
-          return copy;
-        }
-        return obj;
-      }};
+      }
+      return copy;
+    }
+    return obj;
+  }
 
   /** Returns a clone of the object and sets empty collections, arrays, maps and strings to null. */
   @SuppressWarnings("unchecked")
   protected static <T extends ImmutableObject> T cloneEmptyToNull(T obj) {
-    return (T) CLONE_EMPTY_TO_NULL.apply(obj);
+    return (T) cloneEmptyToNullRecursive(obj);
   }
 
   @VisibleForTesting

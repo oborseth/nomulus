@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,8 +20,6 @@ import static com.google.common.base.Preconditions.checkState;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
 import com.google.common.collect.ForwardingNavigableMap;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Maps;
@@ -32,8 +30,10 @@ import com.googlecode.objectify.annotation.Id;
 import com.googlecode.objectify.annotation.Parent;
 import google.registry.model.Buildable;
 import google.registry.model.ImmutableObject;
+import google.registry.model.annotations.ReportedOn;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import org.joda.money.CurrencyUnit;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
@@ -48,7 +48,12 @@ import org.joda.time.DateTime;
  * <p>The active balance of a credit object before (at) any given point in time T can be found by
  * taking the balance object with the latest effective time that is before (before or at) T, and
  * breaking any ties by choosing the mostly recently written among those balances.
+ *
+ * <p>NOTE: While credits are tracked within the model, there is no built-in support for actually
+ * incorporating these credits into the generated billing data, and the model support for credits
+ * should be considered quasi-deprecated (it may be removed without notice).
  */
+@ReportedOn
 @Entity
 public final class RegistrarCreditBalance extends ImmutableObject implements Buildable {
 
@@ -166,8 +171,7 @@ public final class RegistrarCreditBalance extends ImmutableObject implements Bui
           ofy().load().type(RegistrarCreditBalance.class).ancestor(registrarCredit)) {
         // Create the submap at this key if it doesn't exist already.
         Map<DateTime, Money> submap =
-            Optional.fromNullable(map.get(balance.effectiveTime))
-                .or(new HashMap<DateTime, Money>());
+            Optional.ofNullable(map.get(balance.effectiveTime)).orElse(new HashMap<>());
         submap.put(balance.writtenTime, balance.amount);
         map.put(balance.effectiveTime, submap);
       }
@@ -187,16 +191,12 @@ public final class RegistrarCreditBalance extends ImmutableObject implements Bui
      */
     @VisibleForTesting
     BalanceMap(Map<DateTime, ? extends Map<DateTime, Money>> data) {
-      delegate = ImmutableSortedMap.copyOf(
-          Maps.transformValues(
-              data,
-              new Function<Map<DateTime, Money>, ImmutableSortedMap<DateTime, Money>>() {
-                @Override
-                public ImmutableSortedMap<DateTime, Money> apply(Map<DateTime, Money> map) {
-                  return ImmutableSortedMap.copyOf(map, Ordering.natural());
-                }
-              }),
-          Ordering.natural());
+      delegate =
+          ImmutableSortedMap.copyOf(
+              Maps.transformValues(
+                  data,
+                  (Map<DateTime, Money> map) -> ImmutableSortedMap.copyOf(map, Ordering.natural())),
+              Ordering.natural());
     }
 
     @Override
@@ -211,8 +211,8 @@ public final class RegistrarCreditBalance extends ImmutableObject implements Bui
     private Optional<Money> getMostRecentlyWrittenBalance(
         Map.Entry<DateTime, ImmutableSortedMap<DateTime, Money>> balancesAtEffectiveTime) {
       return balancesAtEffectiveTime == null
-          ? Optional.<Money>absent()
-          // Don't use Optional.fromNullable() here since it's an error if there's a empty submap.
+          ? Optional.empty()
+          // Don't use Optional.ofNullable() here since it's an error if there's a empty submap.
           : Optional.of(balancesAtEffectiveTime.getValue().lastEntry().getValue());
     }
 

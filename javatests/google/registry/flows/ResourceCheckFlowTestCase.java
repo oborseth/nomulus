@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,8 +31,8 @@ public class ResourceCheckFlowTestCase<F extends Flow, R extends EppResource>
 
   protected void doCheckTest(CheckData.Check... expected) throws Exception {
     assertTransactionalFlow(false);
-    assertThat(expected).asList().containsExactlyElementsIn(
-        ((CheckData) runFlow().getResponse().getResponseData().get(0)).getChecks());
+    assertThat(((CheckData) runFlow().getResponse().getResponseData().get(0)).getChecks())
+        .containsExactlyElementsIn(expected);
     assertNoHistory();  // Checks don't create a history event.
     assertNoBillingEvents();  // Checks are always free.
   }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,16 +26,21 @@ import google.registry.request.Action;
 import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.NotFoundException;
 import google.registry.request.Parameter;
+import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
 import javax.inject.Inject;
 
 /** Action that manually triggers refresh of DNS information. */
-@Action(path = "/_dr/dnsRefresh", automaticallyPrintOk = true)
+@Action(
+  path = "/_dr/dnsRefresh",
+  automaticallyPrintOk = true,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public final class RefreshDnsAction implements Runnable {
 
   @Inject Clock clock;
   @Inject DnsQueue dnsQueue;
-  @Inject @Parameter("name") String domainOrHostName;
+  @Inject @Parameter("domainOrHostName") String domainOrHostName;
   @Inject @Parameter("type") TargetType type;
   @Inject RefreshDnsAction() {}
 
@@ -70,7 +75,7 @@ public final class RefreshDnsAction implements Runnable {
   }
 
   private static void verifyHostIsSubordinate(HostResource host) {
-    if (host.getSuperordinateDomain() == null) {
+    if (!host.isSubordinate()) {
       throw new BadRequestException(
           String.format("%s isn't a subordinate hostname", host.getFullyQualifiedHostName()));
     }

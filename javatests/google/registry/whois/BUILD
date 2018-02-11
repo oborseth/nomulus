@@ -7,30 +7,29 @@ licenses(["notice"])  # Apache 2.0
 
 load("//java/com/google/testing/builddefs:GenTestRules.bzl", "GenTestRules")
 
-
 java_library(
     name = "whois",
     srcs = glob(["*.java"]),
     resources = glob(["testdata/*.txt"]),
     deps = [
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//java/com/google/common/io",
-        "//java/com/google/common/net",
-        "//third_party/java/appengine:appengine-testing",
-        "//third_party/java/dagger",
-        "//third_party/java/joda_time",
-        "//third_party/java/junit",
-        "//third_party/java/mockito",
-        "//third_party/java/objectify:objectify-v4_1",
-        "//third_party/java/servlet/servlet_api",
-        "//third_party/java/truth",
         "//java/google/registry/config",
         "//java/google/registry/model",
         "//java/google/registry/request",
         "//java/google/registry/util",
         "//java/google/registry/whois",
         "//javatests/google/registry/testing",
+        "//third_party/objectify:objectify-v4_1",
+        "@com_google_appengine_api_1_0_sdk",
+        "@com_google_appengine_testing",
+        "@com_google_dagger",
+        "@com_google_guava",
+        "@com_google_guava_testlib",
+        "@com_google_truth",
+        "@com_google_truth_extensions_truth_java8_extension",
+        "@javax_servlet_api",
+        "@joda_time",
+        "@junit",
+        "@org_mockito_all",
     ],
 )
 

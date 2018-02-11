@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,29 +15,24 @@
 package google.registry.request;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Strings.nullToEmpty;
-import static com.google.common.net.HttpHeaders.LOCATION;
 import static com.google.common.net.MediaType.PLAIN_TEXT_UTF_8;
-import static google.registry.security.XsrfTokenManager.X_CSRF_TOKEN;
-import static google.registry.security.XsrfTokenManager.validateToken;
 import static javax.servlet.http.HttpServletResponse.SC_FORBIDDEN;
 import static javax.servlet.http.HttpServletResponse.SC_METHOD_NOT_ALLOWED;
-import static javax.servlet.http.HttpServletResponse.SC_MOVED_TEMPORARILY;
 import static javax.servlet.http.HttpServletResponse.SC_NOT_FOUND;
 
-import com.google.appengine.api.users.UserService;
-import com.google.appengine.api.users.UserServiceFactory;
-import com.google.common.base.Optional;
+import google.registry.request.auth.AuthResult;
+import google.registry.request.auth.RequestAuthenticator;
 import google.registry.util.FormattingLogger;
-import google.registry.util.NonFinalForTesting;
+import google.registry.util.TypeUtils.TypeInstantiator;
 import java.io.IOException;
-import java.lang.reflect.Method;
+import java.util.Optional;
+import javax.annotation.Nullable;
+import javax.inject.Provider;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import org.joda.time.Duration;
 
 /**
- * Dagger request processor for Nomulus.
+ * Dagger-based request processor.
  *
  * <p>This class creates an HTTP request processor from a Dagger component. It routes requests from
  * your servlet to an {@link Action @Action} annotated handler class.
@@ -60,54 +55,61 @@ import org.joda.time.Duration;
  *
  * <h3>Security Features</h3>
  *
- * <p>XSRF protection is built into this class. It can be enabled or disabled on individual actions
- * using {@link Action#xsrfProtection() xsrfProtection} setting.
- *
- * <p>This class also enforces the {@link Action#requireLogin() requireLogin} setting.
- *
- * @param <C> component type
+ * @param <C> request component type
  */
-public final class RequestHandler<C> {
+public class RequestHandler<C> {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
 
-  private static final Duration XSRF_VALIDITY = Duration.standardDays(1);
-
-  @NonFinalForTesting
-  private static UserService userService = UserServiceFactory.getUserService();
-
-  /**
-   * Creates a new request processor based off your component methods.
-   *
-   * <p><b>Warning:</b> When using the App Engine platform, you must call
-   * {@link Method#setAccessible(boolean) setAccessible(true)} on all your component {@link Method}
-   * instances, from within the same package as the component. This is due to cross-package
-   * reflection restrictions.
-   *
-   * @param methods is the result of calling {@link Class#getMethods()} on {@code component}, which
-   *     are filtered to only include those with no arguments returning a {@link Runnable} with an
-   *     {@link Action} annotation
-   */
-  public static <C> RequestHandler<C> create(Class<C> component, Iterable<Method> methods) {
-    return new RequestHandler<>(component, Router.create(methods));
-  }
-
   private final Router router;
-
-  private RequestHandler(Class<C> component, Router router) {
-    checkNotNull(component);
-    this.router = router;
-  }
+  private final Provider<? extends RequestComponentBuilder<C>> requestComponentBuilderProvider;
+  private final RequestAuthenticator requestAuthenticator;
 
   /**
-   * Runs the appropriate action for a servlet request.
+   * Constructor for subclasses to create a new request handler for a specific request component.
    *
-   * @param component is an instance of the component type whose methods were passed to
-   *     {@link #create(Class, Iterable)}
+   * <p>This operation will generate a routing map for the component's {@code @Action}-returning
+   * methods using reflection, which is moderately expensive, so a given servlet should construct a
+   * single {@code RequestHandler} and re-use it across requests.
+   *
+   * @param requestComponentBuilderProvider a Dagger {@code Provider} of builder instances that can
+   *     be used to construct new instances of the request component (with the required
+   *     request-derived modules provided by this class)
+   * @param requestAuthenticator an instance of the {@link RequestAuthenticator} class
    */
-  public void handleRequest(HttpServletRequest req, HttpServletResponse rsp, C component)
-      throws IOException {
-    checkNotNull(component);
+  protected RequestHandler(
+      Provider<? extends RequestComponentBuilder<C>> requestComponentBuilderProvider,
+      RequestAuthenticator requestAuthenticator) {
+    this(null, requestComponentBuilderProvider, requestAuthenticator);
+  }
+
+  /** Creates a new RequestHandler with an explicit component class for test purposes. */
+  public static <C> RequestHandler<C> createForTest(
+      Class<C> component,
+      Provider<? extends RequestComponentBuilder<C>> requestComponentBuilderProvider,
+      RequestAuthenticator requestAuthenticator) {
+    return new RequestHandler<>(
+        checkNotNull(component),
+        requestComponentBuilderProvider,
+        requestAuthenticator);
+  }
+
+  private RequestHandler(
+      @Nullable Class<C> component,
+      Provider<? extends RequestComponentBuilder<C>> requestComponentBuilderProvider,
+      RequestAuthenticator requestAuthenticator) {
+    // If the component class isn't explicitly provided, infer it from the class's own typing.
+    // This is safe only for use by subclasses of RequestHandler where the generic parameter is
+    // preserved at runtime, so only expose that option via the protected constructor.
+    this.router = Router.create(
+        component != null ? component : new TypeInstantiator<C>(getClass()){}.getExactType());
+    this.requestComponentBuilderProvider = checkNotNull(requestComponentBuilderProvider);
+    this.requestAuthenticator = checkNotNull(requestAuthenticator);
+  }
+
+  /** Runs the appropriate action for a servlet request. */
+  public void handleRequest(HttpServletRequest req, HttpServletResponse rsp) throws IOException {
+    checkNotNull(req);
     checkNotNull(rsp);
     Action.Method method;
     try {
@@ -129,20 +131,18 @@ public final class RequestHandler<C> {
       rsp.sendError(SC_METHOD_NOT_ALLOWED);
       return;
     }
-    if (route.get().action().requireLogin() && !userService.isUserLoggedIn()) {
-      logger.info("not logged in");
-      rsp.setStatus(SC_MOVED_TEMPORARILY);
-      rsp.setHeader(LOCATION, userService.createLoginURL(req.getRequestURI()));
+    Optional<AuthResult> authResult =
+        requestAuthenticator.authorize(route.get().action().auth().authSettings(), req);
+    if (!authResult.isPresent()) {
+      rsp.sendError(SC_FORBIDDEN, "Not authorized");
       return;
     }
-    if (route.get().shouldXsrfProtect(method)
-        && !validateToken(
-                nullToEmpty(req.getHeader(X_CSRF_TOKEN)),
-                route.get().action().xsrfScope(),
-                XSRF_VALIDITY)) {
-      rsp.sendError(SC_FORBIDDEN, "Invalid " + X_CSRF_TOKEN);
-      return;
-    }
+
+    // Build a new request component using any modules we've constructed by this point.
+    C component = requestComponentBuilderProvider.get()
+        .requestModule(new RequestModule(req, rsp, authResult.get()))
+        .build();
+    // Apply the selected Route to the component to produce an Action instance, and run it.
     try {
       route.get().instantiator().apply(component).run();
       if (route.get().action().automaticallyPrintOk()) {

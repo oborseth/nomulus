@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,25 +43,27 @@ class RegistrarWhoisResponse extends WhoisResponseImpl {
   }
 
   @Override
-  public String getPlainTextOutput(boolean preferUnicode, String disclaimer) {
+  public WhoisResponseResults getResponse(boolean preferUnicode, String disclaimer) {
     Set<RegistrarContact> contacts = registrar.getContacts();
-    return new RegistrarEmitter()
-        .emitField("Registrar Name", registrar.getRegistrarName())
-        .emitAddress(
-            null,
-            chooseByUnicodePreference(
-                preferUnicode,
-                registrar.getLocalizedAddress(),
-                registrar.getInternationalizedAddress()))
-        .emitPhonesAndEmail(
-            registrar.getPhoneNumber(), registrar.getFaxNumber(), registrar.getEmailAddress())
-        .emitField("WHOIS Server", registrar.getWhoisServer())
-        .emitField("Referral URL", registrar.getReferralUrl())
-        .emitRegistrarContacts("Admin", contacts, AdminOrTech.ADMIN)
-        .emitRegistrarContacts("Technical", contacts, AdminOrTech.TECH)
-        .emitLastUpdated(getTimestamp())
-        .emitFooter(disclaimer)
-        .toString();
+    String plaintext =
+        new RegistrarEmitter()
+            .emitField("Registrar", registrar.getRegistrarName())
+            .emitAddress(
+                null,
+                chooseByUnicodePreference(
+                    preferUnicode,
+                    registrar.getLocalizedAddress(),
+                    registrar.getInternationalizedAddress()))
+            .emitPhonesAndEmail(
+                registrar.getPhoneNumber(), registrar.getFaxNumber(), registrar.getEmailAddress())
+            .emitField("Registrar WHOIS Server", registrar.getWhoisServer())
+            .emitField("Registrar URL", registrar.getReferralUrl())
+            .emitRegistrarContacts("Admin", contacts, AdminOrTech.ADMIN)
+            .emitRegistrarContacts("Technical", contacts, AdminOrTech.TECH)
+            .emitLastUpdated(getTimestamp())
+            .emitFooter(disclaimer)
+            .toString();
+    return WhoisResponseResults.create(plaintext, 1);
   }
 
   /** An emitter with logic for registrars. */

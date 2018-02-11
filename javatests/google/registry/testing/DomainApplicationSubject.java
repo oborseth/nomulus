@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,10 +18,10 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.truth.Truth.assertAbout;
 import static com.google.common.truth.Truth.assertThat;
 
-import com.google.common.collect.ImmutableSet;
-import com.google.common.truth.AbstractVerb.DelegatedVerb;
-import com.google.common.truth.FailureStrategy;
+import com.google.common.truth.FailureMetadata;
+import com.google.common.truth.SimpleSubjectBuilder;
 import google.registry.model.domain.DomainApplication;
+import google.registry.model.domain.Period;
 import google.registry.model.domain.launch.ApplicationStatus;
 import google.registry.model.smd.EncodedSignedMark;
 import google.registry.testing.TruthChainer.And;
@@ -30,6 +30,13 @@ import java.util.Objects;
 /** Truth subject for asserting things about {@link DomainApplication} instances. */
 public final class DomainApplicationSubject
     extends AbstractDomainBaseSubject<DomainApplication, DomainApplicationSubject> {
+
+  public And<DomainApplicationSubject> hasPeriodYears(int years) {
+    assertThat(actual().getPeriod()).isNotNull();
+    assertThat(actual().getPeriod().getUnit()).isEqualTo(Period.Unit.YEARS);
+    assertThat(actual().getPeriod().getValue()).isEqualTo(years);
+    return andChainer();
+  }
 
   public And<DomainApplicationSubject> hasApplicationStatus(
       ApplicationStatus applicationStatus) {
@@ -50,13 +57,11 @@ public final class DomainApplicationSubject
 
   public And<DomainApplicationSubject> hasExactlyEncodedSignedMarks(
       EncodedSignedMark... encodedSignedMarks) {
-    if (!Objects.equals(
-        ImmutableSet.copyOf(actual().getEncodedSignedMarks()),
-        ImmutableSet.of(encodedSignedMarks))) {
-      assertThat(actual().getEncodedSignedMarks())
-          .named("the encoded signed marks of " + actualAsString())
-          .containsExactly((Object[]) encodedSignedMarks);
-    }
+    
+    assertThat(actual().getEncodedSignedMarks())
+      .named("the encoded signed marks of " + actualAsString())
+      .containsExactly((Object[]) encodedSignedMarks);
+    
     return andChainer();
   }
 
@@ -68,16 +73,12 @@ public final class DomainApplicationSubject
     return andChainer();
   }
 
-  /** A factory for instances of this subject. */
-  private static class SubjectFactory
-      extends ReflectiveSubjectFactory<DomainApplication, DomainApplicationSubject>{}
-
-  public DomainApplicationSubject(FailureStrategy strategy, DomainApplication subject) {
-    super(strategy, checkNotNull(subject));
+  public DomainApplicationSubject(FailureMetadata failureMetadata, DomainApplication subject) {
+    super(failureMetadata, checkNotNull(subject));
   }
 
-  public static DelegatedVerb<DomainApplicationSubject, DomainApplication>
+  public static SimpleSubjectBuilder<DomainApplicationSubject, DomainApplication>
       assertAboutApplications() {
-    return assertAbout(new SubjectFactory());
+    return assertAbout(DomainApplicationSubject::new);
   }
 }

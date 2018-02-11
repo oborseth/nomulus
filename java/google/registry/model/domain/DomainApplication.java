@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,9 @@
 
 package google.registry.model.domain;
 
-import static google.registry.model.ofy.Ofy.RECOMMENDED_MEMCACHE_EXPIRATION;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
 
 import com.google.common.collect.ImmutableList;
-import com.googlecode.objectify.annotation.Cache;
 import com.googlecode.objectify.annotation.EntitySubclass;
 import google.registry.model.annotations.ExternalMessagingName;
 import google.registry.model.domain.launch.ApplicationStatus;
@@ -26,28 +24,10 @@ import google.registry.model.domain.launch.LaunchPhase;
 import google.registry.model.eppcommon.Trid;
 import google.registry.model.smd.EncodedSignedMark;
 import java.util.List;
-import javax.xml.bind.annotation.XmlRootElement;
-import javax.xml.bind.annotation.XmlTransient;
-import javax.xml.bind.annotation.XmlType;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 
 /** An application to create a domain. */
-@XmlRootElement(name = "infData")
-@XmlType(propOrder = {
-    "fullyQualifiedDomainName",
-    "repoId",
-    "status",
-    "marshalledRegistrant",
-    "marshalledContacts",
-    "marshalledNameservers",
-    "currentSponsorClientId",
-    "creationClientId",
-    "creationTime",
-    "lastEppUpdateClientId",
-    "lastEppUpdateTime",
-    "authInfo"})
-@Cache(expirationSeconds = RECOMMENDED_MEMCACHE_EXPIRATION)
 @EntitySubclass(index = true)
 @ExternalMessagingName("application")
 public class DomainApplication extends DomainBase {
@@ -59,26 +39,24 @@ public class DomainApplication extends DomainBase {
    *
    * <p>This field may be null for applications that were created before the field was added.
    */
-  @XmlTransient
   Trid creationTrid;
 
   /**
    * The phase which this application is registered for. We store this only so we can return it back
    * to the user on info commands.
    */
-  @XmlTransient
   LaunchPhase phase;
 
+  /** The requested registration period. */
+  Period period;
+
   /** The current status of this application. */
-  @XmlTransient
   ApplicationStatus applicationStatus;
 
   /** The encoded signed marks which were asserted when this application was created. */
-  @XmlTransient
   List<EncodedSignedMark> encodedSignedMarks;
 
   /** The amount paid at auction for the right to register the domain. Used only for reporting. */
-  @XmlTransient
   Money auctionPrice;
 
   @Override
@@ -94,6 +72,10 @@ public class DomainApplication extends DomainBase {
     return phase;
   }
 
+  public Period getPeriod() {
+    return period;
+  }
+
   public ApplicationStatus getApplicationStatus() {
     return applicationStatus;
   }
@@ -106,13 +88,6 @@ public class DomainApplication extends DomainBase {
     return auctionPrice;
   }
 
-  /** Domain applications don't expose transfer time, so override this and mark it xml transient. */
-  @XmlTransient
-  @Override
-  public final DateTime getLastTransferTime() {
-    return super.getLastTransferTime();
-  }
-
   /**
    * The application id is the repoId.
    */
@@ -121,6 +96,8 @@ public class DomainApplication extends DomainBase {
     return getRepoId();
   }
 
+  /** This is a no-op and should never be called on an application explicitly. */
+  @Deprecated
   @Override
   public DomainApplication cloneProjectedAtTime(DateTime now) {
     // Applications have no grace periods and can't be transferred, so there is nothing to project.
@@ -148,6 +125,11 @@ public class DomainApplication extends DomainBase {
 
     public Builder setPhase(LaunchPhase phase) {
       getInstance().phase = phase;
+      return this;
+    }
+
+    public Builder setPeriod(Period period) {
+      getInstance().period = period;
       return this;
     }
 

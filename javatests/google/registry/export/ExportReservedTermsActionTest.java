@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,19 +14,19 @@
 
 package google.registry.export;
 
-import static com.google.common.base.Throwables.getRootCause;
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
 import static google.registry.export.ExportReservedTermsAction.EXPORT_MIME_TYPE;
 import static google.registry.export.ExportReservedTermsAction.RESERVED_TERMS_FILENAME;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistReservedList;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static javax.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
 import static javax.servlet.http.HttpServletResponse.SC_OK;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -42,11 +42,10 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link ExportReservedTermsAction}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class ExportReservedTermsActionTest {
 
   @Rule
@@ -54,16 +53,14 @@ public class ExportReservedTermsActionTest {
       .withDatastore()
       .build();
 
-  @Mock
-  private DriveConnection driveConnection;
-
-  @Mock
-  private Response response;
+  private final DriveConnection driveConnection = mock(DriveConnection.class);
+  private final Response response = mock(Response.class);
 
   private void runAction(String tld) {
     ExportReservedTermsAction action = new ExportReservedTermsAction();
     action.response = response;
     action.driveConnection = driveConnection;
+    action.exportUtils = new ExportUtils("This is a disclaimer.\n");
     action.tld = tld;
     action.run();
   }
@@ -73,8 +70,7 @@ public class ExportReservedTermsActionTest {
     ReservedList rl = persistReservedList(
         "tld-reserved",
         "lol,FULLY_BLOCKED",
-        "cat,FULLY_BLOCKED",
-        "jimmy,UNRESERVED");
+        "cat,FULLY_BLOCKED");
     createTld("tld");
     persistResource(Registry.get("tld").asBuilder()
         .setReservedLists(rl)
@@ -100,25 +96,24 @@ public class ExportReservedTermsActionTest {
 
   @Test
   public void test_uploadFileToDrive_doesNothingIfReservedListsNotConfigured() throws Exception {
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(ImmutableSet.<ReservedList>of())
-        .setDriveFolderId(null)
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(ImmutableSet.of())
+            .setDriveFolderId(null)
+            .build());
     runAction("tld");
     verify(response).setStatus(SC_OK);
     verify(response).setPayload("No reserved lists configured");
   }
 
   @Test
-  public void test_uploadFileToDrive_failsWhenDriveFolderIdIsNull() throws Exception {
+  public void test_uploadFileToDrive_doesNothingWhenDriveFolderIdIsNull() throws Exception {
     persistResource(Registry.get("tld").asBuilder().setDriveFolderId(null).build());
-    try {
-      runAction("tld");
-      assertWithMessage("Expected RuntimeException to be thrown").fail();
-    } catch (RuntimeException e) {
-      verify(response).setStatus(SC_INTERNAL_SERVER_ERROR);
-      assertThat(getRootCause(e)).hasMessage("No drive folder associated with this TLD");
-    }
+    runAction("tld");
+    verify(response).setStatus(SC_OK);
+    verify(response)
+        .setPayload("Skipping export because no Drive folder is associated with this TLD");
   }
 
   @Test
@@ -128,23 +123,18 @@ public class ExportReservedTermsActionTest {
         any(MediaType.class),
         anyString(),
         any(byte[].class))).thenThrow(new IOException("errorMessage"));
-    try {
-      runAction("tld");
-      assertWithMessage("Expected RuntimeException to be thrown").fail();
-    } catch (RuntimeException e) {
-      verify(response).setStatus(SC_INTERNAL_SERVER_ERROR);
-      assertThat(getRootCause(e)).hasMessage("errorMessage");
-    }
+    RuntimeException thrown = expectThrows(RuntimeException.class, () -> runAction("tld"));
+    verify(response).setStatus(SC_INTERNAL_SERVER_ERROR);
+    assertThat(thrown).hasCauseThat().hasMessageThat().isEqualTo("errorMessage");
   }
 
   @Test
   public void test_uploadFileToDrive_failsWhenTldDoesntExist() throws Exception {
-    try {
-      runAction("fakeTld");
-      assertWithMessage("Expected RuntimeException to be thrown").fail();
-    } catch (RuntimeException e) {
-      verify(response).setStatus(SC_INTERNAL_SERVER_ERROR);
-      assertThat(getRootCause(e)).hasMessage("No registry object found for fakeTld");
-    }
+    RuntimeException thrown = expectThrows(RuntimeException.class, () -> runAction("fakeTld"));
+    verify(response).setStatus(SC_INTERNAL_SERVER_ERROR);
+    assertThat(thrown)
+        .hasCauseThat()
+        .hasMessageThat()
+        .isEqualTo("No registry object found for fakeTld");
   }
 }

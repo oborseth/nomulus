@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,10 @@
 
 package google.registry.tools;
 
+import static java.util.stream.Collectors.joining;
+
 import com.beust.jcommander.Parameters;
-import com.google.common.base.Functions;
-import com.google.common.base.Joiner;
 import com.google.common.collect.ComparisonChain;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.Ordering;
 import google.registry.rde.PendingDeposit;
 import google.registry.rde.PendingDepositChecker;
@@ -45,9 +44,11 @@ final class PendingEscrowCommand implements RemoteApiCommand {
 
   @Override
   public void run() throws Exception {
-    System.out.println(FluentIterable
-        .from(SORTER.sortedCopy(checker.getTldsAndWatermarksPendingDepositForRdeAndBrda().values()))
-        .transform(Functions.toStringFunction())
-        .join(Joiner.on('\n')));
+    System.out.println(
+        SORTER
+            .sortedCopy(checker.getTldsAndWatermarksPendingDepositForRdeAndBrda().values())
+            .stream()
+            .map(Object::toString)
+            .collect(joining("\n")));
   }
 }

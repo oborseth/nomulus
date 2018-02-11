@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,13 +19,13 @@ import static google.registry.util.CollectionUtils.difference;
 import static java.lang.reflect.Modifier.isFinal;
 import static java.lang.reflect.Modifier.isStatic;
 
-import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.reflect.TypeToken;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.util.function.Predicate;
 
 /** Utilities methods related to reflection. */
 public class TypeUtils {
@@ -46,15 +46,36 @@ public class TypeUtils {
     }
   }
 
-  @SuppressWarnings("unchecked")
-  public static <T> T instantiate(Class<?> clazz) {
+  public static <T> T instantiate(Class<? extends T> clazz) {
     checkArgument(Modifier.isPublic(clazz.getModifiers()),
         "AppEngine's custom security manager won't let us reflectively access non-public types");
     try {
-      return (T) clazz.newInstance();
-    } catch (InstantiationException | IllegalAccessException e) {
+      return clazz.getConstructor().newInstance();
+    } catch (ReflectiveOperationException e) {
       throw new RuntimeException(e);
     }
+  }
+
+  /**
+   * Returns the class referred to by a fully qualified class name string.
+   *
+   * <p>Throws an error if the loaded class is not assignable from the expected super type class.
+   */
+  public static <T> Class<T> getClassFromString(String className, Class<T> expectedSuperType) {
+    Class<?> clazz;
+    try {
+      clazz = Class.forName(className);
+    } catch (ClassNotFoundException e) {
+      throw new IllegalArgumentException(String.format("Failed to load class %s", className), e);
+    }
+    checkArgument(
+        expectedSuperType.isAssignableFrom(clazz),
+        "%s does not implement/extend %s",
+        clazz.getSimpleName(),
+        expectedSuperType.getSimpleName());
+    @SuppressWarnings("unchecked")
+    Class<T> castedClass = (Class<T>) clazz;
+    return castedClass;
   }
 
   /**
@@ -80,14 +101,9 @@ public class TypeUtils {
   }
 
   /** Returns a predicate that tests whether classes are annotated with the given annotation. */
-  public static final Predicate<Class<?>> hasAnnotation(
+  public static Predicate<Class<?>> hasAnnotation(
       final Class<? extends Annotation> annotation) {
-    return new Predicate<Class<?>>() {
-        @Override
-        public boolean apply(Class<?> clazz) {
-          return clazz.isAnnotationPresent(annotation);
-        }
-      };
+    return clazz -> clazz.isAnnotationPresent(annotation);
   }
 
   public static void checkNoInheritanceRelationships(ImmutableSet<Class<?>> resourceClasses) {

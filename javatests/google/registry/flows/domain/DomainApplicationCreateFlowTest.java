@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,14 +17,14 @@ package google.registry.flows.domain;
 import static com.google.common.collect.Iterables.getLast;
 import static com.google.common.io.BaseEncoding.base16;
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
 import static google.registry.model.index.DomainApplicationIndex.loadActiveApplicationsByDomainName;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.assertNoBillingEvents;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.DatastoreHelper.createTlds;
 import static google.registry.testing.DatastoreHelper.deleteTld;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.newDomainApplication;
-import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.persistActiveContact;
 import static google.registry.testing.DatastoreHelper.persistActiveDomain;
 import static google.registry.testing.DatastoreHelper.persistActiveHost;
@@ -32,8 +32,9 @@ import static google.registry.testing.DatastoreHelper.persistReservedList;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.DomainApplicationSubject.assertAboutApplications;
 import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
-import static google.registry.util.DateTimeUtils.END_OF_TIME;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
+import static java.util.Comparator.comparing;
 import static org.joda.money.CurrencyUnit.EUR;
 import static org.joda.money.CurrencyUnit.USD;
 
@@ -42,93 +43,94 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.googlecode.objectify.Key;
+import google.registry.flows.EppException;
 import google.registry.flows.EppException.UnimplementedExtensionException;
-import google.registry.flows.ResourceCreateFlow.ResourceAlreadyExistsException;
 import google.registry.flows.ResourceFlowTestCase;
-import google.registry.flows.ResourceFlowUtils.BadAuthInfoForResourceException;
-import google.registry.flows.domain.BaseDomainCreateFlow.AcceptedTooLongAgoException;
-import google.registry.flows.domain.BaseDomainCreateFlow.ClaimsPeriodEndedException;
-import google.registry.flows.domain.BaseDomainCreateFlow.ExpiredClaimException;
-import google.registry.flows.domain.BaseDomainCreateFlow.InvalidTcnIdChecksumException;
-import google.registry.flows.domain.BaseDomainCreateFlow.InvalidTrademarkValidatorException;
-import google.registry.flows.domain.BaseDomainCreateFlow.MalformedTcnIdException;
-import google.registry.flows.domain.BaseDomainCreateFlow.MaxSigLifeNotSupportedException;
-import google.registry.flows.domain.BaseDomainCreateFlow.MissingClaimsNoticeException;
-import google.registry.flows.domain.BaseDomainCreateFlow.UnexpectedClaimsNoticeException;
-import google.registry.flows.domain.BaseDomainCreateFlow.UnsupportedMarkTypeException;
 import google.registry.flows.domain.DomainApplicationCreateFlow.LandrushApplicationDisallowedDuringSunriseException;
 import google.registry.flows.domain.DomainApplicationCreateFlow.NoticeCannotBeUsedWithSignedMarkException;
 import google.registry.flows.domain.DomainApplicationCreateFlow.SunriseApplicationDisallowedDuringLandrushException;
 import google.registry.flows.domain.DomainApplicationCreateFlow.UncontestedSunriseApplicationBlockedInLandrushException;
+import google.registry.flows.domain.DomainFlowTmchUtils.Base64RequiredForEncodedSignedMarksException;
+import google.registry.flows.domain.DomainFlowTmchUtils.NoMarksFoundMatchingDomainException;
+import google.registry.flows.domain.DomainFlowTmchUtils.SignedMarkCertificateExpiredException;
+import google.registry.flows.domain.DomainFlowTmchUtils.SignedMarkCertificateInvalidException;
+import google.registry.flows.domain.DomainFlowTmchUtils.SignedMarkCertificateNotYetValidException;
+import google.registry.flows.domain.DomainFlowTmchUtils.SignedMarkCertificateRevokedException;
+import google.registry.flows.domain.DomainFlowTmchUtils.SignedMarkCertificateSignatureException;
+import google.registry.flows.domain.DomainFlowTmchUtils.SignedMarkEncodingErrorException;
+import google.registry.flows.domain.DomainFlowTmchUtils.SignedMarkParsingErrorException;
+import google.registry.flows.domain.DomainFlowTmchUtils.SignedMarkRevokedErrorException;
+import google.registry.flows.domain.DomainFlowTmchUtils.SignedMarkSignatureException;
+import google.registry.flows.domain.DomainFlowTmchUtils.SignedMarksMustBeEncodedException;
+import google.registry.flows.domain.DomainFlowTmchUtils.TooManySignedMarksException;
+import google.registry.flows.domain.DomainFlowUtils.AcceptedTooLongAgoException;
 import google.registry.flows.domain.DomainFlowUtils.BadCommandForRegistryPhaseException;
 import google.registry.flows.domain.DomainFlowUtils.BadDomainNameCharacterException;
 import google.registry.flows.domain.DomainFlowUtils.BadDomainNamePartsCountException;
 import google.registry.flows.domain.DomainFlowUtils.BadPeriodUnitException;
-import google.registry.flows.domain.DomainFlowUtils.Base64RequiredForEncodedSignedMarksException;
+import google.registry.flows.domain.DomainFlowUtils.ClaimsPeriodEndedException;
 import google.registry.flows.domain.DomainFlowUtils.CurrencyUnitMismatchException;
 import google.registry.flows.domain.DomainFlowUtils.CurrencyValueScaleException;
 import google.registry.flows.domain.DomainFlowUtils.DashesInThirdAndFourthException;
 import google.registry.flows.domain.DomainFlowUtils.DomainLabelTooLongException;
+import google.registry.flows.domain.DomainFlowUtils.DomainNameExistsAsTldException;
 import google.registry.flows.domain.DomainFlowUtils.DomainReservedException;
 import google.registry.flows.domain.DomainFlowUtils.DuplicateContactForRoleException;
 import google.registry.flows.domain.DomainFlowUtils.EmptyDomainNamePartException;
+import google.registry.flows.domain.DomainFlowUtils.ExceedsMaxRegistrationYearsException;
+import google.registry.flows.domain.DomainFlowUtils.ExpiredClaimException;
 import google.registry.flows.domain.DomainFlowUtils.FeesMismatchException;
 import google.registry.flows.domain.DomainFlowUtils.FeesRequiredForPremiumNameException;
 import google.registry.flows.domain.DomainFlowUtils.InvalidIdnDomainLabelException;
+import google.registry.flows.domain.DomainFlowUtils.InvalidLrpTokenException;
 import google.registry.flows.domain.DomainFlowUtils.InvalidPunycodeException;
+import google.registry.flows.domain.DomainFlowUtils.InvalidTcnIdChecksumException;
+import google.registry.flows.domain.DomainFlowUtils.InvalidTrademarkValidatorException;
 import google.registry.flows.domain.DomainFlowUtils.LaunchPhaseMismatchException;
 import google.registry.flows.domain.DomainFlowUtils.LeadingDashException;
 import google.registry.flows.domain.DomainFlowUtils.LinkedResourcesDoNotExistException;
+import google.registry.flows.domain.DomainFlowUtils.MalformedTcnIdException;
+import google.registry.flows.domain.DomainFlowUtils.MaxSigLifeNotSupportedException;
+import google.registry.flows.domain.DomainFlowUtils.MissingClaimsNoticeException;
 import google.registry.flows.domain.DomainFlowUtils.MissingContactTypeException;
-import google.registry.flows.domain.DomainFlowUtils.NameserversNotAllowedException;
-import google.registry.flows.domain.DomainFlowUtils.NameserversNotSpecifiedException;
-import google.registry.flows.domain.DomainFlowUtils.NoMarksFoundMatchingDomainException;
+import google.registry.flows.domain.DomainFlowUtils.NameserversNotAllowedForDomainException;
+import google.registry.flows.domain.DomainFlowUtils.NameserversNotAllowedForTldException;
+import google.registry.flows.domain.DomainFlowUtils.NameserversNotSpecifiedForNameserverRestrictedDomainException;
+import google.registry.flows.domain.DomainFlowUtils.NameserversNotSpecifiedForTldWithNameserverWhitelistException;
 import google.registry.flows.domain.DomainFlowUtils.NotAuthorizedForTldException;
 import google.registry.flows.domain.DomainFlowUtils.PremiumNameBlockedException;
 import google.registry.flows.domain.DomainFlowUtils.RegistrantNotAllowedException;
-import google.registry.flows.domain.DomainFlowUtils.SignedMarkCertificateExpiredException;
-import google.registry.flows.domain.DomainFlowUtils.SignedMarkCertificateInvalidException;
-import google.registry.flows.domain.DomainFlowUtils.SignedMarkCertificateNotYetValidException;
-import google.registry.flows.domain.DomainFlowUtils.SignedMarkCertificateRevokedException;
-import google.registry.flows.domain.DomainFlowUtils.SignedMarkCertificateSignatureException;
-import google.registry.flows.domain.DomainFlowUtils.SignedMarkEncodingErrorException;
-import google.registry.flows.domain.DomainFlowUtils.SignedMarkParsingErrorException;
-import google.registry.flows.domain.DomainFlowUtils.SignedMarkRevokedErrorException;
-import google.registry.flows.domain.DomainFlowUtils.SignedMarkSignatureException;
-import google.registry.flows.domain.DomainFlowUtils.SignedMarksMustBeEncodedException;
+import google.registry.flows.domain.DomainFlowUtils.RegistrarMustBeActiveToCreateDomainsException;
 import google.registry.flows.domain.DomainFlowUtils.TldDoesNotExistException;
 import google.registry.flows.domain.DomainFlowUtils.TooManyDsRecordsException;
 import google.registry.flows.domain.DomainFlowUtils.TooManyNameserversException;
-import google.registry.flows.domain.DomainFlowUtils.TooManySignedMarksException;
 import google.registry.flows.domain.DomainFlowUtils.TrailingDashException;
+import google.registry.flows.domain.DomainFlowUtils.UnexpectedClaimsNoticeException;
 import google.registry.flows.domain.DomainFlowUtils.UnsupportedFeeAttributeException;
+import google.registry.flows.domain.DomainFlowUtils.UnsupportedMarkTypeException;
+import google.registry.flows.exceptions.ResourceAlreadyExistsException;
 import google.registry.model.domain.DomainApplication;
-import google.registry.model.domain.GracePeriod;
 import google.registry.model.domain.LrpTokenEntity;
 import google.registry.model.domain.launch.ApplicationStatus;
 import google.registry.model.domain.launch.LaunchNotice;
 import google.registry.model.domain.launch.LaunchPhase;
-import google.registry.model.domain.rgp.GracePeriodStatus;
 import google.registry.model.domain.secdns.DelegationSignerData;
 import google.registry.model.registrar.Registrar;
+import google.registry.model.registrar.Registrar.State;
 import google.registry.model.registry.Registry;
 import google.registry.model.registry.Registry.TldState;
 import google.registry.model.registry.label.ReservedList;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.model.smd.SignedMarkRevocationList;
-import google.registry.testing.DatastoreHelper;
-import google.registry.testing.RegistryConfigRule;
 import google.registry.tmch.TmchCertificateAuthority;
-import java.util.Collections;
-import java.util.Comparator;
+import google.registry.tmch.TmchXmlSignature;
+import java.security.GeneralSecurityException;
 import java.util.List;
 import org.joda.money.CurrencyUnit;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 import org.joda.time.Interval;
 import org.junit.Before;
-import org.junit.Ignore;
-import org.junit.Rule;
 import org.junit.Test;
 
 /** Unit tests for {@link DomainApplicationCreateFlow}. */
@@ -137,17 +139,12 @@ public class DomainApplicationCreateFlowTest
 
   private static final String CLAIMS_KEY = "2013041500/2/6/9/rJ1NrDO92vDsAzf7EQzgjX4R0000000001";
 
-  @Rule
-  public final RegistryConfigRule configRule = new RegistryConfigRule();
-
   /** This is the id of the SMD stored in "domain_create_sunrise_encoded_signed_mark.xml". */
   public static final String SMD_ID = "0000001761376042759136-65535";
 
   private ReservedList createReservedList() {
     return persistReservedList(
-        "tld-reserved",
-        "testandvalidate,FULLY_BLOCKED",
-        "test---validate,ALLOWED_IN_SUNRISE");
+        "tld-reserved", "testandvalidate,FULLY_BLOCKED", "test---validate,ALLOWED_IN_SUNRISE");
   }
 
   @Before
@@ -174,8 +171,7 @@ public class DomainApplicationCreateFlowTest
     doSuccessfulTest(responseXmlFile, sunriseApplication, 1, null, null);
   }
 
-  private void doSuccessfulTest(
-      String responseXmlFile, boolean sunriseApplication, int years)
+  private void doSuccessfulTest(String responseXmlFile, boolean sunriseApplication, int years)
       throws Exception {
     doSuccessfulTest(responseXmlFile, sunriseApplication, years, null, null);
   }
@@ -184,7 +180,8 @@ public class DomainApplicationCreateFlowTest
       String responseXmlFile,
       boolean sunriseApplication,
       String feeExtensionVersion,
-      String feeExtensionNamespace) throws Exception {
+      String feeExtensionNamespace)
+      throws Exception {
     doSuccessfulTest(
         responseXmlFile, sunriseApplication, 1, feeExtensionVersion, feeExtensionNamespace);
   }
@@ -192,30 +189,35 @@ public class DomainApplicationCreateFlowTest
   private void doSuccessfulTest(
       String responseXmlFile,
       boolean sunriseApplication,
-      int years, String feeExtensionVersion,
-      String feeExtensionNamespace) throws Exception {
+      int years,
+      String feeExtensionVersion,
+      String feeExtensionNamespace)
+      throws Exception {
     assertTransactionalFlow(true);
     runFlowAssertResponse(
         (feeExtensionVersion == null)
-          ? readFile(responseXmlFile)
-          : readFile(
-              responseXmlFile,
-              ImmutableMap.of("FEE_VERSION", feeExtensionVersion, "FEE_NS", feeExtensionNamespace)),
+            ? loadFile(responseXmlFile)
+            : loadFile(
+                responseXmlFile,
+                ImmutableMap.of(
+                    "FEE_VERSION", feeExtensionVersion, "FEE_NS", feeExtensionNamespace)),
         "epp.response.extension.creData.applicationID",
         "epp.response.resData.creData.crDate");
     // Check that the domain application was created and persisted with a history entry.
     // We want the one with the newest creation time, but lacking an index we need this code.
     List<DomainApplication> applications = ofy().load().type(DomainApplication.class).list();
-    Collections.sort(applications, new Comparator<DomainApplication>() {
-      @Override
-      public int compare(DomainApplication a, DomainApplication b) {
-        return a.getCreationTime().compareTo(b.getCreationTime());
-      }});
-    assertAboutApplications().that(getLast(applications))
-        .hasFullyQualifiedDomainName(getUniqueIdFromCommand()).and()
-        .hasNumEncodedSignedMarks(sunriseApplication ? 1 : 0).and()
+    applications.sort(comparing(DomainApplication::getCreationTime));
+    assertAboutApplications()
+        .that(getLast(applications))
+        .hasFullyQualifiedDomainName(getUniqueIdFromCommand())
+        .and()
+        .hasNumEncodedSignedMarks(sunriseApplication ? 1 : 0)
+        .and()
+        .hasPeriodYears(years)
+        .and()
         .hasOnlyOneHistoryEntryWhich()
-        .hasType(HistoryEntry.Type.DOMAIN_APPLICATION_CREATE).and()
+        .hasType(HistoryEntry.Type.DOMAIN_APPLICATION_CREATE)
+        .and()
         .hasPeriodYears(years);
     assertNoBillingEvents();
     assertThat(loadActiveApplicationsByDomainName(getUniqueIdFromCommand(), clock.nowUtc()))
@@ -227,7 +229,7 @@ public class DomainApplicationCreateFlowTest
     runFlowAssertResponse(
         CommitMode.LIVE,
         UserPrivileges.SUPERUSER,
-        readFile(filename),
+        loadFile(filename),
         "epp.response.extension.creData.applicationID",
         "epp.response.resData.creData.crDate",
         "epp.response.extension.creData.phase");
@@ -239,8 +241,10 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrush_encoded_signed_mark.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    dryRunFlowAssertResponse(readFile("domain_create_sunrush_encoded_signed_mark_response.xml"),
-        "epp.response.extension.creData.applicationID", "epp.response.resData.creData.crDate");
+    dryRunFlowAssertResponse(
+        loadFile("domain_create_sunrush_encoded_signed_mark_response.xml"),
+        "epp.response.extension.creData.applicationID",
+        "epp.response.resData.creData.crDate");
   }
 
   @Test
@@ -249,8 +253,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrush_encoded_signed_mark_corrupt.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(SignedMarkParsingErrorException.class);
-    runFlow();
+    EppException thrown = expectThrows(SignedMarkParsingErrorException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -259,8 +263,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrush_encoded_signed_mark_revoked_cert.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(SignedMarkCertificateRevokedException.class);
-    runFlow();
+    EppException thrown = expectThrows(SignedMarkCertificateRevokedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -271,8 +275,8 @@ public class DomainApplicationCreateFlowTest
     clock.advanceOneMilli();
     clock.setTo(DateTime.parse("2022-01-01"));
     clock.setTo(DateTime.parse("2022-01-01"));
-    thrown.expect(SignedMarkCertificateExpiredException.class);
-    runFlow();
+    EppException thrown = expectThrows(SignedMarkCertificateExpiredException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -281,33 +285,42 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrush_encoded_signed_mark.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    clock.setTo(DateTime.parse("2012-07-26T00:01:00Z"));
     clock.setTo(DateTime.parse("2012-07-22T00:01:00Z"));
-    thrown.expect(SignedMarkCertificateNotYetValidException.class);
-    runFlow();
+    EppException thrown =
+        expectThrows(SignedMarkCertificateNotYetValidException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
-  @Ignore("I'm not sure how to get this to throw without creating a custom CA / certs")
   public void testFailure_signedMarkCertificateCorrupt() throws Exception {
-    configRule.useTmchProdCert();
+    useTmchProdCert();
     createTld("tld", TldState.SUNRUSH);
     setEppInput("domain_create_sunrush_encoded_signed_mark_certificate_corrupt.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(SignedMarkCertificateInvalidException.class);
-    runFlow();
+    // It's hard to make the real verification code throw a GeneralSecurityException. Instead,
+    // replace the TmchXmlSignature with a stub that throws it for us.
+    this.testTmchXmlSignature =
+        new TmchXmlSignature(null) {
+          @Override
+          public void verify(byte[] smdXml) throws GeneralSecurityException {
+            throw new GeneralSecurityException();
+          }
+        };
+    EppException thrown = expectThrows(SignedMarkCertificateInvalidException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_signedMarkCertificateSignature() throws Exception {
-    configRule.useTmchProdCert();
+    useTmchProdCert();
     createTld("tld", TldState.SUNRUSH);
     setEppInput("domain_create_sunrush_encoded_signed_mark.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(SignedMarkCertificateSignatureException.class);
-    runFlow();
+    EppException thrown =
+        expectThrows(SignedMarkCertificateSignatureException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -316,8 +329,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrush_encoded_signed_mark_signature_corrupt.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(SignedMarkSignatureException.class);
-    runFlow();
+    EppException thrown = expectThrows(SignedMarkSignatureException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -326,8 +339,10 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrush.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    dryRunFlowAssertResponse(readFile("domain_create_sunrush_response.xml"),
-        "epp.response.extension.creData.applicationID", "epp.response.resData.creData.crDate");
+    dryRunFlowAssertResponse(
+        loadFile("domain_create_sunrush_response.xml"),
+        "epp.response.extension.creData.applicationID",
+        "epp.response.resData.creData.crDate");
   }
 
   @Test
@@ -338,8 +353,10 @@ public class DomainApplicationCreateFlowTest
     persistClaimsList(ImmutableMap.of("example-one", CLAIMS_KEY));
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    dryRunFlowAssertResponse(readFile("domain_create_sunrush_response_claims.xml"),
-        "epp.response.extension.creData.applicationID", "epp.response.resData.creData.crDate");
+    dryRunFlowAssertResponse(
+        loadFile("domain_create_sunrush_response_claims.xml"),
+        "epp.response.extension.creData.applicationID",
+        "epp.response.resData.creData.crDate");
   }
 
   @Test
@@ -349,7 +366,8 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     doSuccessfulTest("domain_create_sunrush_encoded_signed_mark_response.xml", true);
-    assertAboutApplications().that(getOnlyGlobalResource(DomainApplication.class))
+    assertAboutApplications()
+        .that(getOnlyGlobalResource(DomainApplication.class))
         .hasApplicationStatus(ApplicationStatus.VALIDATED);
   }
 
@@ -360,7 +378,8 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     doSuccessfulTest("domain_create_sunrush_allowedinsunrise_response.xml", true);
-    assertAboutApplications().that(getOnlyGlobalResource(DomainApplication.class))
+    assertAboutApplications()
+        .that(getOnlyGlobalResource(DomainApplication.class))
         .hasApplicationStatus(ApplicationStatus.VALIDATED);
   }
 
@@ -372,7 +391,8 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     doSuccessfulTest("domain_create_sunrush_encoded_signed_mark_response.xml", true);
-    assertAboutApplications().that(getOnlyGlobalResource(DomainApplication.class))
+    assertAboutApplications()
+        .that(getOnlyGlobalResource(DomainApplication.class))
         .hasApplicationStatus(ApplicationStatus.VALIDATED);
   }
 
@@ -388,13 +408,16 @@ public class DomainApplicationCreateFlowTest
   @Test
   public void testFailure_landrushApplicationReservedAllowedInSunrise() throws Exception {
     createTld("tld", TldState.SUNRUSH);
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(ImmutableSet.of(createReservedList())).build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(ImmutableSet.of(createReservedList()))
+            .build());
     setEppInput("domain_create_landrush_allowedinsunrise.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(DomainReservedException.class);
-    runFlow();
+    EppException thrown = expectThrows(DomainReservedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -404,21 +427,34 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     // Modify the Registrar to block premium names.
-    persistResource(Registrar.loadByClientId("TheRegistrar").asBuilder()
-        .setBlockPremiumNames(true)
-        .build());
-    thrown.expect(PremiumNameBlockedException.class);
-    runFlow();
+    persistResource(loadRegistrar("TheRegistrar").asBuilder().setBlockPremiumNames(true).build());
+    EppException thrown = expectThrows(PremiumNameBlockedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
-  public void testFailure_landrushFeeNotProvidedOnPremiumName() throws Exception {
+  public void testFailure_landrushFeeNotProvidedOnPremiumName_whenRegistryRequiresFeeAcking()
+      throws Exception {
     createTld("example", TldState.SUNRUSH);
     setEppInput("domain_create_landrush_premium.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(FeesRequiredForPremiumNameException.class);
-    runFlow();
+    EppException thrown = expectThrows(FeesRequiredForPremiumNameException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testFailure_landrushFeeNotProvidedOnPremiumName_whenRegistrarRequiresFeeAcking()
+      throws Exception {
+    createTld("example", TldState.SUNRUSH);
+    persistResource(Registry.get("example").asBuilder().setPremiumPriceAckRequired(false).build());
+    persistResource(
+        loadRegistrar("TheRegistrar").asBuilder().setPremiumPriceAckRequired(true).build());
+    setEppInput("domain_create_landrush_premium.xml");
+    persistContactsAndHosts();
+    clock.advanceOneMilli();
+    EppException thrown = expectThrows(FeesRequiredForPremiumNameException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -430,12 +466,14 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     doSuccessfulTest("domain_create_sunrush_response_claims.xml", false);
-    assertAboutApplications().that(getOnlyGlobalResource(DomainApplication.class))
-        .hasLaunchNotice(LaunchNotice.create(
-            "370d0b7c9223372036854775807",
-            "tmch",
-            DateTime.parse("2010-08-16T09:00:00.0Z"),
-            DateTime.parse("2009-08-16T09:00:00.0Z")))
+    assertAboutApplications()
+        .that(getOnlyGlobalResource(DomainApplication.class))
+        .hasLaunchNotice(
+            LaunchNotice.create(
+                "370d0b7c9223372036854775807",
+                "tmch",
+                DateTime.parse("2010-08-16T09:00:00.0Z"),
+                DateTime.parse("2009-08-16T09:00:00.0Z")))
         .and()
         .hasApplicationStatus(ApplicationStatus.VALIDATED);
   }
@@ -447,12 +485,11 @@ public class DomainApplicationCreateFlowTest
     persistClaimsList(ImmutableMap.of("test-validate", CLAIMS_KEY));
     setEppInput("domain_create_sunrush.xml");
     persistContactsAndHosts();
-    persistResource(Registry.get("tld").asBuilder()
-        .setClaimsPeriodEnd(clock.nowUtc())
-        .build());
+    persistResource(Registry.get("tld").asBuilder().setClaimsPeriodEnd(clock.nowUtc()).build());
     clock.advanceOneMilli();
     doSuccessfulTest("domain_create_sunrush_response.xml", false);
-    assertAboutApplications().that(getOnlyGlobalResource(DomainApplication.class))
+    assertAboutApplications()
+        .that(getOnlyGlobalResource(DomainApplication.class))
         .hasLaunchNotice(null)
         .and()
         .hasApplicationStatus(ApplicationStatus.VALIDATED);
@@ -527,8 +564,8 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     setEppInput("domain_create_landrush_fee_refundable.xml", ImmutableMap.of("FEE_VERSION", "0.6"));
-    thrown.expect(UnsupportedFeeAttributeException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -538,8 +575,8 @@ public class DomainApplicationCreateFlowTest
     clock.advanceOneMilli();
     setEppInput(
         "domain_create_landrush_fee_refundable.xml", ImmutableMap.of("FEE_VERSION", "0.11"));
-    thrown.expect(UnsupportedFeeAttributeException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -549,8 +586,8 @@ public class DomainApplicationCreateFlowTest
     clock.advanceOneMilli();
     setEppInput(
         "domain_create_landrush_fee_refundable.xml", ImmutableMap.of("FEE_VERSION", "0.12"));
-    thrown.expect(UnsupportedFeeAttributeException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -560,8 +597,8 @@ public class DomainApplicationCreateFlowTest
     clock.advanceOneMilli();
     setEppInput(
         "domain_create_landrush_fee_grace_period.xml", ImmutableMap.of("FEE_VERSION", "0.6"));
-    thrown.expect(UnsupportedFeeAttributeException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -571,8 +608,8 @@ public class DomainApplicationCreateFlowTest
     clock.advanceOneMilli();
     setEppInput(
         "domain_create_landrush_fee_grace_period.xml", ImmutableMap.of("FEE_VERSION", "0.11"));
-    thrown.expect(UnsupportedFeeAttributeException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -582,8 +619,8 @@ public class DomainApplicationCreateFlowTest
     clock.advanceOneMilli();
     setEppInput(
         "domain_create_landrush_fee_grace_period.xml", ImmutableMap.of("FEE_VERSION", "0.12"));
-    thrown.expect(UnsupportedFeeAttributeException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -592,8 +629,8 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     setEppInput("domain_create_landrush_fee_applied.xml", ImmutableMap.of("FEE_VERSION", "0.6"));
-    thrown.expect(UnsupportedFeeAttributeException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -602,8 +639,8 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     setEppInput("domain_create_landrush_fee_applied.xml", ImmutableMap.of("FEE_VERSION", "0.11"));
-    thrown.expect(UnsupportedFeeAttributeException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -612,8 +649,8 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     setEppInput("domain_create_landrush_fee_applied.xml", ImmutableMap.of("FEE_VERSION", "0.12"));
-    thrown.expect(UnsupportedFeeAttributeException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -625,12 +662,14 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     doSuccessfulTest("domain_create_landrush_response_claims.xml", false);
-    assertAboutApplications().that(getOnlyGlobalResource(DomainApplication.class))
-        .hasLaunchNotice(LaunchNotice.create(
-            "370d0b7c9223372036854775807",
-            "tmch",
-            DateTime.parse("2010-08-16T09:00:00.0Z"),
-            DateTime.parse("2009-08-16T09:00:00.0Z")))
+    assertAboutApplications()
+        .that(getOnlyGlobalResource(DomainApplication.class))
+        .hasLaunchNotice(
+            LaunchNotice.create(
+                "370d0b7c9223372036854775807",
+                "tmch",
+                DateTime.parse("2010-08-16T09:00:00.0Z"),
+                DateTime.parse("2009-08-16T09:00:00.0Z")))
         .and()
         .hasApplicationStatus(ApplicationStatus.VALIDATED);
   }
@@ -642,12 +681,11 @@ public class DomainApplicationCreateFlowTest
     persistClaimsList(ImmutableMap.of("test-validate", CLAIMS_KEY));
     setEppInput("domain_create_landrush.xml");
     persistContactsAndHosts();
-    persistResource(Registry.get("tld").asBuilder()
-        .setClaimsPeriodEnd(clock.nowUtc())
-        .build());
+    persistResource(Registry.get("tld").asBuilder().setClaimsPeriodEnd(clock.nowUtc()).build());
     clock.advanceOneMilli();
     doSuccessfulTest("domain_create_landrush_response.xml", false);
-    assertAboutApplications().that(getOnlyGlobalResource(DomainApplication.class))
+    assertAboutApplications()
+        .that(getOnlyGlobalResource(DomainApplication.class))
         .hasLaunchNotice(null)
         .and()
         .hasApplicationStatus(ApplicationStatus.VALIDATED);
@@ -680,7 +718,8 @@ public class DomainApplicationCreateFlowTest
   @Test
   public void testSuccess_smdRevokedInFuture() throws Exception {
     SignedMarkRevocationList.create(
-        clock.nowUtc(), ImmutableMap.of(SMD_ID, clock.nowUtc().plusDays(1))).save();
+            clock.nowUtc(), ImmutableMap.of(SMD_ID, clock.nowUtc().plusDays(1)))
+        .save();
     persistContactsAndHosts();
     clock.advanceOneMilli();
     doSuccessfulTest("domain_create_sunrise_encoded_signed_mark_response.xml", true);
@@ -700,9 +739,10 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     doSuccessfulTest("domain_create_sunrise_encoded_signed_mark_response.xml", true);
-    assertAboutApplications().that(getOnlyGlobalResource(DomainApplication.class))
-        .hasExactlyDsData(DelegationSignerData.create(
-            12345, 3, 1, base16().decode("49FD46E6C4B45C55D4AC")));
+    assertAboutApplications()
+        .that(getOnlyGlobalResource(DomainApplication.class))
+        .hasExactlyDsData(
+            DelegationSignerData.create(12345, 3, 1, base16().decode("49FD46E6C4B45C55D4AC")));
   }
 
   @Test
@@ -719,8 +759,26 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_without_marks.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(LandrushApplicationDisallowedDuringSunriseException.class);
-    runFlow();
+    EppException thrown =
+        expectThrows(LandrushApplicationDisallowedDuringSunriseException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testFailure_suspendedRegistrarCantCreateDomainApplication() throws Exception {
+    setEppInput("domain_create_sunrise_encoded_signed_mark.xml");
+    persistContactsAndHosts();
+    clock.advanceOneMilli();
+    persistResource(
+        Registrar.loadByClientId("TheRegistrar")
+            .get()
+            .asBuilder()
+            .setState(State.SUSPENDED)
+            .build());
+    clock.advanceOneMilli();
+    EppException thrown =
+        expectThrows(RegistrarMustBeActiveToCreateDomainsException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -729,8 +787,9 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_landrush_signed_mark.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(SunriseApplicationDisallowedDuringLandrushException.class);
-    runFlow();
+    EppException thrown =
+        expectThrows(SunriseApplicationDisallowedDuringLandrushException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -738,8 +797,8 @@ public class DomainApplicationCreateFlowTest
     SignedMarkRevocationList.create(clock.nowUtc(), ImmutableMap.of(SMD_ID, clock.nowUtc())).save();
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(SignedMarkRevokedErrorException.class);
-    runFlow();
+    EppException thrown = expectThrows(SignedMarkRevokedErrorException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -748,8 +807,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrush_14_nameservers.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(TooManyNameserversException.class);
-    runFlow();
+    EppException thrown = expectThrows(TooManyNameserversException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -757,8 +816,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_with_secdns_maxsiglife.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(MaxSigLifeNotSupportedException.class);
-    runFlow();
+    EppException thrown = expectThrows(MaxSigLifeNotSupportedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -766,8 +825,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_signed_mark_with_secdns_9_records.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(TooManyDsRecordsException.class);
-    runFlow();
+    EppException thrown = expectThrows(TooManyDsRecordsException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -775,8 +834,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_wrong_extension.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(UnimplementedExtensionException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnimplementedExtensionException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -784,8 +843,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_signed_mark_reserved.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(DomainReservedException.class);
-    runFlow();
+    EppException thrown = expectThrows(DomainReservedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -805,7 +864,7 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     runFlowAssertResponse(
-        readFile("domain_create_landrush_premium_response.xml"),
+        loadFile("domain_create_landrush_premium_response.xml"),
         "epp.response.extension.creData.applicationID",
         "epp.response.resData.creData.crDate",
         "epp.response.extension.creData.phase");
@@ -819,17 +878,16 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     // Modify the Registrar to block premium names.
-    persistResource(Registrar.loadByClientId("TheRegistrar").asBuilder()
-        .setBlockPremiumNames(true)
-        .build());
+    persistResource(loadRegistrar("TheRegistrar").asBuilder().setBlockPremiumNames(true).build());
     runSuperuserFlow("domain_create_landrush_premium_response.xml");
   }
 
   private DomainApplication persistSunriseApplication() throws Exception {
-    return persistResource(newDomainApplication(getUniqueIdFromCommand())
-        .asBuilder()
-        .setPhase(LaunchPhase.SUNRISE)
-        .build());
+    return persistResource(
+        newDomainApplication(getUniqueIdFromCommand())
+            .asBuilder()
+            .setPhase(LaunchPhase.SUNRISE)
+            .build());
   }
 
   @Test
@@ -839,8 +897,9 @@ public class DomainApplicationCreateFlowTest
     persistSunriseApplication();
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(UncontestedSunriseApplicationBlockedInLandrushException.class);
-    runFlow();
+    EppException thrown =
+        expectThrows(UncontestedSunriseApplicationBlockedInLandrushException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -876,15 +935,18 @@ public class DomainApplicationCreateFlowTest
   @Test
   public void testSuccess_landrushLrpApplication() throws Exception {
     createTld("tld", TldState.LANDRUSH);
-    persistResource(Registry.get("tld").asBuilder()
-        .setLrpPeriod(new Interval(clock.nowUtc().minusDays(1), clock.nowUtc().plusDays(1)))
-        .build());
-    LrpTokenEntity token = persistResource(
-        new LrpTokenEntity.Builder()
-            .setToken("lrptokentest")
-            .setAssignee("test-validate.tld")
-            .setValidTlds(ImmutableSet.of("tld"))
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setLrpPeriod(new Interval(clock.nowUtc().minusDays(1), clock.nowUtc().plusDays(1)))
             .build());
+    LrpTokenEntity token =
+        persistResource(
+            new LrpTokenEntity.Builder()
+                .setToken("lrptokentest")
+                .setAssignee("test-validate.tld")
+                .setValidTlds(ImmutableSet.of("tld"))
+                .build());
     setEppInput("domain_create_landrush_lrp.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
@@ -893,31 +955,22 @@ public class DomainApplicationCreateFlowTest
   }
 
   @Test
-  public void testSuccess_landrush_duringLrpWithMissingToken() throws Exception {
-    createTld("tld", TldState.LANDRUSH);
-    persistResource(Registry.get("tld").asBuilder()
-        .setLrpPeriod(new Interval(clock.nowUtc().minusDays(1), clock.nowUtc().plusDays(1)))
-        .build());
-    setEppInput("domain_create_landrush.xml");
-    persistContactsAndHosts();
-    clock.advanceOneMilli();
-    doSuccessfulTest("domain_create_landrush_response.xml", false);
-  }
-
-  @Test
   public void testSuccess_landrushLrpApplication_superuser() throws Exception {
     // Using an LRP token as superuser should still mark the token as redeemed (i.e. same effect
     // as non-superuser).
     createTld("tld", TldState.LANDRUSH);
-    persistResource(Registry.get("tld").asBuilder()
-        .setLrpPeriod(new Interval(clock.nowUtc().minusDays(1), clock.nowUtc().plusDays(1)))
-        .build());
-    LrpTokenEntity token = persistResource(
-        new LrpTokenEntity.Builder()
-            .setToken("lrptokentest")
-            .setAssignee("test-validate.tld")
-            .setValidTlds(ImmutableSet.of("tld"))
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setLrpPeriod(new Interval(clock.nowUtc().minusDays(1), clock.nowUtc().plusDays(1)))
             .build());
+    LrpTokenEntity token =
+        persistResource(
+            new LrpTokenEntity.Builder()
+                .setToken("lrptokentest")
+                .setAssignee("test-validate.tld")
+                .setValidTlds(ImmutableSet.of("tld"))
+                .build());
     setEppInput("domain_create_landrush_lrp.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
@@ -928,60 +981,69 @@ public class DomainApplicationCreateFlowTest
   @Test
   public void testFailure_landrushLrpApplication_badToken() throws Exception {
     createTld("tld", TldState.LANDRUSH);
-    persistResource(Registry.get("tld").asBuilder()
-        .setLrpPeriod(new Interval(clock.nowUtc().minusDays(1), clock.nowUtc().plusDays(1)))
-        .build());
-    persistResource(new LrpTokenEntity.Builder()
-        .setToken("lrptokentest2")
-        .setAssignee("test-validate.tld")
-        .setValidTlds(ImmutableSet.of("tld"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setLrpPeriod(new Interval(clock.nowUtc().minusDays(1), clock.nowUtc().plusDays(1)))
+            .build());
+    persistResource(
+        new LrpTokenEntity.Builder()
+            .setToken("lrptokentest2")
+            .setAssignee("test-validate.tld")
+            .setValidTlds(ImmutableSet.of("tld"))
+            .build());
     setEppInput("domain_create_landrush_lrp.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(BadAuthInfoForResourceException.class);
-    runFlow();
+    EppException thrown = expectThrows(InvalidLrpTokenException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_landrushLrpApplication_tokenForWrongTld() throws Exception {
     createTld("tld", TldState.LANDRUSH);
-    persistResource(Registry.get("tld").asBuilder()
-        .setLrpPeriod(new Interval(clock.nowUtc().minusDays(1), clock.nowUtc().plusDays(1)))
-        .build());
-    persistResource(new LrpTokenEntity.Builder()
-        .setToken("lrptokentest")
-        // The below assignee doesn't really make sense here, but as of right now the validation
-        // in TldSpecificLogicProxy is just a match on the domain name, so this test ensures that
-        // the registration fails due to invalid TLDs even if everything else otherwise matches.
-        .setAssignee("test-validate.tld")
-        .setValidTlds(ImmutableSet.of("other"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setLrpPeriod(new Interval(clock.nowUtc().minusDays(1), clock.nowUtc().plusDays(1)))
+            .build());
+    persistResource(
+        new LrpTokenEntity.Builder()
+            .setToken("lrptokentest")
+            // The below assignee doesn't really make sense here, but as of right now the validation
+            // in DomainPricingLogic is just a match on the domain name, so this test ensures that
+            // the registration fails due to invalid TLDs even if everything else otherwise matches.
+            .setAssignee("test-validate.tld")
+            .setValidTlds(ImmutableSet.of("other"))
+            .build());
     setEppInput("domain_create_landrush_lrp.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(BadAuthInfoForResourceException.class);
-    runFlow();
+    EppException thrown = expectThrows(InvalidLrpTokenException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_landrushLrpApplication_usedToken() throws Exception {
     createTld("tld", TldState.LANDRUSH);
-    persistResource(Registry.get("tld").asBuilder()
-        .setLrpPeriod(new Interval(clock.nowUtc().minusDays(1), clock.nowUtc().plusDays(1)))
-        .build());
-    persistResource(new LrpTokenEntity.Builder()
-        .setToken("lrptokentest")
-        .setAssignee("test-validate.tld")
-        .setValidTlds(ImmutableSet.of("tld"))
-        .setRedemptionHistoryEntry(
-            Key.create(HistoryEntry.class, "1")) // as long as it's not null
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setLrpPeriod(new Interval(clock.nowUtc().minusDays(1), clock.nowUtc().plusDays(1)))
+            .build());
+    persistResource(
+        new LrpTokenEntity.Builder()
+            .setToken("lrptokentest")
+            .setAssignee("test-validate.tld")
+            .setValidTlds(ImmutableSet.of("tld"))
+            .setRedemptionHistoryEntry(
+                Key.create(HistoryEntry.class, "1")) // as long as it's not null
+            .build());
     setEppInput("domain_create_landrush_lrp.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(BadAuthInfoForResourceException.class);
-    runFlow();
+    EppException thrown = expectThrows(InvalidLrpTokenException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1006,18 +1068,21 @@ public class DomainApplicationCreateFlowTest
   @Test
   public void testSuccess_landrushApplicationWithLrpToken_noLongerLrp() throws Exception {
     createTld("tld");
-    persistResource(Registry.get("tld").asBuilder()
-        .setLrpPeriod(new Interval(clock.nowUtc().minusDays(2), clock.nowUtc().minusDays(1)))
-        .setTldStateTransitions(ImmutableSortedMap.of(
-            START_OF_TIME, TldState.SUNRISE,
-            clock.nowUtc(), TldState.LANDRUSH))
-        .build());
-    LrpTokenEntity token = persistResource(
-        new LrpTokenEntity.Builder()
-            .setToken("lrptokentest")
-            .setAssignee("test-validate.tld")
-            .setValidTlds(ImmutableSet.of("tld"))
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setLrpPeriod(new Interval(clock.nowUtc().minusDays(2), clock.nowUtc().minusDays(1)))
+            .setTldStateTransitions(
+                ImmutableSortedMap.of(
+                    START_OF_TIME, TldState.SUNRISE, clock.nowUtc(), TldState.LANDRUSH))
             .build());
+    LrpTokenEntity token =
+        persistResource(
+            new LrpTokenEntity.Builder()
+                .setToken("lrptokentest")
+                .setAssignee("test-validate.tld")
+                .setValidTlds(ImmutableSet.of("tld"))
+                .build());
     setEppInput("domain_create_landrush_lrp.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
@@ -1028,13 +1093,28 @@ public class DomainApplicationCreateFlowTest
   }
 
   @Test
+  public void testFailure_landrush_duringLrpWithMissingToken() throws Exception {
+    createTld("tld", TldState.LANDRUSH);
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setLrpPeriod(new Interval(clock.nowUtc().minusDays(1), clock.nowUtc().plusDays(1)))
+            .build());
+    setEppInput("domain_create_landrush.xml");
+    persistContactsAndHosts();
+    clock.advanceOneMilli();
+    EppException thrown = expectThrows(InvalidLrpTokenException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
   public void testFailure_landrushWithPeriodInMonths() throws Exception {
     createTld("tld", TldState.LANDRUSH);
     setEppInput("domain_create_landrush_months.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(BadPeriodUnitException.class);
-    runFlow();
+    EppException thrown = expectThrows(BadPeriodUnitException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1042,8 +1122,9 @@ public class DomainApplicationCreateFlowTest
     persistActiveHost("ns1.example.net");
     persistActiveContact("jd1234");
     persistActiveContact("sh8013");
-    thrown.expect(LinkedResourcesDoNotExistException.class, "(ns2.example.net)");
-    runFlow();
+    LinkedResourcesDoNotExistException thrown =
+        expectThrows(LinkedResourcesDoNotExistException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains("(ns2.example.net)");
   }
 
   @Test
@@ -1051,8 +1132,9 @@ public class DomainApplicationCreateFlowTest
     persistActiveHost("ns1.example.net");
     persistActiveHost("ns2.example.net");
     persistActiveContact("jd1234");
-    thrown.expect(LinkedResourcesDoNotExistException.class, "(sh8013)");
-    runFlow();
+    LinkedResourcesDoNotExistException thrown =
+        expectThrows(LinkedResourcesDoNotExistException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains("(sh8013)");
   }
 
   @Test
@@ -1061,8 +1143,8 @@ public class DomainApplicationCreateFlowTest
     createTld("foo", TldState.SUNRISE);
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(TldDoesNotExistException.class);
-    runFlow();
+    EppException thrown = expectThrows(TldDoesNotExistException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1070,19 +1152,17 @@ public class DomainApplicationCreateFlowTest
     createTld("tld", TldState.PREDELEGATION);
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(BadCommandForRegistryPhaseException.class);
-    runFlow();
+    EppException thrown = expectThrows(BadCommandForRegistryPhaseException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_notAuthorizedForTld() throws Exception {
-    DatastoreHelper.persistResource(Registrar.loadByClientId("TheRegistrar")
-        .asBuilder()
-        .setAllowedTlds(ImmutableSet.<String>of())
-        .build());
+    persistResource(
+        loadRegistrar("TheRegistrar").asBuilder().setAllowedTlds(ImmutableSet.of()).build());
     persistContactsAndHosts();
-    thrown.expect(NotAuthorizedForTldException.class);
-    runFlow();
+    EppException thrown = expectThrows(NotAuthorizedForTldException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1090,8 +1170,8 @@ public class DomainApplicationCreateFlowTest
     createTld("tld", TldState.SUNRUSH);
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(LaunchPhaseMismatchException.class);
-    runFlow();
+    EppException thrown = expectThrows(LaunchPhaseMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1099,8 +1179,8 @@ public class DomainApplicationCreateFlowTest
     createTld("tld", TldState.QUIET_PERIOD);
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(BadCommandForRegistryPhaseException.class);
-    runFlow();
+    EppException thrown = expectThrows(BadCommandForRegistryPhaseException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1108,8 +1188,8 @@ public class DomainApplicationCreateFlowTest
     createTld("tld", TldState.GENERAL_AVAILABILITY);
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(BadCommandForRegistryPhaseException.class);
-    runFlow();
+    EppException thrown = expectThrows(BadCommandForRegistryPhaseException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1117,8 +1197,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_landrush_signed_mark.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(LaunchPhaseMismatchException.class);
-    runFlow();
+    EppException thrown = expectThrows(LaunchPhaseMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1127,6 +1207,15 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     runSuperuserFlow("domain_create_sunrush_response.xml");
+  }
+
+  @Test
+  public void testSuccess_superuserNotAuthorizedForTld() throws Exception {
+    persistResource(
+        loadRegistrar("TheRegistrar").asBuilder().setAllowedTlds(ImmutableSet.of()).build());
+    persistContactsAndHosts();
+    clock.advanceOneMilli();
+    runSuperuserFlow("domain_create_sunrise_encoded_signed_mark_response.xml");
   }
 
   @Test
@@ -1166,8 +1255,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_duplicate_contact.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(DuplicateContactForRoleException.class);
-    runFlow();
+    EppException thrown = expectThrows(DuplicateContactForRoleException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1176,8 +1265,8 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     // We need to test for missing type, but not for invalid - the schema enforces that for us.
-    thrown.expect(MissingContactTypeException.class);
-    runFlow();
+    EppException thrown = expectThrows(MissingContactTypeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1185,8 +1274,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_no_matching_marks.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(NoMarksFoundMatchingDomainException.class);
-    runFlow();
+    EppException thrown = expectThrows(NoMarksFoundMatchingDomainException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1195,8 +1284,8 @@ public class DomainApplicationCreateFlowTest
     clock.setTo(DateTime.parse("2013-08-09T10:05:59Z").minusSeconds(1));
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(NoMarksFoundMatchingDomainException.class);
-    runFlow();
+    EppException thrown = expectThrows(NoMarksFoundMatchingDomainException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1205,8 +1294,8 @@ public class DomainApplicationCreateFlowTest
     clock.setTo(DateTime.parse("2017-07-23T22:00:00.000Z"));
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(NoMarksFoundMatchingDomainException.class);
-    runFlow();
+    EppException thrown = expectThrows(NoMarksFoundMatchingDomainException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1214,8 +1303,9 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_hex_encoding.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(Base64RequiredForEncodedSignedMarksException.class);
-    runFlow();
+    EppException thrown =
+        expectThrows(Base64RequiredForEncodedSignedMarksException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1223,8 +1313,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_bad_encoding.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(SignedMarkEncodingErrorException.class);
-    runFlow();
+    EppException thrown = expectThrows(SignedMarkEncodingErrorException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1232,8 +1322,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_bad_encoded_xml.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(SignedMarkParsingErrorException.class);
-    runFlow();
+    EppException thrown = expectThrows(SignedMarkParsingErrorException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1242,8 +1332,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrush_bad_idn_minna.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(InvalidIdnDomainLabelException.class);
-    runFlow();
+    EppException thrown = expectThrows(InvalidIdnDomainLabelException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1253,8 +1343,8 @@ public class DomainApplicationCreateFlowTest
     persistClaimsList(ImmutableMap.of("exampleone", CLAIMS_KEY));
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(InvalidTrademarkValidatorException.class);
-    runFlow();
+    EppException thrown = expectThrows(InvalidTrademarkValidatorException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1262,8 +1352,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_signed_mark.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(SignedMarksMustBeEncodedException.class);
-    runFlow();
+    EppException thrown = expectThrows(SignedMarksMustBeEncodedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1271,8 +1361,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_code_with_mark.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(UnsupportedMarkTypeException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnsupportedMarkTypeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1280,8 +1370,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_empty_encoded_signed_mark.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(SignedMarkParsingErrorException.class);
-    runFlow();
+    EppException thrown = expectThrows(SignedMarkParsingErrorException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1290,8 +1380,9 @@ public class DomainApplicationCreateFlowTest
     persistClaimsList(ImmutableMap.of("exampleone", CLAIMS_KEY));
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(NoticeCannotBeUsedWithSignedMarkException.class);
-    runFlow();
+    EppException thrown =
+        expectThrows(NoticeCannotBeUsedWithSignedMarkException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1299,8 +1390,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrise_two_signed_marks.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(TooManySignedMarksException.class);
-    runFlow();
+    EppException thrown = expectThrows(TooManySignedMarksException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1310,8 +1401,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrush.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(MissingClaimsNoticeException.class);
-    runFlow();
+    EppException thrown = expectThrows(MissingClaimsNoticeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1320,8 +1411,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_landrush_claim_notice.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(UnexpectedClaimsNoticeException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnexpectedClaimsNoticeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1330,11 +1421,9 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_landrush_claim_notice.xml");
     persistClaimsList(ImmutableMap.of("example-one", CLAIMS_KEY));
     persistContactsAndHosts();
-    persistResource(Registry.get("tld").asBuilder()
-        .setClaimsPeriodEnd(clock.nowUtc())
-        .build());
-    thrown.expect(ClaimsPeriodEndedException.class);
-    runFlow();
+    persistResource(Registry.get("tld").asBuilder().setClaimsPeriodEnd(clock.nowUtc()).build());
+    EppException thrown = expectThrows(ClaimsPeriodEndedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1345,8 +1434,8 @@ public class DomainApplicationCreateFlowTest
     persistClaimsList(ImmutableMap.of("example-one", CLAIMS_KEY));
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(ExpiredClaimException.class);
-    runFlow();
+    EppException thrown = expectThrows(ExpiredClaimException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1357,8 +1446,8 @@ public class DomainApplicationCreateFlowTest
     persistClaimsList(ImmutableMap.of("example-one", CLAIMS_KEY));
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(AcceptedTooLongAgoException.class);
-    runFlow();
+    EppException thrown = expectThrows(AcceptedTooLongAgoException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1369,8 +1458,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrush_malformed_claim_notice1.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(MalformedTcnIdException.class);
-    runFlow();
+    EppException thrown = expectThrows(MalformedTcnIdException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1381,8 +1470,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_sunrush_malformed_claim_notice2.xml");
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(MalformedTcnIdException.class);
-    runFlow();
+    EppException thrown = expectThrows(MalformedTcnIdException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1393,8 +1482,8 @@ public class DomainApplicationCreateFlowTest
     persistClaimsList(ImmutableMap.of("example-one", CLAIMS_KEY));
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(InvalidTcnIdChecksumException.class);
-    runFlow();
+    EppException thrown = expectThrows(InvalidTcnIdChecksumException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1405,8 +1494,8 @@ public class DomainApplicationCreateFlowTest
         Registry.get("tld").asBuilder().setCreateBillingCost(Money.of(USD, 20)).build());
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(FeesMismatchException.class);
-    runFlow();
+    EppException thrown = expectThrows(FeesMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1417,8 +1506,8 @@ public class DomainApplicationCreateFlowTest
         Registry.get("tld").asBuilder().setCreateBillingCost(Money.of(USD, 20)).build());
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(FeesMismatchException.class);
-    runFlow();
+    EppException thrown = expectThrows(FeesMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1429,62 +1518,68 @@ public class DomainApplicationCreateFlowTest
         Registry.get("tld").asBuilder().setCreateBillingCost(Money.of(USD, 20)).build());
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(FeesMismatchException.class);
-    runFlow();
+    EppException thrown = expectThrows(FeesMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_wrongCurrency_v06() throws Exception {
     createTld("tld", TldState.LANDRUSH);
     setEppInput("domain_create_landrush_fee.xml", ImmutableMap.of("FEE_VERSION", "0.6"));
-    persistResource(Registry.get("tld").asBuilder()
-        .setCurrency(CurrencyUnit.EUR)
-        .setCreateBillingCost(Money.of(EUR, 13))
-        .setRestoreBillingCost(Money.of(EUR, 11))
-        .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 7)))
-        .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
-        .setServerStatusChangeBillingCost(Money.of(EUR, 19))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setCurrency(CurrencyUnit.EUR)
+            .setCreateBillingCost(Money.of(EUR, 13))
+            .setRestoreBillingCost(Money.of(EUR, 11))
+            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 7)))
+            .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
+            .setServerStatusChangeBillingCost(Money.of(EUR, 19))
+            .build());
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(CurrencyUnitMismatchException.class);
-    runFlow();
+    EppException thrown = expectThrows(CurrencyUnitMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_wrongCurrency_v11() throws Exception {
     createTld("tld", TldState.LANDRUSH);
     setEppInput("domain_create_landrush_fee.xml", ImmutableMap.of("FEE_VERSION", "0.11"));
-    persistResource(Registry.get("tld").asBuilder()
-        .setCurrency(CurrencyUnit.EUR)
-        .setCreateBillingCost(Money.of(EUR, 13))
-        .setRestoreBillingCost(Money.of(EUR, 11))
-        .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 7)))
-        .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
-        .setServerStatusChangeBillingCost(Money.of(EUR, 19))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setCurrency(CurrencyUnit.EUR)
+            .setCreateBillingCost(Money.of(EUR, 13))
+            .setRestoreBillingCost(Money.of(EUR, 11))
+            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 7)))
+            .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
+            .setServerStatusChangeBillingCost(Money.of(EUR, 19))
+            .build());
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(CurrencyUnitMismatchException.class);
-    runFlow();
+    EppException thrown = expectThrows(CurrencyUnitMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_wrongCurrency_v12() throws Exception {
     createTld("tld", TldState.LANDRUSH);
     setEppInput("domain_create_landrush_fee.xml", ImmutableMap.of("FEE_VERSION", "0.12"));
-    persistResource(Registry.get("tld").asBuilder()
-        .setCurrency(CurrencyUnit.EUR)
-        .setCreateBillingCost(Money.of(EUR, 13))
-        .setRestoreBillingCost(Money.of(EUR, 11))
-        .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 7)))
-        .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
-        .setServerStatusChangeBillingCost(Money.of(EUR, 19))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setCurrency(CurrencyUnit.EUR)
+            .setCreateBillingCost(Money.of(EUR, 13))
+            .setRestoreBillingCost(Money.of(EUR, 11))
+            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 7)))
+            .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
+            .setServerStatusChangeBillingCost(Money.of(EUR, 19))
+            .build());
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(CurrencyUnitMismatchException.class);
-    runFlow();
+    EppException thrown = expectThrows(CurrencyUnitMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1493,8 +1588,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_landrush_fee_bad_scale.xml", ImmutableMap.of("FEE_VERSION", "0.6"));
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(CurrencyValueScaleException.class);
-    runFlow();
+    EppException thrown = expectThrows(CurrencyValueScaleException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1503,8 +1598,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_landrush_fee_bad_scale.xml", ImmutableMap.of("FEE_VERSION", "0.11"));
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(CurrencyValueScaleException.class);
-    runFlow();
+    EppException thrown = expectThrows(CurrencyValueScaleException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1513,8 +1608,8 @@ public class DomainApplicationCreateFlowTest
     setEppInput("domain_create_landrush_fee_bad_scale.xml", ImmutableMap.of("FEE_VERSION", "0.12"));
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(CurrencyValueScaleException.class);
-    runFlow();
+    EppException thrown = expectThrows(CurrencyValueScaleException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1522,101 +1617,215 @@ public class DomainApplicationCreateFlowTest
     persistContactsAndHosts();
     clock.advanceOneMilli();
     persistActiveDomain(getUniqueIdFromCommand());
-    try {
-      runFlow();
-      assertWithMessage("Expected ResourceAlreadyExistsException to be thrown").fail();
-    } catch (ResourceAlreadyExistsException e) {
-      assertThat(e.isFailfast()).isTrue();
-      assertAboutEppExceptions().that(e).marshalsToXml().and().hasMessage(
-          String.format("Object with given ID (%s) already exists", getUniqueIdFromCommand()));
-    }
+    ResourceAlreadyExistsException thrown =
+        expectThrows(ResourceAlreadyExistsException.class, this::runFlow);
+    assertAboutEppExceptions()
+        .that(thrown)
+        .marshalsToXml()
+        .and()
+        .hasMessage(
+            String.format("Object with given ID (%s) already exists", getUniqueIdFromCommand()));
   }
 
   @Test
   public void testFailure_registrantNotWhitelisted() throws Exception {
     persistActiveContact("someone");
     persistContactsAndHosts();
-    persistResource(Registry.get("tld").asBuilder()
-        .setAllowedRegistrantContactIds(ImmutableSet.of("someone"))
-        .build());
-    thrown.expect(RegistrantNotAllowedException.class, "jd1234");
-    runFlow();
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setAllowedRegistrantContactIds(ImmutableSet.of("someone"))
+            .build());
+    RegistrantNotAllowedException thrown =
+        expectThrows(RegistrantNotAllowedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml().and().hasMessageThatContains("jd1234");
   }
 
   @Test
   public void testFailure_nameserverNotWhitelisted() throws Exception {
     persistContactsAndHosts();
-    persistResource(Registry.get("tld").asBuilder()
-        .setAllowedFullyQualifiedHostNames(ImmutableSet.of("ns2.example.net"))
-        .build());
-    thrown.expect(NameserversNotAllowedException.class, "ns1.example.net");
-    runFlow();
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setAllowedFullyQualifiedHostNames(ImmutableSet.of("ns2.example.net"))
+            .build());
+    NameserversNotAllowedForTldException thrown =
+        expectThrows(NameserversNotAllowedForTldException.class, this::runFlow);
+    assertAboutEppExceptions()
+        .that(thrown)
+        .marshalsToXml()
+        .and()
+        .hasMessageThatContains("ns1.example.net");
   }
 
   @Test
   public void testSuccess_nameserverAndRegistrantWhitelisted() throws Exception {
-    persistResource(Registry.get("tld").asBuilder()
-        .setAllowedRegistrantContactIds(ImmutableSet.of("jd1234"))
-        .setAllowedFullyQualifiedHostNames(ImmutableSet.of("ns1.example.net", "ns2.example.net"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setAllowedRegistrantContactIds(ImmutableSet.of("jd1234"))
+            .setAllowedFullyQualifiedHostNames(
+                ImmutableSet.of("ns1.example.net", "ns2.example.net"))
+            .build());
     persistContactsAndHosts();
     clock.advanceOneMilli();
     doSuccessfulTest("domain_create_sunrise_encoded_signed_mark_response.xml", true);
-    assertAboutApplications().that(getOnlyGlobalResource(DomainApplication.class))
+    assertAboutApplications()
+        .that(getOnlyGlobalResource(DomainApplication.class))
         .hasApplicationStatus(ApplicationStatus.VALIDATED);
   }
 
   @Test
   public void testFailure_emptyNameserverFailsWhitelist() throws Exception {
     setEppInput("domain_create_sunrise_encoded_signed_mark_no_hosts.xml");
-    persistResource(Registry.get("tld").asBuilder()
-        .setAllowedRegistrantContactIds(ImmutableSet.of("jd1234"))
-        .setAllowedFullyQualifiedHostNames(ImmutableSet.of("somethingelse.example.net"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setAllowedRegistrantContactIds(ImmutableSet.of("jd1234"))
+            .setAllowedFullyQualifiedHostNames(ImmutableSet.of("somethingelse.example.net"))
+            .build());
     persistContactsAndHosts();
     clock.advanceOneMilli();
-    thrown.expect(NameserversNotSpecifiedException.class);
-    runFlow();
-  }
-
-  /**
-   * There is special logic that disallows a failfast for domains in add grace period and sunrush
-   * add grace period, so make sure that they fail anyways in the actual flow.
-   */
-  private void doNonFailFastAlreadyExistsTest(GracePeriodStatus gracePeriodStatus)
-      throws Exception {
-    persistContactsAndHosts();
-    clock.advanceOneMilli();
-    persistResource(newDomainResource(getUniqueIdFromCommand()).asBuilder()
-        .addGracePeriod(GracePeriod.create(gracePeriodStatus, END_OF_TIME, "", null))
-        .build());
-    try {
-      runFlow();
-      assertWithMessage("Expected ResourceAlreadyExistsException to be thrown").fail();
-    } catch (ResourceAlreadyExistsException e) {
-      assertThat(e.isFailfast()).isFalse();
-      assertAboutEppExceptions().that(e).marshalsToXml().and().hasMessage(
-          String.format("Object with given ID (%s) already exists", getUniqueIdFromCommand()));
-    }
+    EppException thrown =
+        expectThrows(
+            NameserversNotSpecifiedForTldWithNameserverWhitelistException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
-  public void testFailure_alreadyExists_addGracePeriod() throws Exception {
-    doNonFailFastAlreadyExistsTest(GracePeriodStatus.ADD);
+  public void testSuccess_domainNameserverRestricted_allNameserversAllowed() throws Exception {
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(
+                persistReservedList(
+                    "reserved",
+                    "test-validate,NAMESERVER_RESTRICTED,"
+                        + "ns1.example.net:ns2.example.net:ns3.example.net"))
+            .build());
+    persistContactsAndHosts();
+    clock.advanceOneMilli();
+    doSuccessfulTest("domain_create_sunrise_encoded_signed_mark_response.xml", true);
+    assertAboutApplications()
+        .that(getOnlyGlobalResource(DomainApplication.class))
+        .hasApplicationStatus(ApplicationStatus.VALIDATED);
   }
 
   @Test
-  public void testFailure_alreadyExists_sunrushAddGracePeriod() throws Exception {
-    doNonFailFastAlreadyExistsTest(GracePeriodStatus.SUNRUSH_ADD);
+  public void testFailure_domainNameserverRestricted_someNameserversDisallowed() throws Exception {
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(
+                persistReservedList(
+                    "reserved",
+                    "test-validate,NAMESERVER_RESTRICTED,ns2.example.net:ns3.example.net"))
+            .build());
+    persistContactsAndHosts();
+    clock.advanceOneMilli();
+    NameserversNotAllowedForDomainException thrown =
+        expectThrows(NameserversNotAllowedForDomainException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains("ns1.example.net");
   }
 
-  private void doFailingDomainNameTest(String domainName, Class<? extends Throwable> exception)
+  @Test
+  public void testFailure_domainNameserverRestricted_noNameserversAllowed() throws Exception {
+    setEppInput("domain_create_sunrise_encoded_signed_mark_no_hosts.xml");
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(
+                persistReservedList(
+                    "reserved",
+                    "test-validate,NAMESERVER_RESTRICTED,ns2.example.net:ns3.example.net"))
+            .build());
+    persistContactsAndHosts();
+    clock.advanceOneMilli();
+    EppException thrown =
+        expectThrows(
+            NameserversNotSpecifiedForNameserverRestrictedDomainException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testSuccess_tldAndDomainNameserversWhitelistBothSatistfied() throws Exception {
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setDomainCreateRestricted(true)
+            .setReservedLists(
+                persistReservedList(
+                    "reserved",
+                    "test-validate,NAMESERVER_RESTRICTED,"
+                        + "ns1.example.net:ns2.example.net:ns3.example.net"))
+            .setAllowedFullyQualifiedHostNames(
+                ImmutableSet.of("ns1.example.net", "ns2.example.net", "ns4.examplet.net"))
+            .build());
+    persistContactsAndHosts();
+    clock.advanceOneMilli();
+    doSuccessfulTest("domain_create_sunrise_encoded_signed_mark_response.xml", true);
+    assertAboutApplications()
+        .that(getOnlyGlobalResource(DomainApplication.class))
+        .hasApplicationStatus(ApplicationStatus.VALIDATED);
+  }
+
+  @Test
+  public void testFailure_domainNameserversDisallowed_tldNameserversAllowed() throws Exception {
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(
+                persistReservedList(
+                    "reserved",
+                    "test-validate,NAMESERVER_RESTRICTED,"
+                        + "ns2.example.net:ns3.example.net:ns4.example.net"))
+            .setAllowedFullyQualifiedHostNames(
+                ImmutableSet.of("ns1.example.net", "ns2.example.net", "ns3.examplet.net"))
+            .build());
+    persistContactsAndHosts();
+    clock.advanceOneMilli();
+    NameserversNotAllowedForDomainException thrown =
+        expectThrows(NameserversNotAllowedForDomainException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains("ns1.example.net");
+  }
+
+  @Test
+  public void testFailure_domainNameserversAllowed_tldNameserversDisallowed() throws Exception {
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(
+                persistReservedList(
+                    "reserved",
+                    "test-validate,NAMESERVER_RESTRICTED,"
+                        + "ns1.example.net:ns2.example.net:ns3.example.net"))
+            .setAllowedFullyQualifiedHostNames(
+                ImmutableSet.of("ns2.example.net", "ns3.example.net", "ns4.examplet.net"))
+            .build());
+    persistContactsAndHosts();
+    clock.advanceOneMilli();
+    NameserversNotAllowedForTldException thrown =
+        expectThrows(NameserversNotAllowedForTldException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains("ns1.example.net");
+  }
+
+  @Test
+  public void testFailure_max10Years() throws Exception {
+    createTld("tld", TldState.LANDRUSH);
+    setEppInput("domain_create_landrush_11_years.xml");
+    persistContactsAndHosts();
+    clock.advanceOneMilli();
+    EppException thrown = expectThrows(ExceedsMaxRegistrationYearsException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  private void doFailingDomainNameTest(String domainName, Class<? extends EppException> exception)
       throws Exception {
     setEppInput("domain_create_sunrise_signed_mark_uppercase.xml");
     eppLoader.replaceAll("TEST-VALIDATE.tld", domainName);
     persistContactsAndHosts();
-    thrown.expect(exception);
-    runFlow();
+    EppException thrown = expectThrows(exception, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -1665,6 +1874,18 @@ public class DomainApplicationCreateFlowTest
   }
 
   @Test
+  public void testFailure_domainNameExistsAsTld_lowercase() throws Exception {
+    createTlds("foo.tld", "tld");
+    doFailingDomainNameTest("foo.tld", DomainNameExistsAsTldException.class);
+  }
+
+  @Test
+  public void testFailure_domainNameExistsAsTld_uppercase() throws Exception {
+    createTlds("foo.tld", "tld");
+    doFailingDomainNameTest("FOO.TLD", BadDomainNameCharacterException.class);
+  }
+
+  @Test
   public void testFailure_invalidPunycode() throws Exception {
     doFailingDomainNameTest("xn--abcdefg.tld", InvalidPunycodeException.class);
   }
@@ -1683,5 +1904,16 @@ public class DomainApplicationCreateFlowTest
   public void testFailure_invalidIdnCodePoints() throws Exception {
     // ❤☀☆☂☻♞☯.tld
     doFailingDomainNameTest("xn--k3hel9n7bxlu1e.tld", InvalidIdnDomainLabelException.class);
+  }
+
+  @Test
+  public void testIcannActivityReportField_getsLogged() throws Exception {
+    persistContactsAndHosts();
+    clock.advanceOneMilli();
+    runFlow();
+    assertIcannReportingActivityFieldLogged("srs-dom-create");
+    assertTldsFieldLogged("tld");
+    // Ensure we log the client ID for srs-dom-create so we can also use it for attempted-adds.
+    assertClientIdFieldLogged("TheRegistrar");
   }
 }

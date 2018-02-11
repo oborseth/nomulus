@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,10 +15,9 @@
 package google.registry.util;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static google.registry.util.DomainNameUtils.canonicalizeDomainName;
 
-import google.registry.testing.ExceptionRule;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -26,10 +25,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link DomainNameUtils}. */
 @RunWith(JUnit4.class)
 public class DomainNameUtilsTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   @Test
   public void testCanonicalizeDomainName() throws Exception {
     assertThat(canonicalizeDomainName("foo")).isEqualTo("foo");
@@ -45,8 +40,7 @@ public class DomainNameUtilsTest {
   }
 
   @Test
-  public void testCanonicalizeDomainName_acePrefixUnicodeChars() {
-    thrown.expect(IllegalArgumentException.class);
-    canonicalizeDomainName("xn--みんな");
+  public void testCanonicalizeDomainName_acePrefixUnicodeChars() throws Exception {
+    assertThrows(IllegalArgumentException.class, () -> canonicalizeDomainName("xn--みんな"));
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,44 +14,61 @@
 
 package google.registry.module.frontend;
 
+import com.google.monitoring.metrics.MetricReporter;
 import dagger.Component;
+import dagger.Lazy;
 import google.registry.braintree.BraintreeModule;
-import google.registry.config.ConfigModule;
-import google.registry.keyring.api.DummyKeyringModule;
+import google.registry.config.RegistryConfig.ConfigModule;
+import google.registry.flows.ServerTridProviderModule;
+import google.registry.flows.custom.CustomLogicFactoryModule;
 import google.registry.keyring.api.KeyModule;
-import google.registry.monitoring.metrics.MetricReporter;
+import google.registry.keyring.kms.KmsModule;
+import google.registry.module.frontend.FrontendRequestComponent.FrontendRequestComponentModule;
 import google.registry.monitoring.whitebox.StackdriverModule;
 import google.registry.request.Modules.AppIdentityCredentialModule;
+import google.registry.request.Modules.GoogleCredentialModule;
 import google.registry.request.Modules.Jackson2Module;
 import google.registry.request.Modules.ModulesServiceModule;
+import google.registry.request.Modules.NetHttpTransportModule;
 import google.registry.request.Modules.UrlFetchTransportModule;
 import google.registry.request.Modules.UseAppIdentityCredentialForGoogleApisModule;
 import google.registry.request.Modules.UserServiceModule;
-import google.registry.request.RequestModule;
+import google.registry.request.auth.AuthModule;
 import google.registry.ui.ConsoleConfigModule;
 import google.registry.util.SystemClock.SystemClockModule;
+import google.registry.util.SystemSleeper.SystemSleeperModule;
 import javax.inject.Singleton;
 
 /** Dagger component with instance lifetime for "default" App Engine module. */
 @Singleton
 @Component(
-    modules = {
-        AppIdentityCredentialModule.class,
-        BraintreeModule.class,
-        ConfigModule.class,
-        ConsoleConfigModule.class,
-        DummyKeyringModule.class,
-        FrontendMetricsModule.class,
-        Jackson2Module.class,
-        KeyModule.class,
-        ModulesServiceModule.class,
-        StackdriverModule.class,
-        SystemClockModule.class,
-        UrlFetchTransportModule.class,
-        UseAppIdentityCredentialForGoogleApisModule.class,
-        UserServiceModule.class,
-    })
+  modules = {
+    AppIdentityCredentialModule.class,
+    AuthModule.class,
+    BraintreeModule.class,
+    ConfigModule.class,
+    ConsoleConfigModule.class,
+    CustomLogicFactoryModule.class,
+    google.registry.keyring.api.DummyKeyringModule.class,
+    FrontendMetricsModule.class,
+    FrontendRequestComponentModule.class,
+    GoogleCredentialModule.class,
+    Jackson2Module.class,
+    KeyModule.class,
+    KmsModule.class,
+    ModulesServiceModule.class,
+    NetHttpTransportModule.class,
+    ServerTridProviderModule.class,
+    StackdriverModule.class,
+    SystemClockModule.class,
+    SystemSleeperModule.class,
+    UrlFetchTransportModule.class,
+    UseAppIdentityCredentialForGoogleApisModule.class,
+    UserServiceModule.class,
+  }
+)
 interface FrontendComponent {
-  FrontendRequestComponent startRequest(RequestModule requestModule);
-  MetricReporter metricReporter();
+  FrontendRequestHandler requestHandler();
+
+  Lazy<MetricReporter> metricReporter();
 }

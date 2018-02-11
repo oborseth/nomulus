@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,11 @@
 package google.registry.tools.server;
 
 import static google.registry.testing.DatastoreHelper.createTlds;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.persistResource;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableSet;
-import google.registry.model.registrar.Registrar;
+import java.util.Optional;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -40,12 +40,12 @@ public class ListRegistrarsActionTest extends ListActionTestCase {
     // Ensure that NewRegistrar only has access to xn--q9jyb4c and that TheRegistrar only has access
     // to example.
     persistResource(
-        Registrar.loadByClientId("NewRegistrar")
+        loadRegistrar("NewRegistrar")
             .asBuilder()
             .setAllowedTlds(ImmutableSet.of("xn--q9jyb4c"))
             .build());
     persistResource(
-        Registrar.loadByClientId("TheRegistrar")
+        loadRegistrar("TheRegistrar")
             .asBuilder()
             .setAllowedTlds(ImmutableSet.of("example"))
             .build());

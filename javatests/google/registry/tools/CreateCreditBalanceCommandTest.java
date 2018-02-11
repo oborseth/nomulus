@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,9 @@ import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static org.joda.money.CurrencyUnit.USD;
 import static org.joda.time.DateTimeZone.UTC;
 
@@ -44,7 +46,7 @@ public class CreateCreditBalanceCommandTest extends CommandTestCase<CreateCredit
 
   @Before
   public void setUp() {
-    registrar = Registrar.loadByClientId("TheRegistrar");
+    registrar = loadRegistrar("TheRegistrar");
     createTld("tld");
     assertThat(Registry.get("tld").getCurrency()).isEqualTo(USD);
     credit = persistResource(
@@ -79,68 +81,96 @@ public class CreateCreditBalanceCommandTest extends CommandTestCase<CreateCredit
 
   @Test
   public void testFailure_nonexistentParentRegistrar() throws Exception {
-    thrown.expect(NullPointerException.class, "FakeRegistrar");
-    runCommandForced(
-        "--registrar=FakeRegistrar",
-        "--credit_id=" + creditId,
-        "--balance=\"USD 100\"",
-        "--effective_time=2014-11-01T01:02:03Z");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--registrar=FakeRegistrar",
+                    "--credit_id=" + creditId,
+                    "--balance=\"USD 100\"",
+                    "--effective_time=2014-11-01T01:02:03Z"));
+    assertThat(thrown).hasMessageThat().contains("Registrar FakeRegistrar not found");
   }
 
   @Test
   public void testFailure_nonexistentCreditId() throws Exception {
     long badId = creditId + 1;
-    thrown.expect(NullPointerException.class, "ID " + badId);
-    runCommandForced(
-        "--registrar=TheRegistrar",
-        "--credit_id=" + badId,
-        "--balance=\"USD 100\"",
-        "--effective_time=2014-11-01T01:02:03Z");
+    NullPointerException thrown =
+        expectThrows(
+            NullPointerException.class,
+            () ->
+                runCommandForced(
+                    "--registrar=TheRegistrar",
+                    "--credit_id=" + badId,
+                    "--balance=\"USD 100\"",
+                    "--effective_time=2014-11-01T01:02:03Z"));
+    assertThat(thrown).hasMessageThat().contains("ID " + badId);
   }
 
   @Test
   public void testFailure_negativeBalance() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "negative");
-    runCommandForced(
-        "--registrar=TheRegistrar",
-        "--credit_id=" + creditId,
-        "--balance=\"USD -1\"",
-        "--effective_time=2014-11-01T01:02:03Z");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--registrar=TheRegistrar",
+                    "--credit_id=" + creditId,
+                    "--balance=\"USD -1\"",
+                    "--effective_time=2014-11-01T01:02:03Z"));
+    assertThat(thrown).hasMessageThat().contains("negative");
   }
 
   @Test
   public void testFailure_noRegistrar() throws Exception {
-    thrown.expect(ParameterException.class, "--registrar");
-    runCommandForced(
-        "--credit_id=" + creditId,
-        "--balance=\"USD 100\"",
-        "--effective_time=2014-11-01T01:02:03Z");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    "--credit_id=" + creditId,
+                    "--balance=\"USD 100\"",
+                    "--effective_time=2014-11-01T01:02:03Z"));
+    assertThat(thrown).hasMessageThat().contains("--registrar");
   }
 
   @Test
   public void testFailure_noCreditId() throws Exception {
-    thrown.expect(ParameterException.class, "--credit_id");
-    runCommandForced(
-        "--registrar=TheRegistrar",
-        "--balance=\"USD 100\"",
-        "--effective_time=2014-11-01T01:02:03Z");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    "--registrar=TheRegistrar",
+                    "--balance=\"USD 100\"",
+                    "--effective_time=2014-11-01T01:02:03Z"));
+    assertThat(thrown).hasMessageThat().contains("--credit_id");
   }
 
   @Test
   public void testFailure_noBalance() throws Exception {
-    thrown.expect(ParameterException.class, "--balance");
-    runCommandForced(
-        "--registrar=TheRegistrar",
-        "--credit_id=" + creditId,
-        "--effective_time=2014-11-01T01:02:03Z");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    "--registrar=TheRegistrar",
+                    "--credit_id=" + creditId,
+                    "--effective_time=2014-11-01T01:02:03Z"));
+    assertThat(thrown).hasMessageThat().contains("--balance");
   }
 
   @Test
   public void testFailure_noEffectiveTime() throws Exception {
-    thrown.expect(ParameterException.class, "--effective_time");
-    runCommandForced(
-        "--registrar=TheRegistrar",
-        "--credit_id=" + creditId,
-        "--balance=\"USD 100\"");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    "--registrar=TheRegistrar",
+                    "--credit_id=" + creditId,
+                    "--balance=\"USD 100\""));
+    assertThat(thrown).hasMessageThat().contains("--effective_time");
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,10 +16,9 @@ package google.registry.tmch;
 
 import static com.google.common.base.CharMatcher.whitespace;
 import static com.google.common.io.BaseEncoding.base64;
-import static google.registry.util.ResourceUtils.readResourceBytes;
-import static google.registry.util.ResourceUtils.readResourceUtf8;
 
 import com.google.common.io.ByteSource;
+import google.registry.testing.TestDataHelper;
 
 /** Utility class providing easy access to contents of the {@code testdata/} directory. */
 public final class TmchTestData {
@@ -29,17 +28,17 @@ public final class TmchTestData {
 
   /** Returns {@link ByteSource} for file in {@code tmch/testdata/} directory. */
   public static ByteSource loadBytes(String filename) {
-    return readResourceBytes(TmchTestData.class, "testdata/" + filename);
+    return TestDataHelper.loadBytes(TmchTestData.class, filename);
   }
 
   /** Loads data from file in {@code tmch/testdata/} as a String. */
-  public static String loadString(String filename) {
-    return readResourceUtf8(TmchTestData.class, "testdata/" + filename);
+  public static String loadFile(String filename) {
+    return TestDataHelper.loadFile(TmchTestData.class, filename);
   }
 
   /** Extracts SMD XML from an ASCII-armored file. */
   public static byte[] loadSmd(String file) {
-    String data = loadString(file);
+    String data = loadFile(file);
     return base64().decode(whitespace().removeFrom(data.substring(
         data.indexOf(BEGIN_ENCODED_SMD) + BEGIN_ENCODED_SMD.length(),
         data.indexOf(END_ENCODED_SMD))));

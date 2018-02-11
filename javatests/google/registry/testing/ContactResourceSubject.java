@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,23 +17,20 @@ package google.registry.testing;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.truth.Truth.assertAbout;
 
-import com.google.common.truth.AbstractVerb.DelegatedVerb;
-import com.google.common.truth.FailureStrategy;
+import com.google.common.truth.FailureMetadata;
+import com.google.common.truth.SimpleSubjectBuilder;
 import google.registry.model.contact.ContactResource;
 import google.registry.model.contact.PostalInfo;
 import google.registry.model.eppcommon.AuthInfo;
 import google.registry.testing.TruthChainer.And;
+import org.joda.time.DateTime;
 
 /** Truth subject for asserting things about {@link ContactResource} instances. */
 public final class ContactResourceSubject
     extends AbstractEppResourceSubject<ContactResource, ContactResourceSubject> {
 
-  /** A factory for instances of this subject. */
-  private static class SubjectFactory
-      extends ReflectiveSubjectFactory<ContactResource, ContactResourceSubject>{}
-
-  public ContactResourceSubject(FailureStrategy strategy, ContactResource subject) {
-    super(strategy, checkNotNull(subject));
+  public ContactResourceSubject(FailureMetadata failureMetadata, ContactResource subject) {
+    super(failureMetadata, checkNotNull(subject));
   }
 
   public And<ContactResourceSubject> hasLocalizedPostalInfo(PostalInfo postalInfo) {
@@ -124,7 +121,29 @@ public final class ContactResourceSubject
     return hasValue(pw, authInfo == null ? null : authInfo.getPw().getValue(), "has auth info pw");
   }
 
-  public static DelegatedVerb<ContactResourceSubject, ContactResource> assertAboutContacts() {
-    return assertAbout(new SubjectFactory());
+  public And<ContactResourceSubject> hasLastTransferTime(DateTime lastTransferTime) {
+    return hasValue(
+        lastTransferTime,
+        actual().getLastTransferTime(),
+        "has lastTransferTime");
+  }
+
+  public And<ContactResourceSubject> hasLastTransferTimeNotEqualTo(DateTime lastTransferTime) {
+    return doesNotHaveValue(
+        lastTransferTime,
+        actual().getLastTransferTime(),
+        "lastTransferTime");
+  }
+
+  public And<ContactResourceSubject> hasCurrentSponsorClientId(String clientId) {
+    return hasValue(
+        clientId,
+        actual().getCurrentSponsorClientId(),
+        "has currentSponsorClientId");
+  }
+
+  public static SimpleSubjectBuilder<ContactResourceSubject, ContactResource>
+      assertAboutContacts() {
+    return assertAbout(ContactResourceSubject::new);
   }
 }

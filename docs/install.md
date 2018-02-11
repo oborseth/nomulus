@@ -6,17 +6,16 @@ This document covers the steps necessary to download, build, and deploy Nomulus.
 
 You will need the following programs installed on your local machine:
 
-*   A recent version of the [Java 7 JDK][java-jdk7].
-*   [Bazel build system](http://bazel.io/) >= version 0.3.1. Make sure to
-    download the JDK7-compatible version.
+*   A recent version of the [Java 8 JDK][java-jdk8].
+*   [Bazel build system](http://bazel.io/) (version [0.10.0][bazel-version]
+    works as of 2018-02-05).
 *   [Google App Engine SDK for Java][app-engine-sdk], and configure aliases to
     to the `gcloud` and `appcfg.sh` utilities (you'll use them a lot).
 *   [Git](https://git-scm.com/) version control system.
 
-**Note:** App Engine does not yet support Java 8. You need to make sure that you
-are using Java 7 to compile the project (consult the output of `java -version`).
-Also, the instructions in this document have only been tested on Linux. They
-might work with some alterations on other operating systems.
+**Note:** App Engine does not yet support Java 9. Also, the instructions in this
+document have only been tested on Linux. They might work with some alterations
+on other operating systems.
 
 ## Download the codebase
 
@@ -53,7 +52,8 @@ The first step is to build the project, and verify that this completes
 successfully. This will also download and install dependencies.
 
 ```shell
-$ bazel --batch build //java{,tests}/google/registry/...
+$ bazel --batch build --javacopt="-target 8 -source 8" \
+  //java{,tests}/google/registry/...
 INFO: Found 584 targets...
 [ .. snip .. ]
 INFO: Elapsed time: 124.433s, Critical Path: 116.92s
@@ -83,7 +83,8 @@ You can run the tests to verify that all expected functionality succeeds in your
 build:
 
 ```shell
-$ nice bazel --batch test //javatests/google/registry/... \
+$ nice bazel --batch test  --javacopt="-target 8 -source 8" \
+  //javatests/google/registry/... \
   --local_resources=1000,3,1.0
 Executed 360 out of 360 tests: 360 tests pass.
 ```
@@ -102,8 +103,8 @@ Cloud Platform. Make sure to choose a good Project ID, as it will be used
 repeatedly in a large number of places. If your company is named Acme, then a
 good Project ID for your production environment would be "acme-registry". Keep
 in mind that project IDs for non-production environments should be suffixed with
-the name of the environment (see the [App Engine architecture
-guide](./app-engine-architecture.md) for more details). For the purposes of this
+the name of the environment (see the [Architecture
+documentation](./architecture.md) for more details). For the purposes of this
 example we'll deploy to the "alpha" environment, which is used for developer
 testing. The Project ID will thus be `acme-registry-alpha`.
 
@@ -179,4 +180,5 @@ using the `nomulus` tool to create test entities in your newly deployed system.
 See the [first steps tutorial](./first-steps-tutorial.md) for more information.
 
 [app-engine-sdk]: https://cloud.google.com/appengine/docs/java/download
-[java-jdk7]: http://www.oracle.com/technetwork/java/javase/downloads/jdk7-downloads-1880260.html
+[java-jdk8]: http://www.oracle.com/technetwork/java/javase/downloads
+[bazel-version]: https://github.com/bazelbuild/bazel/releases/download/0.10.0/bazel-0.10.0-installer-linux-x86_64.sh

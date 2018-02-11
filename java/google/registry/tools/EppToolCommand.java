@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,13 +16,12 @@ package google.registry.tools;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Predicates.notNull;
 import static com.google.common.base.Strings.nullToEmpty;
 import static com.google.common.collect.Maps.filterValues;
 import static com.google.common.io.Resources.getResource;
 import static google.registry.model.registry.Registries.findTldForNameOrThrow;
 import static google.registry.tools.CommandUtilities.addHeader;
-import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
+import static google.registry.util.PreconditionsUtils.checkArgumentPresent;
 import static google.registry.xml.XmlTransformer.prettyPrint;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -45,6 +44,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /** A command to execute an epp command. */
 abstract class EppToolCommand extends ConfirmingCommand implements ServerSideCommand {
@@ -100,8 +100,8 @@ abstract class EppToolCommand extends ConfirmingCommand implements ServerSideCom
   }
 
   protected void addXmlCommand(String clientId, String xml) {
-    checkArgumentNotNull(Registrar.loadByClientId(clientId),
-        "Registrar with client ID %s not found", clientId);
+    checkArgumentPresent(
+        Registrar.loadByClientId(clientId), "Registrar with client ID %s not found", clientId);
     commands.add(new XmlEppParameters(clientId, xml));
   }
 
@@ -133,7 +133,7 @@ abstract class EppToolCommand extends ConfirmingCommand implements ServerSideCom
     String prompt = addHeader("Command(s)", Joiner.on("\n").join(commands)
         + (force ? "" : addHeader("Dry Run", Joiner.on("\n").join(processCommands(true)))));
     force = force || isDryRun();
-    return prompt.toString();
+    return prompt;
   }
 
   private List<String> processCommands(boolean dryRun) throws IOException {
@@ -145,7 +145,7 @@ abstract class EppToolCommand extends ConfirmingCommand implements ServerSideCom
       params.put("superuser", superuser);
       params.put("xml", URLEncoder.encode(command.xml, UTF_8.toString()));
       String requestBody =
-          Joiner.on('&').withKeyValueSeparator("=").join(filterValues(params, notNull()));
+          Joiner.on('&').withKeyValueSeparator("=").join(filterValues(params, Objects::nonNull));
       responses.add(nullToEmpty(connection.send(
           "/_dr/epptool",
           ImmutableMap.<String, String>of(),

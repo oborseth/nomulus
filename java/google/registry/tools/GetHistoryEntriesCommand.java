@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,14 +14,20 @@
 
 package google.registry.tools;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
+import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
+import static org.joda.time.DateTimeZone.UTC;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
+import com.googlecode.objectify.Key;
+import google.registry.model.EppResource;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.tools.Command.RemoteApiCommand;
+import google.registry.tools.CommandUtilities.ResourceType;
 import google.registry.xml.XmlTransformer;
 import org.joda.time.DateTime;
 
@@ -40,9 +46,30 @@ final class GetHistoryEntriesCommand implements RemoteApiCommand {
       description = "Only show history entries that occurred at or before this time")
   private DateTime before = END_OF_TIME;
 
+  @Parameter(
+    names = "--type",
+    description = "Resource type.")
+  private ResourceType type;
+
+  @Parameter(
+    names = "--id",
+    description = "Foreign key of the resource, or application ID of the domain application.")
+  private String uniqueId;
+
   @Override
   public void run() {
-    for (HistoryEntry entry : ofy().load().type(HistoryEntry.class)
+    Key<? extends EppResource> parentKey = null;
+    if (type != null || uniqueId != null) {
+      checkArgument(
+          type != null && uniqueId != null,
+          "If either of 'type' or 'id' are set then both must be");
+      parentKey = type.getKey(uniqueId, DateTime.now(UTC));
+      checkArgumentNotNull(parentKey, "Invalid resource ID");
+    }
+    for (HistoryEntry entry :
+            (parentKey == null
+                ? ofy().load().type(HistoryEntry.class)
+                : ofy().load().type(HistoryEntry.class).ancestor(parentKey))
         .order("modificationTime")
         .filter("modificationTime >=", after)
         .filter("modificationTime <=", before)) {
@@ -50,8 +77,8 @@ final class GetHistoryEntriesCommand implements RemoteApiCommand {
           "Client: %s\nTime: %s\nClient TRID: %s\nServer TRID: %s\n%s\n",
           entry.getClientId(),
           entry.getModificationTime(),
-          entry.getTrid().getClientTransactionId(),
-          entry.getTrid().getServerTransactionId(),
+          (entry.getTrid() == null) ? null : entry.getTrid().getClientTransactionId(),
+          (entry.getTrid() == null) ? null : entry.getTrid().getServerTransactionId(),
           entry.getXmlBytes() == null
               ? String.format("[no XML stored for %s]\n", entry.getType())
               : XmlTransformer.prettyPrint(entry.getXmlBytes()));

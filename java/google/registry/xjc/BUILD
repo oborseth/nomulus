@@ -6,16 +6,27 @@ licenses(["notice"])  # Apache 2.0
 
 load("//java/google/registry/xjc:generated_files.bzl", "pkginfo_generated_files", "xjc_generated_files")
 
+java_library(
+    name = "xjc",
+    srcs = glob(["*.java"]) + xjc_generated_files + pkginfo_generated_files,
+    visibility = ["//visibility:public"],
+    deps = [
+        "//java/google/registry/xml",
+        "//third_party/jaxb",
+        "@com_google_code_findbugs_jsr305",
+        "@com_google_guava",
+        "@joda_time",
+    ],
+)
 
 sh_binary(
     name = "list_generated_files",
     srcs = ["list_generated_files.sh"],
     data = [
         "bindings.xjb",
-        "//third_party/java/jaxb:jaxb-xjc",
         "//java/google/registry/xml:xml_schema_files",
+        "@com_sun_xml_bind_jaxb_xjc//:XJCFacade",
     ],
-    visibility = ["//visibility:private"],
 )
 
 genrule(
@@ -27,28 +38,26 @@ genrule(
     outs = xjc_generated_files,
     cmd = " && ".join([
         "REP=$$(pwd)",
-        "XJC=$$REP/$(location //third_party/java/jaxb:jaxb-xjc)",
+        "XJC=$$REP/$(location @com_sun_xml_bind_jaxb_xjc//:XJCFacade)",
         "OUT=$$REP/$(GENDIR)/java",
         "TMP=$$(mktemp -d $${TMPDIR:-/tmp}/jaxb.XXXXXXXXXX)",
         "mkdir -p $$OUT",
         "cp $(SRCS) $$TMP",
         "cd $$TMP",
         "$$XJC -npa -quiet -extension -d $$OUT -b *.xjb *.xsd",
-        ("find $$OUT -name '*.java' | xargs sed -i 's/" +
+        ("find $$OUT -name '*.java' | xargs sed -i.bak 's/" +
          "public class/" +
-         "@SuppressWarnings({\"unchecked\",\"serial\",\"cast\"}) " +
+         "@SuppressWarnings({\"unchecked\",\"serial\",\"cast\"})\\\n" +
          "public class/'"),
         "cd $$REP",
         "rm -rf $$TMP",
     ]),
-    tools = ["//third_party/java/jaxb:jaxb-xjc"],
-    visibility = ["//visibility:private"],
+    tools = ["@com_sun_xml_bind_jaxb_xjc//:XJCFacade"],
 )
 
 sh_binary(
     name = "make_pkginfo",
     srcs = ["make_pkginfo.sh"],
-    visibility = ["//visibility:private"],
 )
 
 genrule(
@@ -59,17 +68,5 @@ genrule(
     tools = [
         ":jaxb_srcs",
         ":make_pkginfo",
-    ],
-    visibility = ["//visibility:private"],
-)
-
-java_library(
-    name = "xjc",
-    srcs = glob(["*.java"]) + xjc_generated_files + pkginfo_generated_files,
-    deps = [
-        "//java/com/google/common/collect",
-        "//third_party/java/joda_time",
-        "//third_party/java/jsr305_annotations",
-        "//java/google/registry/xml",
     ],
 )

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,9 +14,10 @@
 
 package google.registry.model.domain.fee06;
 
-import com.google.common.base.Optional;
-import google.registry.model.domain.fee.FeeQueryCommandExtensionItemImpl;
+import google.registry.model.domain.fee.FeeExtensionCommandDescriptor;
+import google.registry.model.domain.fee.FeeQueryCommandExtensionItem;
 import google.registry.model.eppinput.EppInput.CommandExtension;
+import java.util.Optional;
 import javax.xml.bind.annotation.XmlRootElement;
 import javax.xml.bind.annotation.XmlType;
 import org.joda.money.CurrencyUnit;
@@ -26,10 +27,37 @@ import org.joda.time.DateTime;
 @XmlRootElement(name = "info")
 @XmlType(propOrder = {"currency", "command", "period"})
 public class FeeInfoCommandExtensionV06
-    extends FeeQueryCommandExtensionItemImpl implements CommandExtension {
+    extends FeeQueryCommandExtensionItem implements CommandExtension {
 
   /** A three-character ISO4217 currency code. */
   CurrencyUnit currency;
+
+  /** The command being checked.  */
+  FeeExtensionCommandDescriptor command;
+
+  /** The name of the command being checked. */
+  @Override
+  public CommandName getCommandName() {
+    return command.getCommand();
+  }
+
+  /** The command name before being parsed into an enum, for use in error strings. */
+  @Override
+  public String getUnparsedCommandName() {
+    return command.getUnparsedCommandName();
+  }
+
+  /** The phase of the command being checked. */
+  @Override
+  public String getPhase() {
+    return command.getPhase();
+  }
+
+  /** The subphase of the command being checked. */
+  @Override
+  public String getSubphase() {
+    return command.getSubphase();
+  }
 
   @Override
   public CurrencyUnit getCurrency() {
@@ -38,7 +66,7 @@ public class FeeInfoCommandExtensionV06
 
   @Override
   public Optional<DateTime> getEffectiveDate() {
-    return Optional.absent();
+    return Optional.empty();
   }
 }
 

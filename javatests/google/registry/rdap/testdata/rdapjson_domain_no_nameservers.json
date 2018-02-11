@@ -1,6 +1,6 @@
 {
   "objectClassName" : "domain",
-  "handle" : "11-Q9JYB4C",
+  "handle" : "18-Q9JYB4C",
   "ldhName" : "fish.xn--q9jyb4c",
   "unicodeName" : "fish.みんな",
   "status" :
@@ -14,9 +14,9 @@
   "links" :
   [
     {
-      "value" : "http://myserver.google.com/domain/fish.xn--q9jyb4c",
+      "value" : "http://myserver.example.com/domain/fish.xn--q9jyb4c",
       "rel" : "self",
-      "href" : "http://myserver.google.com/domain/fish.xn--q9jyb4c",
+      "href" : "http://myserver.example.com/domain/fish.xn--q9jyb4c",
       "type" : "application/rdap+json"
     }
   ],
@@ -44,14 +44,14 @@
     {
       "objectClassName" : "entity",
       "handle" : "4-ROID",
-      "status" : ["active"],
+      "status" : ["active", "associated"],
       "roles" : ["administrative"],
       "links" :
       [
         {
-          "value" : "http://myserver.google.com/entity/4-ROID",
+          "value" : "http://myserver.example.com/entity/4-ROID",
           "rel" : "self",
-          "href" : "http://myserver.google.com/entity/4-ROID",
+          "href" : "http://myserver.example.com/entity/4-ROID",
           "type" : "application/rdap+json"
         }
       ],
@@ -93,14 +93,14 @@
     {
       "objectClassName" : "entity",
       "handle" : "6-ROID",
-      "status" : ["active"],
+      "status" : ["active", "associated"],
       "roles" : ["technical"],
       "links" :
       [
         {
-          "value" : "http://myserver.google.com/entity/6-ROID",
+          "value" : "http://myserver.example.com/entity/6-ROID",
           "rel" : "self",
-          "href" : "http://myserver.google.com/entity/6-ROID",
+          "href" : "http://myserver.example.com/entity/6-ROID",
           "type" : "application/rdap+json"
         }
       ],
@@ -142,14 +142,14 @@
     {
       "objectClassName" : "entity",
       "handle" : "2-ROID",
-      "status" : ["active"],
+      "status" : ["active", "associated"],
       "roles" : ["registrant"],
       "links" :
       [
         {
-          "value" : "http://myserver.google.com/entity/2-ROID",
+          "value" : "http://myserver.example.com/entity/2-ROID",
           "rel" : "self",
-          "href" : "http://myserver.google.com/entity/2-ROID",
+          "href" : "http://myserver.example.com/entity/2-ROID",
           "type" : "application/rdap+json"
         }
       ],

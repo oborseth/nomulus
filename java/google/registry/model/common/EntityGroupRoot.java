@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ public class EntityGroupRoot extends BackupGroupRoot {
   private String id;
 
   /** The root key for cross-tld resources such as registrars. */
-  public static final Key<EntityGroupRoot> getCrossTldKey() {
+  public static Key<EntityGroupRoot> getCrossTldKey() {
     return Key.create(EntityGroupRoot.class, "cross-tld");
   }
 }

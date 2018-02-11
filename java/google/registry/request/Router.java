@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +14,20 @@
 
 package google.registry.request;
 
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
-import com.google.common.base.Throwables;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Throwables.throwIfUnchecked;
+
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Ordering;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
+import java.util.function.Function;
 
 /**
- * Path prefix request router for Nomulus.
+ * Path prefix request router.
  *
  * <p>See the documentation of {@link RequestHandler} for more information.
  *
@@ -37,14 +39,17 @@ import java.util.TreeMap;
  */
 final class Router {
 
-  static Router create(Iterable<Method> componentMethods) {
-    return new Router(extractRoutesFromComponent(componentMethods));
+  /** Create a new Router for the given component class. */
+  static Router create(Class<?> componentClass) {
+    return new Router(componentClass);
   }
 
   private final ImmutableSortedMap<String, Route> routes;
 
-  private Router(ImmutableSortedMap<String, Route> routes) {
-    this.routes = routes;
+  private Router(Class<?> componentClass) {
+    this.routes = extractRoutesFromComponent(componentClass);
+    checkArgument(
+        !this.routes.isEmpty(), "No routes found for class: %s", componentClass.getCanonicalName());
   }
 
   /** Returns the appropriate action route for a request. */
@@ -57,14 +62,15 @@ final class Router {
         return Optional.of(floor.getValue());
       }
     }
-    return Optional.absent();
+    return Optional.empty();
   }
 
-  private static
-      ImmutableSortedMap<String, Route> extractRoutesFromComponent(Iterable<Method> methods) {
+  static ImmutableSortedMap<String, Route> extractRoutesFromComponent(Class<?> componentClass) {
     ImmutableSortedMap.Builder<String, Route> routes =
         new ImmutableSortedMap.Builder<>(Ordering.natural());
-    for (Method method : methods) {
+    for (Method method : componentClass.getMethods()) {
+      // Make App Engine's security manager happy.
+      method.setAccessible(true);
       if (!isDaggerInstantiatorOfType(Runnable.class, method)) {
         continue;
       }
@@ -72,9 +78,12 @@ final class Router {
       if (action == null) {
         continue;
       }
-      @SuppressWarnings("unchecked")  // Safe due to previous checks.
+      @SuppressWarnings("unchecked") // Safe due to previous checks.
       Route route =
-          Route.create(action, (Function<Object, Runnable>) newInstantiator(method));
+          Route.create(
+              action,
+              (Function<Object, Runnable>) newInstantiator(method),
+              method.getReturnType());
       routes.put(action.path(), route);
     }
     return routes.build();
@@ -86,21 +95,19 @@ final class Router {
   }
 
   private static Function<Object, ?> newInstantiator(final Method method) {
-    return new Function<Object, Object>() {
-      @Override
-      public Object apply(Object component) {
-        try {
-          return method.invoke(component);
-        } catch (IllegalAccessException e) {
-          throw new RuntimeException(
-              "Error reflectively accessing component's @Action factory method", e);
-        } catch (InvocationTargetException e) {
-          // This means an exception was thrown during the injection process while instantiating
-          // the @Action class; we should propagate that underlying exception.
-          Throwables.propagateIfPossible(e.getCause());
-          throw new AssertionError(
-              "Component's @Action factory method somehow threw checked exception", e);
-        }
-      }};
+    return component -> {
+      try {
+        return method.invoke(component);
+      } catch (IllegalAccessException e) {
+        throw new RuntimeException(
+            "Error reflectively accessing component's @Action factory method", e);
+      } catch (InvocationTargetException e) {
+        // This means an exception was thrown during the injection process while instantiating
+        // the @Action class; we should propagate that underlying exception.
+        throwIfUnchecked(e.getCause());
+        throw new AssertionError(
+            "Component's @Action factory method somehow threw checked exception", e);
+      }
+    };
   }
 }

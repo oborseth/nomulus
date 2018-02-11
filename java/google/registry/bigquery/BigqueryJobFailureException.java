@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -54,7 +54,7 @@ public final class BigqueryJobFailureException extends RuntimeException {
   @Nullable
   private final GoogleJsonError jsonError;
 
-  private BigqueryJobFailureException(
+  public BigqueryJobFailureException(
       String message,
       @Nullable Throwable cause,
       @Nullable JobStatus jobStatus,
@@ -70,12 +70,13 @@ public final class BigqueryJobFailureException extends RuntimeException {
    * <h3>Sample Reasons</h3>
    *
    * <ul>
-   * <li>{@code "duplicate"}: The table you're trying to create already exists.
-   * <li>{@code "invalidQuery"}: Query syntax error of some sort.
-   * <li>{@code "unknown"}: Non-Bigquery errors.
+   *   <li>{@code "duplicate"}: The table you're trying to create already exists.
+   *   <li>{@code "invalidQuery"}: Query syntax error of some sort.
+   *   <li>{@code "unknown"}: Non-Bigquery errors.
    * </ul>
    *
-   * @see "https://cloud.google.com/bigquery/troubleshooting-errors"
+   * @see <a href="https://cloud.google.com/bigquery/troubleshooting-errors">
+   *     Troubleshooting Errors</a>
    */
   public String getReason() {
     if (jobStatus != null) {

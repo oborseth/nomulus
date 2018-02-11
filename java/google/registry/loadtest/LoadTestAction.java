@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,40 +17,50 @@ package google.registry.loadtest;
 import static com.google.appengine.api.taskqueue.QueueConstants.maxTasksPerAdd;
 import static com.google.appengine.api.taskqueue.QueueFactory.getQueue;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Lists.partition;
-import static com.google.common.collect.Lists.transform;
+import static google.registry.security.XsrfTokenManager.X_CSRF_TOKEN;
+import static google.registry.util.FormattingLogger.getLoggerForCallerClass;
 import static google.registry.util.ResourceUtils.readResourceUtf8;
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Arrays.asList;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.google.appengine.api.taskqueue.TaskOptions;
-import com.google.common.base.Function;
-import com.google.common.base.Joiner;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterators;
-import com.google.common.net.MediaType;
 import google.registry.config.RegistryEnvironment;
 import google.registry.request.Action;
 import google.registry.request.Parameter;
+import google.registry.request.auth.Auth;
+import google.registry.security.XsrfTokenManager;
+import google.registry.util.FormattingLogger;
 import google.registry.util.TaskEnqueuer;
-import java.io.UnsupportedEncodingException;
-import java.net.URLEncoder;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
+import java.util.function.Function;
 import javax.inject.Inject;
 import org.joda.time.DateTime;
 
-/** Simple load test action that can generate configurable QPSes of various EPP actions. */
+/**
+ * Simple load test action that can generate configurable QPSes of various EPP actions.
+ *
+ * <p>All aspects of the load test are configured via URL parameters that are specified when the
+ * loadtest URL is being POSTed to. The {@code clientId} and {@code tld} parameters are required.
+ * All of the other parameters are optional, but if none are specified then no actual load testing
+ * will be done since all of the different kinds of checks default to running zero per second. So at
+ * least one must be specified in order for load testing to do anything.
+ */
 @Action(
-    path = "/_dr/loadtest",
-    method = Action.Method.POST,
-    automaticallyPrintOk = true)
+  path = LoadTestAction.PATH,
+  method = Action.Method.POST,
+  automaticallyPrintOk = true,
+  auth = Auth.AUTH_INTERNAL_OR_ADMIN
+)
 public class LoadTestAction implements Runnable {
+
+  private static final FormattingLogger logger = getLoggerForCallerClass();
 
   private static final int NUM_QUEUES = 10;
   private static final int ARBITRARY_VALID_HOST_LENGTH = 40;
@@ -62,6 +72,8 @@ public class LoadTestAction implements Runnable {
   private static final String EXISTING_HOST = "ns1";
 
   private static final Random random = new Random();
+
+  public static final String PATH = "/_dr/loadtest";
 
   /** The client identifier of the registrar to use for load testing. */
   @Inject
@@ -149,8 +161,16 @@ public class LoadTestAction implements Runnable {
   private final String xmlHostCreateFail;
   private final String xmlHostInfo;
 
+  /**
+   * The XSRF token to be used for making requests to the epptool endpoint.
+   *
+   * <p>Note that the email address is set to empty, because the logged-in user hitting this
+   * endpoint will not be the same as when the tasks themselves fire and hit the epptool endpoint.
+   */
+  private final String xsrfToken;
+
   @Inject
-  LoadTestAction(@Parameter("tld") String tld) {
+  LoadTestAction(@Parameter("tld") String tld, XsrfTokenManager xsrfTokenManager) {
     xmlContactCreateTmpl = loadXml("contact_create");
     xmlContactCreateFail = xmlContactCreateTmpl.replace("%contact%", EXISTING_CONTACT);
     xmlContactInfo = loadXml("contact_info").replace("%contact%", EXISTING_CONTACT);
@@ -167,14 +187,12 @@ public class LoadTestAction implements Runnable {
     xmlHostCreateTmpl = loadXml("host_create");
     xmlHostCreateFail = xmlHostCreateTmpl.replace("%host%", EXISTING_HOST);
     xmlHostInfo = loadXml("host_info").replace("%host%", EXISTING_HOST);
+    xsrfToken = xsrfTokenManager.generateToken("");
   }
 
   @Override
   public void run() {
-    checkArgument(
-        RegistryEnvironment.get() != RegistryEnvironment.PRODUCTION,
-        "DO NOT RUN LOADTESTS IN PROD!");
-
+    validateAndLogRequest();
     DateTime initialStartSecond = DateTime.now(UTC).plusSeconds(delaySeconds);
     ImmutableList.Builder<String> preTaskXmls = new ImmutableList.Builder<>();
     ImmutableList.Builder<String> contactNamesBuilder = new ImmutableList.Builder<>();
@@ -216,27 +234,67 @@ public class LoadTestAction implements Runnable {
       // Do successful creates on random names
       tasks.addAll(
           createTasks(
-              transform(
-                  createNumCopies(xmlContactCreateTmpl, successfulContactCreatesPerSecond),
-                  randomNameReplacer("%contact%", MAX_CONTACT_LENGTH)),
+              createNumCopies(xmlContactCreateTmpl, successfulContactCreatesPerSecond)
+                  .stream()
+                  .map(randomNameReplacer("%contact%", MAX_CONTACT_LENGTH))
+                  .collect(toImmutableList()),
               startSecond));
       tasks.addAll(
           createTasks(
-              transform(
-                  createNumCopies(xmlHostCreateTmpl, successfulHostCreatesPerSecond),
-                  randomNameReplacer("%host%", ARBITRARY_VALID_HOST_LENGTH)),
+              createNumCopies(xmlHostCreateTmpl, successfulHostCreatesPerSecond)
+                  .stream()
+                  .map(randomNameReplacer("%host%", ARBITRARY_VALID_HOST_LENGTH))
+                  .collect(toImmutableList()),
               startSecond));
       tasks.addAll(
           createTasks(
-              FluentIterable.from(
-                      createNumCopies(xmlDomainCreateTmpl, successfulDomainCreatesPerSecond))
-                  .transform(randomNameReplacer("%domain%", MAX_DOMAIN_LABEL_LENGTH))
-                  .transform(listNameReplacer("%contact%", contactNames))
-                  .transform(listNameReplacer("%host%", hostPrefixes))
-                  .toList(),
+              createNumCopies(xmlDomainCreateTmpl, successfulDomainCreatesPerSecond)
+                  .stream()
+                  .map(randomNameReplacer("%domain%", MAX_DOMAIN_LABEL_LENGTH))
+                  .map(listNameReplacer("%contact%", contactNames))
+                  .map(listNameReplacer("%host%", hostPrefixes))
+                  .collect(toImmutableList()),
               startSecond));
     }
-    enqueue(tasks.build());
+    ImmutableList<TaskOptions> taskOptions = tasks.build();
+    enqueue(taskOptions);
+    logger.infofmt("Added %d total load test tasks", taskOptions.size());
+  }
+
+  private void validateAndLogRequest() {
+    checkArgument(
+        RegistryEnvironment.get() != RegistryEnvironment.PRODUCTION,
+        "DO NOT RUN LOADTESTS IN PROD!");
+    checkArgument(
+        successfulDomainCreatesPerSecond > 0
+            || failedDomainCreatesPerSecond > 0
+            || domainInfosPerSecond > 0
+            || domainChecksPerSecond > 0
+            || successfulContactCreatesPerSecond > 0
+            || failedContactCreatesPerSecond > 0
+            || contactInfosPerSecond > 0
+            || successfulHostCreatesPerSecond > 0
+            || failedHostCreatesPerSecond > 0
+            || hostInfosPerSecond > 0,
+        "You must specify at least one of the 'operations per second' parameters.");
+    logger.infofmt(
+        "Running load test with the following params. clientId: %s, delaySeconds: %d, "
+            + "runSeconds: %d, successful|failed domain creates/s: %d|%d, domain infos/s: %d, "
+            + "domain checks/s: %d, successful|failed contact creates/s: %d|%d, "
+            + "contact infos/s: %d, successful|failed host creates/s: %d|%d, host infos/s: %d.",
+        clientId,
+        delaySeconds,
+        runSeconds,
+        successfulDomainCreatesPerSecond,
+        failedDomainCreatesPerSecond,
+        domainInfosPerSecond,
+        domainChecksPerSecond,
+        successfulContactCreatesPerSecond,
+        failedContactCreatesPerSecond,
+        contactInfosPerSecond,
+        successfulHostCreatesPerSecond,
+        failedHostCreatesPerSecond,
+        hostInfosPerSecond);
   }
 
   private String loadXml(String name) {
@@ -251,19 +309,11 @@ public class LoadTestAction implements Runnable {
 
   private Function<String, String> listNameReplacer(final String toReplace, List<String> choices) {
     final Iterator<String> iterator = Iterators.cycle(choices);
-    return new Function<String, String>() {
-      @Override
-      public String apply(String xml) {
-        return xml.replace(toReplace, iterator.next());
-      }};
+    return xml -> xml.replace(toReplace, iterator.next());
   }
 
   private Function<String, String> randomNameReplacer(final String toReplace, final int numChars) {
-    return new Function<String, String>() {
-      @Override
-      public String apply(String xml) {
-        return xml.replace(toReplace, getRandomLabel(numChars));
-      }};
+    return xml -> xml.replace(toReplace, getRandomLabel(numChars));
   }
 
   private String getRandomLabel(int numChars) {
@@ -281,24 +331,13 @@ public class LoadTestAction implements Runnable {
       int offsetMillis = (int) (1000.0 / xmls.size() * i);
       tasks.add(TaskOptions.Builder.withUrl("/_dr/epptool")
           .etaMillis(start.getMillis() + offsetMillis)
-          .payload(
-              Joiner.on('&').withKeyValueSeparator("=").join(
-                  ImmutableMap.of(
-                      "clientId", clientId,
-                      "superuser", false,
-                      "dryRun", false,
-                      "xml", urlEncode(xmls.get(i)))),
-              MediaType.FORM_DATA.toString()));
+          .header(X_CSRF_TOKEN, xsrfToken)
+          .param("clientId", clientId)
+          .param("superuser", Boolean.FALSE.toString())
+          .param("dryRun", Boolean.FALSE.toString())
+          .param("xml", xmls.get(i)));
     }
     return tasks.build();
-  }
-
-  private String urlEncode(String xml) {
-    try {
-      return URLEncoder.encode(xml, UTF_8.toString());
-    } catch (UnsupportedEncodingException e) {
-      throw new RuntimeException(e);
-    }
   }
 
   private void enqueue(List<TaskOptions> tasks) {

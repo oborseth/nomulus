@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -47,7 +47,8 @@ function setUp() {
     integrationEmail: 'integration@example.com',
     supportEmail: 'support@example.com',
     announcementsEmail: 'announcement@example.com',
-    supportPhoneNumber: '+1 (888) 555 0123'
+    supportPhoneNumber: '+1 (888) 555 0123',
+    technicalDocsUrl: 'http://example.com/techdocs'
   });
   registry.registrar.ConsoleTestUtil.setup(test);
 }
@@ -109,7 +110,7 @@ function testVisitContact() {
         '  </response>' +
         '</epp>'
   });
-  assertEquals(3, $('contact-postalInfo').childNodes.length);
+  assertEquals(2, $('contact-postalInfo').childNodes.length);
 }
 
 
@@ -130,5 +131,5 @@ function testAddPostalInfo() {
   assertNull(addPiBtn.getAttribute('disabled'));
   registry.testing.click(addPiBtn);
   assertTrue(addPiBtn.hasAttribute('disabled'));
-  assertEquals(4, $('contact-postalInfo').childNodes.length);
+  assertEquals(3, $('contact-postalInfo').childNodes.length);
 }

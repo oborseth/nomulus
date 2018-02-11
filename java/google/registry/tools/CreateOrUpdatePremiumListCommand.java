@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -67,7 +67,7 @@ abstract class CreateOrUpdatePremiumListCommand extends ConfirmingCommand
 
   abstract String getCommandPath();
 
-  ImmutableMap<String, ? extends Object> getParameterMap() {
+  ImmutableMap<String, ?> getParameterMap() {
     return ImmutableMap.of();
   }
 
@@ -75,11 +75,8 @@ abstract class CreateOrUpdatePremiumListCommand extends ConfirmingCommand
   protected void init() throws Exception {
     name = isNullOrEmpty(name) ? convertFilePathToName(inputFile) : name;
     List<String> lines = Files.readAllLines(inputFile, UTF_8);
-    // Try constructing the premium list locally to check up front for validation errors.
-    new PremiumList.Builder()
-        .setName(name)
-        .setPremiumListMapFromLines(lines)
-        .build();
+    // Try constructing and parsing the premium list locally to check up front for validation errors
+    new PremiumList.Builder().setName(name).build().parse(lines);
     inputLineCount = lines.size();
   }
 
@@ -108,7 +105,7 @@ abstract class CreateOrUpdatePremiumListCommand extends ConfirmingCommand
         getCommandPath(),
         params.build(),
         MediaType.FORM_DATA,
-        requestBody.getBytes());
+        requestBody.getBytes(UTF_8));
 
     return extractServerResponse(response);
   }

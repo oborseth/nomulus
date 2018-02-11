@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,25 +18,24 @@ import static com.google.common.collect.Range.atLeast;
 import static com.google.common.collect.Range.atMost;
 import static com.google.common.collect.Range.closed;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 
 import com.google.common.base.CharMatcher;
-import com.google.common.base.Function;
-import com.google.common.base.Functions;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
-import com.google.common.collect.Range;
 import com.google.common.testing.NullPointerTester;
 import com.google.re2j.Pattern;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import org.junit.Rule;
+import java.util.function.Function;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
@@ -46,12 +45,9 @@ public class FormFieldTest {
 
   private enum ICanHazEnum { LOL, CAT }
 
-  @Rule
-  public final ExpectedException thrown = ExpectedException.none();
-
   @Test
   public void testConvert_nullString_notPresent() {
-    assertThat(FormField.named("lol").build().convert(null)).isAbsent();
+    assertThat(FormField.named("lol").build().convert(null)).isEmpty();
   }
 
   @Test
@@ -73,19 +69,22 @@ public class FormFieldTest {
 
   @Test
   public void testEmptyToNull_emptyString_notPresent() {
-    assertThat(FormField.named("lol").emptyToNull().build().convert("")).isAbsent();
+    assertThat(FormField.named("lol").emptyToNull().build().convert("")).isEmpty();
   }
 
   @Test
   public void testEmptyToNullRequired_emptyString_throwsFfe() {
-    thrown.expect(equalTo(new FormFieldException("This field is required.").propagate("lol")));
-    FormField.named("lol").emptyToNull().required().build().convert("");
+    FormFieldException thrown =
+        expectThrows(
+            FormFieldException.class,
+            () -> FormField.named("lol").emptyToNull().required().build().convert(""));
+    assertThat(thrown, equalTo(new FormFieldException("This field is required.").propagate("lol")));
   }
 
   @Test
   public void testEmptyToNull_typeMismatch() {
-    thrown.expect(IllegalStateException.class);
-    FormField.named("lol", Object.class).emptyToNull();
+    assertThrows(
+        IllegalStateException.class, () -> FormField.named("lol", Object.class).emptyToNull());
   }
 
   @Test
@@ -96,7 +95,7 @@ public class FormFieldTest {
   @Test
   public void testUppercased() {
     FormField<String, String> field = FormField.named("lol").uppercased().build();
-    assertThat(field.convert(null)).isAbsent();
+    assertThat(field.convert(null)).isEmpty();
     assertThat(field.convert("foo")).hasValue("FOO");
     assertThat(field.convert("BAR")).hasValue("BAR");
   }
@@ -104,7 +103,7 @@ public class FormFieldTest {
   @Test
   public void testLowercased() {
     FormField<String, String> field = FormField.named("lol").lowercased().build();
-    assertThat(field.convert(null)).isAbsent();
+    assertThat(field.convert(null)).isEmpty();
     assertThat(field.convert("foo")).hasValue("foo");
     assertThat(field.convert("BAR")).hasValue("bar");
   }
@@ -114,7 +113,7 @@ public class FormFieldTest {
     FormField<String, String> field = FormField.named("lol")
         .in(ImmutableSet.of("foo", "bar"))
         .build();
-    assertThat(field.convert(null)).isAbsent();
+    assertThat(field.convert(null)).isEmpty();
   }
 
   @Test
@@ -131,13 +130,13 @@ public class FormFieldTest {
     FormField<String, String> field = FormField.named("lol")
         .in(ImmutableSet.of("foo", "bar"))
         .build();
-    thrown.expect(equalTo(new FormFieldException("Unrecognized value.").propagate("lol")));
-    field.convert("omfg");
+    FormFieldException thrown = expectThrows(FormFieldException.class, () -> field.convert("omfg"));
+    assertThat(thrown, equalTo(new FormFieldException("Unrecognized value.").propagate("lol")));
   }
 
   @Test
   public void testRange_hasLowerBound_nullValue_passesThrough() {
-    assertThat(FormField.named("lol").range(atLeast(5)).build().convert(null)).isAbsent();
+    assertThat(FormField.named("lol").range(atLeast(5)).build().convert(null)).isEmpty();
   }
 
   @Test
@@ -147,14 +146,16 @@ public class FormFieldTest {
 
   @Test
   public void testRange_minimum_stringLengthShorterThanMinimum_throwsFfe() {
-    thrown.expect(FormFieldException.class);
-    thrown.expectMessage("Number of characters (3) not in range [4");
-    FormField.named("lol").range(atLeast(4)).build().convert("lol");
+    FormFieldException thrown =
+        expectThrows(
+            FormFieldException.class,
+            () -> FormField.named("lol").range(atLeast(4)).build().convert("lol"));
+    assertThat(thrown).hasMessageThat().contains("Number of characters (3) not in range [4");
   }
 
   @Test
   public void testRange_noLowerBound_nullValue_passThrough() {
-    assertThat(FormField.named("lol").range(atMost(5)).build().convert(null)).isAbsent();
+    assertThat(FormField.named("lol").range(atMost(5)).build().convert(null)).isEmpty();
   }
 
   @Test
@@ -164,9 +165,11 @@ public class FormFieldTest {
 
   @Test
   public void testRange_maximum_stringLengthShorterThanMaximum_throwsFfe() {
-    thrown.expect(FormFieldException.class);
-    thrown.expectMessage("Number of characters (6) not in range");
-    FormField.named("lol").range(atMost(5)).build().convert("omgomg");
+    FormFieldException thrown =
+        expectThrows(
+            FormFieldException.class,
+            () -> FormField.named("lol").range(atMost(5)).build().convert("omgomg"));
+    assertThat(thrown).hasMessageThat().contains("Number of characters (6) not in range");
   }
 
   @Test
@@ -181,8 +184,8 @@ public class FormFieldTest {
 
   @Test
   public void testRange_typeMismatch() {
-    thrown.expect(IllegalStateException.class);
-    FormField.named("lol", Object.class).range(atMost(5));
+    assertThrows(
+        IllegalStateException.class, () -> FormField.named("lol", Object.class).range(atMost(5)));
   }
 
   @Test
@@ -193,14 +196,23 @@ public class FormFieldTest {
 
   @Test
   public void testMatches_mismatch_throwsFfeAndShowsDefaultErrorMessageWithPattern() {
-    thrown.expect(equalTo(new FormFieldException("Must match pattern: [a-z]+").propagate("lol")));
-    FormField.named("lol").matches(Pattern.compile("[a-z]+")).build().convert("123abc456");
+    FormFieldException thrown =
+        expectThrows(
+            FormFieldException.class,
+            () ->
+                FormField.named("lol")
+                    .matches(Pattern.compile("[a-z]+"))
+                    .build()
+                    .convert("123abc456"));
+    assertThat(
+        thrown, equalTo(new FormFieldException("Must match pattern: [a-z]+").propagate("lol")));
   }
 
   @Test
   public void testMatches_typeMismatch() {
-    thrown.expect(IllegalStateException.class);
-    FormField.named("lol", Object.class).matches(Pattern.compile("."));
+    assertThrows(
+        IllegalStateException.class,
+        () -> FormField.named("lol", Object.class).matches(Pattern.compile(".")));
   }
 
   @Test
@@ -217,14 +229,7 @@ public class FormFieldTest {
   public void testCast() {
     assertThat(
             FormField.named("lol")
-                .transform(
-                    Integer.class,
-                    new Function<String, Integer>() {
-                      @Override
-                      public Integer apply(String input) {
-                        return Integer.parseInt(input);
-                      }
-                    })
+                .transform(Integer.class, Integer::parseInt)
                 .build()
                 .convert("123"))
         .hasValue(123);
@@ -234,15 +239,8 @@ public class FormFieldTest {
   public void testCast_twice() {
     assertThat(
             FormField.named("lol")
-                .transform(
-                    Object.class,
-                    new Function<String, Object>() {
-                      @Override
-                      public Integer apply(String input) {
-                        return Integer.parseInt(input);
-                      }
-                    })
-                .transform(String.class, Functions.toStringFunction())
+                .transform(Object.class, Integer::parseInt)
+                .transform(String.class, Object::toString)
                 .build()
                 .convert("123"))
         .hasValue("123");
@@ -250,24 +248,28 @@ public class FormFieldTest {
 
   @Test
   public void testAsList_null_notPresent() {
-    assertThat(FormField.named("lol").asList().build().convert(null)).isAbsent();
+    assertThat(FormField.named("lol").asList().build().convert(null)).isEmpty();
   }
 
   @Test
   public void testAsList_empty_returnsEmpty() {
-    assertThat(FormField.named("lol").asList().build().convert(ImmutableList.<String>of()).get())
+    assertThat(FormField.named("lol").asList().build().convert(ImmutableList.of()).get())
         .isEmpty();
   }
 
   @Test
   public void testAsListEmptyToNullRequired_empty_throwsFfe() {
-    thrown.expect(equalTo(new FormFieldException("This field is required.").propagate("lol")));
-    FormField.named("lol")
-        .asList()
-        .emptyToNull()
-        .required()
-        .build()
-        .convert(ImmutableList.<String>of());
+    FormFieldException thrown =
+        expectThrows(
+            FormFieldException.class,
+            () ->
+                FormField.named("lol")
+                    .asList()
+                    .emptyToNull()
+                    .required()
+                    .build()
+                    .convert(ImmutableList.of()));
+    assertThat(thrown, equalTo(new FormFieldException("This field is required.").propagate("lol")));
   }
 
   @Test
@@ -276,8 +278,8 @@ public class FormFieldTest {
         .asList()
         .emptyToNull()
         .build()
-        .convert(ImmutableList.<String>of()))
-        .isAbsent();
+        .convert(ImmutableList.of()))
+        .isEmpty();
   }
 
   @Test
@@ -303,9 +305,12 @@ public class FormFieldTest {
     FormField<String, ICanHazEnum> omgField = FormField.named("omg")
         .asEnum(ICanHazEnum.class)
         .build();
-    thrown.expect(equalTo(new FormFieldException("Enum ICanHazEnum does not contain 'helo'")
-        .propagate("omg")));
-    omgField.convert("helo");
+    FormFieldException thrown =
+        expectThrows(FormFieldException.class, () -> omgField.convert("helo"));
+    assertThat(
+        thrown,
+        equalTo(
+            new FormFieldException("Enum ICanHazEnum does not contain 'helo'").propagate("omg")));
   }
 
   @Test
@@ -317,7 +322,7 @@ public class FormFieldTest {
         .containsExactly("oh", "my", "goth")
         .inOrder();
     assertThat(field.convert("").get()).isEmpty();
-    assertThat(field.convert(null)).isAbsent();
+    assertThat(field.convert(null)).isEmpty();
   }
 
   @Test
@@ -330,7 +335,7 @@ public class FormFieldTest {
         .containsExactly("OH", "MY", "GOTH")
         .inOrder();
     assertThat(field.convert("").get()).isEmpty();
-    assertThat(field.convert(null)).isAbsent();
+    assertThat(field.convert(null)).isEmpty();
   }
 
   @Test
@@ -367,68 +372,73 @@ public class FormFieldTest {
 
   @Test
   public void testAsListRequiredElements_nullElement_throwsFfeWithIndex() {
-    thrown.expect(equalTo(new FormFieldException("This field is required.")
-        .propagate(1)
-        .propagate("lol")));
-    FormField.named("lol")
-        .emptyToNull()
-        .required()
-        .asList()
-        .build()
-        .convert(ImmutableList.of("omg", ""));
+    FormFieldException thrown =
+        expectThrows(
+            FormFieldException.class,
+            () ->
+                FormField.named("lol")
+                    .emptyToNull()
+                    .required()
+                    .asList()
+                    .build()
+                    .convert(ImmutableList.of("omg", "")));
+    assertThat(
+        thrown,
+        equalTo(new FormFieldException("This field is required.").propagate(1).propagate("lol")));
   }
 
   @Test
   public void testMapAsListRequiredElements_nullElement_throwsFfeWithIndexAndKey() {
-    thrown.expect(equalTo(new FormFieldException("This field is required.")
-        .propagate("cat")
-        .propagate(0)
-        .propagate("lol")));
-    FormField.mapNamed("lol")
-        .transform(String.class, new Function<Map<String, ?>, String>() {
-          @Override
-          public String apply(Map<String, ?> input) {
-            return FormField.named("cat")
-                .emptyToNull()
-                .required()
-                .build()
-                .extractUntyped(input)
-                .get();
-          }})
-        .asList()
-        .build()
-        .convert(ImmutableList.<Map<String, ?>>of(
-            ImmutableMap.of("cat", "")));
+    FormFieldException thrown =
+        expectThrows(
+            FormFieldException.class,
+            () ->
+                FormField.mapNamed("lol")
+                    .transform(
+                        String.class,
+                        input ->
+                            FormField.named("cat")
+                                .emptyToNull()
+                                .required()
+                                .build()
+                                .extractUntyped(input)
+                                .get())
+                    .asList()
+                    .build()
+                    .convert(ImmutableList.of(ImmutableMap.of("cat", ""))));
+    assertThat(
+        thrown,
+        equalTo(
+            new FormFieldException("This field is required.")
+                .propagate("cat")
+                .propagate(0)
+                .propagate("lol")));
   }
 
   @Test
   public void testAsListTrimmed_typeMismatch() {
     FormField.named("lol").trimmed().asList();
-    thrown.expect(IllegalStateException.class);
-    FormField.named("lol").asList().trimmed();
+    assertThrows(IllegalStateException.class, () -> FormField.named("lol").asList().trimmed());
   }
 
   @Test
   public void testAsMatrix() {
     assertThat(
-        FormField.named("lol", Integer.class)
-            .transform(new Function<Integer, Integer>() {
-              @Override
-              public Integer apply(Integer input) {
-                return input * 2;
-              }})
-            .asList()
-            .asList()
-            .build()
-            .convert(Lists.cartesianProduct(ImmutableList.of(
-                ImmutableList.of(1, 2),
-                ImmutableList.of(3, 4))))
-            .get())
-                .containsExactly(
-                    ImmutableList.of(2, 6),
-                    ImmutableList.of(2, 8),
-                    ImmutableList.of(4, 6),
-                    ImmutableList.of(4, 8)).inOrder();
+            FormField.named("lol", Integer.class)
+                .transform(input -> input * 2)
+                .asList()
+                .asList()
+                .build()
+                .convert(
+                    Lists.cartesianProduct(
+                        ImmutableList.of(ImmutableList.of(1, 2), ImmutableList.of(3, 4))))
+                .get())
+        .containsExactly(
+            ImmutableList.of(2, 6),
+            ImmutableList.of(2, 8),
+            ImmutableList.of(4, 6),
+            ImmutableList.of(4, 8))
+        .inOrder();
  }
 
   @Test
@@ -448,8 +458,7 @@ public class FormFieldTest {
 
   @Test
   public void testTrimmed_typeMismatch() {
-    thrown.expect(IllegalStateException.class);
-    FormField.named("lol", Object.class).trimmed();
+    assertThrows(IllegalStateException.class, () -> FormField.named("lol", Object.class).trimmed());
   }
 
   @Test
@@ -474,14 +483,12 @@ public class FormFieldTest {
 
   @Test
   public void testNullness() {
-    NullPointerTester tester = new NullPointerTester()
-        .setDefault(Class.class, Object.class)
-        .setDefault(Function.class, Functions.identity())
-        .setDefault(Pattern.class, Pattern.compile("."))
-        .setDefault(Range.class, Range.all())
-        .setDefault(Map.class, ImmutableMap.of())
-        .setDefault(Set.class, ImmutableSet.of())
-        .setDefault(String.class, "hello.com");
+    NullPointerTester tester =
+        new NullPointerTester()
+            .setDefault(Class.class, Object.class)
+            .setDefault(Function.class, x -> x)
+            .setDefault(Pattern.class, Pattern.compile("."))
+            .setDefault(String.class, "hello.com");
     tester.testAllPublicStaticMethods(FormField.class);
     tester.testAllPublicInstanceMethods(FormField.named("lol"));
     tester.testAllPublicInstanceMethods(FormField.named("lol").build());

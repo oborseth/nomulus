@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,10 @@
 // limitations under the License.
 
 package google.registry.tools;
+
+import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import com.beust.jcommander.ParameterException;
 import org.junit.Test;
@@ -34,19 +38,20 @@ public class GetRegistrarCommandTest extends CommandTestCase<GetRegistrarCommand
 
   @Test
   public void testFailure_registrarDoesNotExist() throws Exception {
-    thrown.expect(IllegalStateException.class);
-    runCommand("ClientZ");
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> runCommand("ClientZ"));
+    assertThat(thrown).hasMessageThat().contains("Registrar with id ClientZ does not exist");
   }
 
   @Test
   public void testFailure_noRegistrarName() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand();
+    assertThrows(ParameterException.class, this::runCommand);
   }
 
   @Test
   public void testFailure_oneRegistrarDoesNotExist() throws Exception {
-    thrown.expect(IllegalStateException.class);
-    runCommand("NewRegistrar", "ClientZ");
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> runCommand("NewRegistrar", "ClientZ"));
+    assertThat(thrown).hasMessageThat().contains("Registrar with id ClientZ does not exist");
   }
 }

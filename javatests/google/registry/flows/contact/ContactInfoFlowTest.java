@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,8 @@ import static google.registry.testing.DatastoreHelper.assertNoBillingEvents;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -74,7 +76,7 @@ public class ContactInfoFlowTest extends ResourceFlowTestCase<ContactInfoFlow, C
                 .setPhoneNumber("+1.7035555556")
                 .build())
             .setEmailAddress("jdoe@example.com")
-            .setCurrentSponsorClientId("TheRegistrar")
+            .setPersistedCurrentSponsorClientId("TheRegistrar")
             .setCreationClientId("NewRegistrar")
             .setLastEppUpdateClientId("NewRegistrar")
             .setCreationTimeForTest(DateTime.parse("1999-04-03T22:00:00.0Z"))
@@ -97,7 +99,7 @@ public class ContactInfoFlowTest extends ResourceFlowTestCase<ContactInfoFlow, C
     // Check that the persisted contact info was returned.
     assertTransactionalFlow(false);
     runFlowAssertResponse(
-        readFile("contact_info_response.xml"),
+        loadFile("contact_info_response.xml"),
         // We use a different roid scheme than the samples so ignore it.
         "epp.response.resData.infData.roid");
     assertNoHistory();
@@ -111,7 +113,7 @@ public class ContactInfoFlowTest extends ResourceFlowTestCase<ContactInfoFlow, C
     // Check that the persisted contact info was returned.
     assertTransactionalFlow(false);
     runFlowAssertResponse(
-        readFile("contact_info_response_linked.xml"),
+        loadFile("contact_info_response_linked.xml"),
         // We use a different roid scheme than the samples so ignore it.
         "epp.response.resData.infData.roid");
     assertNoHistory();
@@ -125,7 +127,7 @@ public class ContactInfoFlowTest extends ResourceFlowTestCase<ContactInfoFlow, C
     // Check that the persisted contact info was returned.
     assertTransactionalFlow(false);
     runFlowAssertResponse(
-        readFile("contact_info_response.xml"),
+        loadFile("contact_info_response.xml"),
         // We use a different roid scheme than the samples so ignore it.
         "epp.response.resData.infData.roid");
     assertNoHistory();
@@ -133,14 +135,14 @@ public class ContactInfoFlowTest extends ResourceFlowTestCase<ContactInfoFlow, C
   }
 
   @Test
-  public void testSuccess_otherRegistrarWithoutAuthInfio_doesNotSeeAuthInfo() throws Exception {
+  public void testSuccess_otherRegistrarWithoutAuthInfo_doesNotSeeAuthInfo() throws Exception {
     setClientIdForFlow("NewRegistrar");
     setEppInput("contact_info_no_authinfo.xml");
     persistContactResource(true);
     // Check that the persisted contact info was returned.
     assertTransactionalFlow(false);
     runFlowAssertResponse(
-        readFile("contact_info_response_no_authinfo.xml"),
+        loadFile("contact_info_response_no_authinfo.xml"),
         // We use a different roid scheme than the samples so ignore it.
         "epp.response.resData.infData.roid");
     assertNoHistory();
@@ -154,7 +156,7 @@ public class ContactInfoFlowTest extends ResourceFlowTestCase<ContactInfoFlow, C
     // Check that the persisted contact info was returned.
     assertTransactionalFlow(false);
     runFlowAssertResponse(
-        readFile("contact_info_response.xml"),
+        loadFile("contact_info_response.xml"),
         // We use a different roid scheme than the samples so ignore it.
         "epp.response.resData.infData.roid");
     assertNoHistory();
@@ -163,18 +165,25 @@ public class ContactInfoFlowTest extends ResourceFlowTestCase<ContactInfoFlow, C
 
   @Test
   public void testFailure_neverExisted() throws Exception {
-    thrown.expect(
-        ResourceDoesNotExistException.class,
-        String.format("(%s)", getUniqueIdFromCommand()));
-    runFlow();
+    ResourceDoesNotExistException thrown =
+        expectThrows(ResourceDoesNotExistException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains(String.format("(%s)", getUniqueIdFromCommand()));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_existedButWasDeleted() throws Exception {
     persistContactResource(false);
-    thrown.expect(
-        ResourceDoesNotExistException.class,
-        String.format("(%s)", getUniqueIdFromCommand()));
+    ResourceDoesNotExistException thrown =
+        expectThrows(ResourceDoesNotExistException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains(String.format("(%s)", getUniqueIdFromCommand()));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testIcannActivityReportField_getsLogged() throws Exception {
+    persistContactResource(true);
     runFlow();
+    assertIcannReportingActivityFieldLogged("srs-cont-info");
   }
 }

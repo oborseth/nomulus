@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,16 +21,10 @@ import google.registry.tools.server.ListTldsAction;
  *
  * @see ListObjectsCommandTestCase
  */
-public class ListTldsCommandTest
-    extends ListObjectsCommandTestCase<ListTldsCommand> {
+public class ListTldsCommandTest extends ListObjectsCommandTestCase<ListTldsCommand> {
 
   @Override
   final String getTaskPath() {
     return ListTldsAction.PATH;
-  }
-
-  @Override
-  final String getTld() {
-    return null;
   }
 }

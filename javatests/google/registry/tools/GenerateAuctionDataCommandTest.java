@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import static google.registry.testing.DatastoreHelper.newContactResourceWithRoid
 import static google.registry.testing.DatastoreHelper.newDomainApplication;
 import static google.registry.testing.DatastoreHelper.newSunriseApplication;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.joda.time.DateTimeZone.UTC;
 
@@ -167,7 +168,7 @@ public class GenerateAuctionDataCommandTest extends CommandTestCase<GenerateAuct
     persistResource(newDomainApplication("label.xn--q9jyb4c", contact1));
     persistResource(newDomainApplication("label.xn--q9jyb4c", contact2)
         .asBuilder()
-        .setCurrentSponsorClientId("NewRegistrar")
+        .setPersistedCurrentSponsorClientId("NewRegistrar")
         .build());
     runCommand("--output=" + output, "xn--q9jyb4c");
     assertThat(getOutput()).isEqualTo(Joiner.on('\n').join(ImmutableList.of(
@@ -320,19 +321,16 @@ public class GenerateAuctionDataCommandTest extends CommandTestCase<GenerateAuct
 
   @Test
   public void testFailure_missingTldName() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand();
+    assertThrows(ParameterException.class, this::runCommand);
   }
 
   @Test
   public void testFailure_tooManyParameters() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand("xn--q9jyb4c", "foobar");
+    assertThrows(IllegalArgumentException.class, () -> runCommand("xn--q9jyb4c", "foobar"));
   }
 
   @Test
   public void testFailure_nonexistentTld() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand("foobarbaz");
+    assertThrows(IllegalArgumentException.class, () -> runCommand("foobarbaz"));
   }
 }

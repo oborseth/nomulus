@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,8 @@ package google.registry.rde;
 import static com.google.common.base.Strings.repeat;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.keyring.api.PgpHelper.KeyRequirement.ENCRYPT;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.is;
@@ -27,7 +29,7 @@ import com.google.common.io.ByteStreams;
 import google.registry.keyring.api.Keyring;
 import google.registry.rde.Ghostryde.DecodeResult;
 import google.registry.testing.BouncyCastleProviderRule;
-import google.registry.testing.ExceptionRule;
+import google.registry.testing.FakeKeyringModule;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
@@ -48,9 +50,6 @@ import org.junit.runner.RunWith;
 @RunWith(Theories.class)
 @SuppressWarnings("resource")
 public class GhostrydeTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   @Rule
   public final BouncyCastleProviderRule bouncy = new BouncyCastleProviderRule();
@@ -78,7 +77,7 @@ public class GhostrydeTest {
 
   @Theory
   public void testSimpleApi(Filename filename, Content content) throws Exception {
-    Keyring keyring = new RdeKeyringModule().get();
+    Keyring keyring = new FakeKeyringModule().get();
     byte[] data = content.get().getBytes(UTF_8);
     DateTime mtime = DateTime.parse("1984-12-18T00:30:00Z");
     PGPPublicKey publicKey = keyring.getRdeStagingEncryptionKey();
@@ -95,7 +94,7 @@ public class GhostrydeTest {
   @Theory
   public void testStreamingApi(BufferSize bufferSize, Filename filename, Content content)
       throws Exception {
-    Keyring keyring = new RdeKeyringModule().get();
+    Keyring keyring = new FakeKeyringModule().get();
     byte[] data = content.get().getBytes(UTF_8);
     DateTime mtime = DateTime.parse("1984-12-18T00:30:00Z");
     PGPPublicKey publicKey = keyring.getRdeStagingEncryptionKey();
@@ -125,7 +124,7 @@ public class GhostrydeTest {
 
   @Theory
   public void testEncryptOnly(Content content) throws Exception {
-    Keyring keyring = new RdeKeyringModule().get();
+    Keyring keyring = new FakeKeyringModule().get();
     byte[] data = content.get().getBytes(UTF_8);
     PGPPublicKey publicKey = keyring.getRdeStagingEncryptionKey();
     PGPPrivateKey privateKey = keyring.getRdeStagingDecryptionKey();
@@ -147,7 +146,7 @@ public class GhostrydeTest {
 
   @Theory
   public void testEncryptCompressOnly(Content content) throws Exception {
-    Keyring keyring = new RdeKeyringModule().get();
+    Keyring keyring = new FakeKeyringModule().get();
     PGPPublicKey publicKey = keyring.getRdeStagingEncryptionKey();
     PGPPrivateKey privateKey = keyring.getRdeStagingDecryptionKey();
     byte[] data = content.get().getBytes(UTF_8);
@@ -175,7 +174,7 @@ public class GhostrydeTest {
   public void testFailure_tampering(Content content) throws Exception {
     assumeThat(content.get().length(), is(greaterThan(100)));
 
-    Keyring keyring = new RdeKeyringModule().get();
+    Keyring keyring = new FakeKeyringModule().get();
     PGPPublicKey publicKey = keyring.getRdeStagingEncryptionKey();
     PGPPrivateKey privateKey = keyring.getRdeStagingDecryptionKey();
     byte[] data = content.get().getBytes(UTF_8);
@@ -193,17 +192,22 @@ public class GhostrydeTest {
     korruption(ciphertext, ciphertext.length / 2);
 
     ByteArrayInputStream bsIn = new ByteArrayInputStream(ciphertext);
-    thrown.expect(IllegalStateException.class, "tampering");
-    try (Ghostryde.Decryptor decryptor = ghost.openDecryptor(bsIn, privateKey)) {
-      ByteStreams.copy(decryptor, ByteStreams.nullOutputStream());
-    }
+    IllegalStateException thrown =
+        expectThrows(
+            IllegalStateException.class,
+            () -> {
+              try (Ghostryde.Decryptor decryptor = ghost.openDecryptor(bsIn, privateKey)) {
+                ByteStreams.copy(decryptor, ByteStreams.nullOutputStream());
+              }
+            });
+    assertThat(thrown).hasMessageThat().contains("tampering");
   }
 
   @Theory
   public void testFailure_corruption(Content content) throws Exception {
     assumeThat(content.get().length(), is(lessThan(100)));
 
-    Keyring keyring = new RdeKeyringModule().get();
+    Keyring keyring = new FakeKeyringModule().get();
     PGPPublicKey publicKey = keyring.getRdeStagingEncryptionKey();
     PGPPrivateKey privateKey = keyring.getRdeStagingDecryptionKey();
     byte[] data = content.get().getBytes(UTF_8);
@@ -221,15 +225,18 @@ public class GhostrydeTest {
     korruption(ciphertext, ciphertext.length / 2);
 
     ByteArrayInputStream bsIn = new ByteArrayInputStream(ciphertext);
-    thrown.expect(PGPException.class);
-    try (Ghostryde.Decryptor decryptor = ghost.openDecryptor(bsIn, privateKey)) {
-      ByteStreams.copy(decryptor, ByteStreams.nullOutputStream());
-    }
+    assertThrows(
+        PGPException.class,
+        () -> {
+          try (Ghostryde.Decryptor decryptor = ghost.openDecryptor(bsIn, privateKey)) {
+            ByteStreams.copy(decryptor, ByteStreams.nullOutputStream());
+          }
+        });
   }
 
   @Test
   public void testFailure_keyMismatch() throws Exception {
-    RdeKeyringModule keyringModule = new RdeKeyringModule();
+    FakeKeyringModule keyringModule = new FakeKeyringModule();
     byte[] data = "Fanatics have their dreams, wherewith they weave.".getBytes(UTF_8);
     DateTime mtime = DateTime.parse("1984-12-18T00:30:00Z");
     PGPKeyPair dsa1 = keyringModule.get("rde-unittest@registry.test", ENCRYPT);
@@ -246,18 +253,23 @@ public class GhostrydeTest {
     }
 
     ByteArrayInputStream bsIn = new ByteArrayInputStream(bsOut.toByteArray());
-    thrown.expect(
-        PGPException.class,
-        "Message was encrypted for keyid a59c132f3589a1d5 but ours is c9598c84ec70b9fd");
-    try (Ghostryde.Decryptor decryptor = ghost.openDecryptor(bsIn, privateKey)) {
-      ByteStreams.copy(decryptor, ByteStreams.nullOutputStream());
-    }
+    PGPException thrown =
+        expectThrows(
+            PGPException.class,
+            () -> {
+              try (Ghostryde.Decryptor decryptor = ghost.openDecryptor(bsIn, privateKey)) {
+                ByteStreams.copy(decryptor, ByteStreams.nullOutputStream());
+              }
+            });
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Message was encrypted for keyid a59c132f3589a1d5 but ours is c9598c84ec70b9fd");
   }
 
   @Test
   @Ignore("Intentionally corrupting a PGP key is easier said than done >_>")
   public void testFailure_keyCorruption() throws Exception {
-    RdeKeyringModule keyringModule = new RdeKeyringModule();
+    FakeKeyringModule keyringModule = new FakeKeyringModule();
     byte[] data = "Fanatics have their dreams, wherewith they weave.".getBytes(UTF_8);
     DateTime mtime = DateTime.parse("1984-12-18T00:30:00Z");
     PGPKeyPair rsa = keyringModule.get("rde-unittest@registry.test", ENCRYPT);

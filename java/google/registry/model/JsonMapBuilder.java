@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,9 +14,9 @@
 
 package google.registry.model;
 
-import com.google.common.base.Function;
-import com.google.common.base.Functions;
-import com.google.common.collect.FluentIterable;
+import static com.google.common.collect.ImmutableList.toImmutableList;
+
+import com.google.common.collect.Streams;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -29,14 +29,6 @@ import javax.annotation.Nullable;
  * list is passed as {@code null}, it'll be substituted with empty list. Lists are not mutable.
  */
 public final class JsonMapBuilder {
-
-  private static final Function<Jsonifiable, Map<String, Object>> TO_JSON_OBJECT =
-      new Function<Jsonifiable, Map<String, Object>>() {
-        @Override
-        public Map<String, Object> apply(Jsonifiable input) {
-          return input.toJsonMap();
-        }};
-
   private final Map<String, Object> map = new LinkedHashMap<>();
 
   public JsonMapBuilder put(String name, @Nullable Boolean value) {
@@ -70,15 +62,21 @@ public final class JsonMapBuilder {
   }
 
   public <T> JsonMapBuilder putListOfStrings(String name, @Nullable Iterable<T> value) {
-    map.put(name, value == null ? Collections.EMPTY_LIST
-        : FluentIterable.from(value).transform(Functions.toStringFunction()).toList());
+    map.put(
+        name,
+        value == null
+            ? Collections.EMPTY_LIST
+            : Streams.stream(value).map(Object::toString).collect(toImmutableList()));
     return this;
   }
 
   public JsonMapBuilder putListOfJsonObjects(
       String name, @Nullable Iterable<? extends Jsonifiable> value) {
-    map.put(name, value == null ? Collections.EMPTY_LIST
-        : FluentIterable.from(value).transform(TO_JSON_OBJECT).toList());
+    map.put(
+        name,
+        value == null
+            ? Collections.EMPTY_LIST
+            : Streams.stream(value).map(Jsonifiable::toJsonMap).collect(toImmutableList()));
     return this;
   }
 

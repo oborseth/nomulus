@@ -7,21 +7,19 @@ licenses(["notice"])  # Apache 2.0
 
 load("//java/com/google/testing/builddefs:GenTestRules.bzl", "GenTestRules")
 
-
 java_library(
     name = "forms",
     srcs = glob(["*.java"]),
     deps = [
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//java/com/google/common/testing",
-        "//third_party/java/hamcrest",
-        "//third_party/java/junit",
-        "//third_party/java/mockito",
-        "//third_party/java/re2j",
-        "//third_party/java/truth",
         "//java/google/registry/ui/forms",
         "//javatests/google/registry/testing",
+        "@com_google_guava",
+        "@com_google_guava_testlib",
+        "@com_google_re2j",
+        "@com_google_truth",
+        "@com_google_truth_extensions_truth_java8_extension",
+        "@junit",
+        "@org_mockito_all",
     ],
 )
 

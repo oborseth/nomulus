@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,13 +18,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableMap;
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URLEncoder;
-import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 
@@ -41,7 +40,8 @@ import javax.annotation.concurrent.Immutable;
 final class RdeUploadUrl implements Comparable<RdeUploadUrl> {
 
   public static final Protocol SFTP = new Protocol("sftp", 22);
-  private static final Map<String, Protocol> ALLOWED_PROTOCOLS = ImmutableMap.of("sftp", SFTP);
+  private static final ImmutableMap<String, Protocol> ALLOWED_PROTOCOLS =
+      ImmutableMap.of("sftp", SFTP);
 
   private final Protocol protocol;
   private final URI uri;
@@ -69,7 +69,7 @@ final class RdeUploadUrl implements Comparable<RdeUploadUrl> {
   public Optional<String> getUser() {
     String userInfo = uri.getUserInfo();
     if (isNullOrEmpty(userInfo)) {
-      return Optional.absent();
+      return Optional.empty();
     }
     int idx = userInfo.indexOf(':');
     if (idx != -1) {
@@ -83,13 +83,13 @@ final class RdeUploadUrl implements Comparable<RdeUploadUrl> {
   public Optional<String> getPass() {
     String userInfo = uri.getUserInfo();
     if (isNullOrEmpty(userInfo)) {
-      return Optional.absent();
+      return Optional.empty();
     }
     int idx = userInfo.indexOf(':');
     if (idx != -1) {
       return Optional.of(userInfo.substring(idx + 1));
     } else {
-      return Optional.absent();
+      return Optional.empty();
     }
   }
 
@@ -112,7 +112,7 @@ final class RdeUploadUrl implements Comparable<RdeUploadUrl> {
   public Optional<String> getPath() {
     String path = uri.getPath();
     if (isNullOrEmpty(path) || path.equals("/")) {
-      return Optional.absent();
+      return Optional.empty();
     } else {
       return Optional.of(path.substring(1));
     }
@@ -134,7 +134,7 @@ final class RdeUploadUrl implements Comparable<RdeUploadUrl> {
       result += String.format(":%d", getPort());
     }
     result += "/";
-    result += getPath().or("");
+    result += getPath().orElse("");
     return result;
   }
 

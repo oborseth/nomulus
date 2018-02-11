@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,13 +14,11 @@
 
 package google.registry.util;
 
-import static java.util.Arrays.asList;
-
-import com.google.common.base.Predicate;
-import com.google.common.collect.FluentIterable;
+import java.util.Arrays;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import javax.annotation.Nullable;
 
 /** Logging wrapper. */
 public class FormattingLogger {
@@ -36,14 +34,20 @@ public class FormattingLogger {
     this.logger = Logger.getLogger(name);
   }
 
-  private void log(Level level, Throwable cause, String msg) {
-    StackTraceElement callerFrame = FluentIterable
-        .from(asList(new Exception().getStackTrace()))
-        .firstMatch(new Predicate<StackTraceElement>() {
-            @Override
-            public boolean apply(StackTraceElement frame) {
-              return !frame.getClassName().equals(FormattingLogger.class.getName());
-            }}).get();
+  public void logfmt(Level level, Throwable cause, String fmt, Object... args) {
+    log(level, cause, String.format(fmt, args));
+  }
+
+  public void logfmt(Level level, String fmt, Object... args) {
+    log(level, null, String.format(fmt, args));
+  }
+
+  private void log(Level level, @Nullable Throwable cause, String msg) {
+    StackTraceElement callerFrame =
+        Arrays.stream(new Exception().getStackTrace())
+            .filter(frame -> !frame.getClassName().equals(FormattingLogger.class.getName()))
+            .findFirst()
+            .get();
     if (cause == null) {
       logger.logp(level, callerFrame.getClassName(), callerFrame.getMethodName(), msg);
     } else {
@@ -51,8 +55,20 @@ public class FormattingLogger {
     }
   }
 
+  public void fine(String msg) {
+    log(Level.FINE, null, msg);
+  }
+
+  public void fine(Throwable cause, String msg) {
+    log(Level.FINE, cause, msg);
+  }
+
   public void finefmt(String fmt, Object... args) {
     log(Level.FINE, null, String.format(fmt, args));
+  }
+
+  public void finefmt(Throwable cause, String fmt, Object... args) {
+    log(Level.FINE, cause, String.format(fmt, args));
   }
 
   public void info(String msg) {
@@ -101,6 +117,10 @@ public class FormattingLogger {
 
   public void severefmt(Throwable cause, String fmt, Object... args) {
     log(Level.SEVERE, cause, String.format(fmt, args));
+  }
+
+  public boolean isLoggable(Level level) {
+    return logger.isLoggable(level);
   }
 
   public void addHandler(Handler handler) {

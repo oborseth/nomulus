@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -132,7 +132,8 @@ public class Result extends ImmutableObject {
     /**
      * An RFC 4646 language code.
      *
-     * @see "http://tools.ietf.org/html/rfc4646"
+     * @see <a href="http://tools.ietf.org/html/rfc4646">
+     *     RFC 4646 - Tags for Identifying Languages</a>
      */
     public final String msgLang;
 

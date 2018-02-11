@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,50 +16,59 @@ package google.registry.model.registrar;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Predicates.equalTo;
-import static com.google.common.base.Predicates.in;
-import static com.google.common.base.Predicates.notNull;
 import static com.google.common.base.Strings.emptyToNull;
 import static com.google.common.base.Strings.nullToEmpty;
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
+import static com.google.common.collect.ImmutableSortedMap.toImmutableSortedMap;
+import static com.google.common.collect.ImmutableSortedSet.toImmutableSortedSet;
+import static com.google.common.collect.Ordering.natural;
 import static com.google.common.collect.Sets.immutableEnumSet;
 import static com.google.common.io.BaseEncoding.base64;
+import static google.registry.config.RegistryConfig.getDefaultRegistrarReferralUrl;
+import static google.registry.config.RegistryConfig.getDefaultRegistrarWhoisServer;
+import static google.registry.model.CacheUtils.memoizeWithShortExpiration;
 import static google.registry.model.common.EntityGroupRoot.getCrossTldKey;
 import static google.registry.model.ofy.ObjectifyService.ofy;
-import static google.registry.model.ofy.Ofy.RECOMMENDED_MEMCACHE_EXPIRATION;
-import static google.registry.model.registry.Registries.assertTldExists;
+import static google.registry.model.registry.Registries.assertTldsExist;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableSortedCopy;
+import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
 import static google.registry.util.X509Utils.getCertificateHash;
 import static google.registry.util.X509Utils.loadCertificate;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Comparator.comparing;
+import static java.util.function.Predicate.isEqual;
 
-import com.google.common.base.Predicate;
-import com.google.common.base.Predicates;
+import com.google.common.base.Strings;
 import com.google.common.base.Supplier;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Range;
 import com.google.common.collect.Sets;
+import com.google.common.collect.Streams;
 import com.google.re2j.Pattern;
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.Work;
-import com.googlecode.objectify.annotation.Cache;
+import com.googlecode.objectify.annotation.Embed;
 import com.googlecode.objectify.annotation.Entity;
 import com.googlecode.objectify.annotation.Id;
 import com.googlecode.objectify.annotation.IgnoreSave;
 import com.googlecode.objectify.annotation.Index;
+import com.googlecode.objectify.annotation.Mapify;
 import com.googlecode.objectify.annotation.Parent;
 import com.googlecode.objectify.condition.IfNull;
-import google.registry.config.RegistryEnvironment;
+import com.googlecode.objectify.mapper.Mapper;
 import google.registry.model.Buildable;
 import google.registry.model.CreateAutoTimestamp;
 import google.registry.model.ImmutableObject;
 import google.registry.model.JsonMapBuilder;
 import google.registry.model.Jsonifiable;
 import google.registry.model.UpdateAutoTimestamp;
+import google.registry.model.annotations.ReportedOn;
 import google.registry.model.common.EntityGroupRoot;
+import google.registry.model.registrar.Registrar.BillingAccountEntry.CurrencyMapper;
 import google.registry.util.CidrAddressBlock;
 import google.registry.util.NonFinalForTesting;
 import java.security.MessageDigest;
@@ -70,73 +79,74 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
+import org.joda.money.CurrencyUnit;
 import org.joda.time.DateTime;
 
 /** Information about a registrar. */
-@Cache(expirationSeconds = RECOMMENDED_MEMCACHE_EXPIRATION)
+@ReportedOn
 @Entity
 public class Registrar extends ImmutableObject implements Buildable, Jsonifiable {
 
   /** Represents the type of a registrar entity. */
   public enum Type {
     /** A real-world, third-party registrar.  Should have non-null IANA and billing IDs. */
-    REAL(Predicates.<Long>notNull()),
+    REAL(Objects::nonNull),
 
     /**
      * A registrar account used by a real third-party registrar undergoing operational testing
      * and evaluation. Should only be created in sandbox, and should have null IANA/billing IDs.
      */
-    OTE(Predicates.<Long>isNull()),
+    OTE(Objects::isNull),
 
     /**
      * A registrar used for predelegation testing.  Should have a null billing ID.  The IANA ID
      * should be either 9995 or 9996, which are reserved for predelegation testing.
      */
-    PDT(in(ImmutableSet.of(9995L, 9996L))),
+    PDT(n -> ImmutableSet.of(9995L, 9996L).contains(n)),
 
     /**
      * A registrar used for external monitoring by ICANN.  Should have IANA ID 9997 and a null
      * billing ID.
      */
-    EXTERNAL_MONITORING(equalTo(9997L)),
+    EXTERNAL_MONITORING(isEqual(9997L)),
 
     /**
      * A registrar used for when the registry acts as a registrar.  Must have either IANA ID
      * 9998 (for billable transactions) or 9999 (for non-billable transactions). */
     // TODO(b/13786188): determine what billing ID for this should be, if any.
-    INTERNAL(in(ImmutableSet.of(9998L, 9999L))),
+    INTERNAL(n -> ImmutableSet.of(9998L, 9999L).contains(n)),
 
     /** A registrar used for internal monitoring.  Should have null IANA/billing IDs. */
-    MONITORING(Predicates.<Long>isNull()),
+    MONITORING(Objects::isNull),
 
     /** A registrar used for internal testing.  Should have null IANA/billing IDs. */
-    TEST(Predicates.<Long>isNull());
+    TEST(Objects::isNull);
 
     /**
      * Predicate for validating IANA IDs for this type of registrar.
      *
-     * @see "http://www.iana.org/assignments/registrar-ids/registrar-ids.txt"
+     * @see <a href="http://www.iana.org/assignments/registrar-ids/registrar-ids.txt">Registrar IDs</a>
      */
     private final Predicate<Long> ianaIdValidator;
 
-    private Type(Predicate<Long> ianaIdValidator) {
+    Type(Predicate<Long> ianaIdValidator) {
       this.ianaIdValidator = ianaIdValidator;
     }
 
     /** Returns true if the given IANA identifier is valid for this registrar type. */
     public boolean isValidIanaId(Long ianaId) {
-      return ianaIdValidator.apply(ianaId);
+      return ianaIdValidator.test(ianaId);
     }
   }
 
   /** Represents the state of a persisted registrar entity. */
   public enum State {
-    /**
-     * This registrar is provisioned and may have access to the testing environment, but is not yet
-     * allowed to access the production environment.
-     */
+
+    /** This registrar is provisioned but not yet active, and cannot log in. */
     PENDING,
 
     /** This is an active registrar account which is allowed to provision and modify domains. */
@@ -159,16 +169,14 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
     BRAINTREE;
   }
 
-  private static final RegistryEnvironment ENVIRONMENT = RegistryEnvironment.get();
-
   /** Regex for E.164 phone number format specified by {@code contact.xsd}. */
   private static final Pattern E164_PATTERN = Pattern.compile("\\+[0-9]{1,3}\\.[0-9]{1,14}");
 
   /** Regex for telephone support passcode (5 digit string). */
   public static final Pattern PHONE_PASSCODE_PATTERN = Pattern.compile("\\d{5}");
 
-  /** The states in which a {@link Registrar} is considered {@link #isActive active}. */
-  private static final ImmutableSet<State> ACTIVE_STATES =
+  /** The states in which a {@link Registrar} is considered {@link #isLive live}. */
+  private static final ImmutableSet<State> LIVE_STATES =
       Sets.immutableEnumSet(State.ACTIVE, State.SUSPENDED);
 
   /**
@@ -181,12 +189,31 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
       immutableEnumSet(
           Type.REAL, Type.PDT, Type.OTE, Type.EXTERNAL_MONITORING, Type.MONITORING, Type.INTERNAL);
 
+  /**
+   * Compare two instances of {@link RegistrarContact} by their email addresses lexicographically.
+   */
+  private static final Comparator<RegistrarContact> CONTACT_EMAIL_COMPARATOR =
+      comparing(RegistrarContact::getEmailAddress, String::compareTo);
+
+  /**
+   * A caching {@link Supplier} of a clientId to {@link Registrar} map.
+   *
+   * <p>The supplier's get() method enters a transactionless context briefly to avoid enrolling the
+   * query inside an unrelated client-affecting transaction.
+   */
+  private static final Supplier<ImmutableMap<String, Registrar>> CACHE_BY_CLIENT_ID =
+      memoizeWithShortExpiration(
+          () ->
+              ofy()
+                  .doTransactionless(
+                      () -> Maps.uniqueIndex(loadAll(), Registrar::getClientId)));
+
   @Parent
   Key<EntityGroupRoot> parent = getCrossTldKey();
 
   /**
    * Unique registrar client id. Must conform to "clIDType" as defined in RFC5730.
-   * @see "http://tools.ietf.org/html/rfc5730#section-4.2"
+   * @see <a href="http://tools.ietf.org/html/rfc5730#section-4.2">Shared Structure Schema</a>
    */
   @Id
   String clientIdentifier;
@@ -196,13 +223,13 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
    * on its length.
    *
    * <p>NB: We are assuming that this field is unique across all registrar entities. This is not
-   * formally enforced in our datastore, but should be enforced by ICANN in that no two registrars
-   * will be accredited with the same name.
+   * formally enforced in Datastore, but should be enforced by ICANN in that no two registrars will
+   * be accredited with the same name.
    *
-   * @see "http://www.icann.org/registrar-reports/accredited-list.html"
+   * @see <a href="http://www.icann.org/registrar-reports/accredited-list.html">ICANN-Accredited
+   *     Registrars</a>
    */
-  @Index
-  String registrarName;
+  @Index String registrarName;
 
   /** The type of this registrar. */
   Type type;
@@ -284,13 +311,55 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
    *   <li>9997 is used by ICAAN for SLA monitoring.
    *   <li>9999 is used for cases when the registry operator acts as registrar.
    * </ul>
-   * @see "http://www.iana.org/assignments/registrar-ids/registrar-ids.txt"
+   * @see <a href="http://www.iana.org/assignments/registrar-ids/registrar-ids.txt">Registrar IDs</a>
    */
   @Index
+  @Nullable
   Long ianaIdentifier;
 
   /** Identifier of registrar used in external billing system (e.g. Oracle). */
+  @Nullable
   Long billingIdentifier;
+
+  /**
+   * Map of currency-to-billing account for the registrar.
+   *
+   * <p>A registrar can have different billing accounts that are denoted in different currencies.
+   * This provides flexibility for billing systems that require such distinction. When this field is
+   * accessed by {@link #getBillingAccountMap}, a sorted map is returned to guarantee deterministic
+   * behavior when serializing the map, for display purpose for instance.
+   */
+  @Nullable
+  @Mapify(CurrencyMapper.class)
+  Map<CurrencyUnit, BillingAccountEntry> billingAccountMap;
+
+  /** A billing account entry for this registrar, consisting of a currency and an account Id. */
+  @Embed
+  static class BillingAccountEntry extends ImmutableObject {
+
+    CurrencyUnit currency;
+    String accountId;
+
+    BillingAccountEntry() {}
+
+    BillingAccountEntry(CurrencyUnit currency, String accountId) {
+      this.accountId = accountId;
+      this.currency = currency;
+    }
+
+    BillingAccountEntry(Map.Entry<CurrencyUnit, String> entry) {
+      this.accountId = entry.getValue();
+      this.currency = entry.getKey();
+    }
+
+    /** Mapper to use for {@code @Mapify}. */
+    static class CurrencyMapper implements Mapper<CurrencyUnit, BillingAccountEntry> {
+      @Override
+      public CurrencyUnit getKey(BillingAccountEntry billingAccountEntry) {
+        return billingAccountEntry.currency;
+      }
+    }
+  }
 
   /** URL of registrar's website. */
   String url;
@@ -343,15 +412,21 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
    */
   BillingMethod billingMethod;
 
+  /** Whether the registrar must acknowledge the price to register non-standard-priced domains. */
+  boolean premiumPriceAckRequired;
+
+  public boolean getPremiumPriceAckRequired() {
+    return premiumPriceAckRequired;
+  }
+
   @NonFinalForTesting
-  private static Supplier<byte[]> saltSupplier = new Supplier<byte[]>() {
-    @Override
-    public byte[] get() {
-      // There are 32 bytes in a sha-256 hash, and the salt should generally be the same size.
-      byte[] salt = new byte[32];
-      new SecureRandom().nextBytes(salt);
-      return salt;
-    }};
+  private static Supplier<byte[]> saltSupplier =
+      () -> {
+        // There are 32 bytes in a sha-256 hash, and the salt should generally be the same size.
+        byte[] salt = new byte[32];
+        new SecureRandom().nextBytes(salt);
+        return salt;
+      };
 
   public String getClientId() {
     return clientIdentifier;
@@ -361,12 +436,24 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
     return creationTime.getTimestamp();
   }
 
+  @Nullable
   public Long getIanaIdentifier() {
     return ianaIdentifier;
   }
 
+  @Nullable
   public Long getBillingIdentifier() {
     return billingIdentifier;
+  }
+
+  public ImmutableMap<CurrencyUnit, String> getBillingAccountMap() {
+    if (billingAccountMap == null) {
+      return ImmutableMap.of();
+    }
+    return billingAccountMap
+        .entrySet()
+        .stream()
+        .collect(toImmutableSortedMap(natural(), Map.Entry::getKey, v -> v.getValue().accountId));
   }
 
   public DateTime getLastUpdateTime() {
@@ -393,14 +480,19 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
     return nullToEmptyImmutableSortedCopy(allowedTlds);
   }
 
-  /** Returns {@code true} if registrar is active. */
-  public boolean isActive() {
-    return ACTIVE_STATES.contains(state);
+  /**
+   * Returns {@code true} if the registrar is live.
+   *
+   * <p>A live registrar is one that can have live domains/contacts/hosts in the registry, meaning
+   * that it is either currently active or used to be active (i.e. suspended).
+   */
+  public boolean isLive() {
+    return LIVE_STATES.contains(state);
   }
 
   /** Returns {@code true} if registrar should be visible in WHOIS results. */
-  public boolean isActiveAndPubliclyVisible() {
-    return ACTIVE_STATES.contains(state) && PUBLICLY_VISIBLE_TYPES.contains(type);
+  public boolean isLiveAndPubliclyVisible() {
+    return LIVE_STATES.contains(state) && PUBLICLY_VISIBLE_TYPES.contains(type);
   }
 
   public String getClientCertificate() {
@@ -444,10 +536,7 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
   }
 
   public String getWhoisServer() {
-    if (whoisServer == null) {
-      return ENVIRONMENT.config().getRegistrarDefaultWhoisServer();
-    }
-    return whoisServer;
+    return firstNonNull(whoisServer, getDefaultRegistrarWhoisServer());
   }
 
   public boolean getBlockPremiumNames() {
@@ -463,10 +552,7 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
   }
 
   public String getReferralUrl() {
-    if (referralUrl == null) {
-      return ENVIRONMENT.config().getRegistrarDefaultReferralUrl().toString();
-    }
-    return referralUrl;
+    return firstNonNull(referralUrl, getDefaultRegistrarReferralUrl());
   }
 
   public String getIcannReferralEmail() {
@@ -486,14 +572,24 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
    * address.
    */
   public ImmutableSortedSet<RegistrarContact> getContacts() {
-    return FluentIterable
-        .from(ofy().load().type(RegistrarContact.class).ancestor(Registrar.this))
-        .filter(notNull())
-        .toSortedSet(new Comparator<RegistrarContact>() {
-          @Override
-          public int compare(RegistrarContact rc1, RegistrarContact rc2) {
-            return rc1.getEmailAddress().compareTo(rc2.getEmailAddress());
-          }});
+    return Streams.stream(getContactsIterable())
+        .filter(Objects::nonNull)
+        .collect(toImmutableSortedSet(CONTACT_EMAIL_COMPARATOR));
+  }
+
+  /**
+   * Returns a list of {@link RegistrarContact} objects of a given type for this registrar sorted by
+   * their email address.
+   */
+  public ImmutableSortedSet<RegistrarContact> getContactsOfType(final RegistrarContact.Type type) {
+    return Streams.stream(getContactsIterable())
+        .filter(Objects::nonNull)
+        .filter((@Nullable RegistrarContact contact) -> contact.getTypes().contains(type))
+        .collect(toImmutableSortedSet(CONTACT_EMAIL_COMPARATOR));
+  }
+
+  private Iterable<RegistrarContact> getContactsIterable() {
+    return ofy().load().type(RegistrarContact.class).ancestor(Registrar.this);
   }
 
   @Override
@@ -533,9 +629,8 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
 
   private String hashPassword(String password) {
     try {
-      return base64().encode(
-          MessageDigest.getInstance("SHA-256").digest(
-              (password + salt).getBytes(UTF_8)));
+      return base64()
+          .encode(MessageDigest.getInstance("SHA-256").digest((password + salt).getBytes(UTF_8)));
     } catch (NoSuchAlgorithmException e) {
       // All implementations of MessageDigest are required to support SHA-256.
       throw new RuntimeException(e);
@@ -545,7 +640,8 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
   private static String checkValidPhoneNumber(String phoneNumber) {
     checkArgument(
         E164_PATTERN.matcher(phoneNumber).matches(),
-        "Not a valid E.164 phone number: %s", phoneNumber);
+        "Not a valid E.164 phone number: %s",
+        phoneNumber);
     return phoneNumber;
   }
 
@@ -573,7 +669,8 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
     public Builder setClientId(String clientId) {
       // Client id must be [3,16] chars long. See "clIDType" in the base EPP schema of RFC 5730.
       // (Need to validate this here as there's no matching EPP XSD for validation.)
-      checkArgument(clientId.length() >= 3 && clientId.length() <= 16,
+      checkArgument(
+          Range.closed(3,  16).contains(clientId.length()),
           "Client identifier must be 3-16 characters long.");
       getInstance().clientIdentifier = clientId;
       return this;
@@ -593,6 +690,19 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
       return this;
     }
 
+    public Builder setBillingAccountMap(@Nullable Map<CurrencyUnit, String> billingAccountMap) {
+      if (billingAccountMap == null) {
+        getInstance().billingAccountMap = null;
+      } else {
+        getInstance().billingAccountMap =
+            billingAccountMap
+                .entrySet()
+                .stream()
+                .collect(toImmutableMap(Map.Entry::getKey, BillingAccountEntry::new));
+      }
+      return this;
+    }
+
     public Builder setRegistrarName(String registrarName) {
       getInstance().registrarName = registrarName;
       return this;
@@ -609,10 +719,7 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
     }
 
     public Builder setAllowedTlds(Set<String> allowedTlds) {
-      for (String tld : allowedTlds) {
-        assertTldExists(tld);
-      }
-      getInstance().allowedTlds = ImmutableSortedSet.copyOf(allowedTlds);
+      getInstance().allowedTlds = ImmutableSortedSet.copyOf(assertTldsExist(allowedTlds));
       return this;
     }
 
@@ -659,9 +766,11 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
      */
     public Builder setClientCertificateHash(String clientCertificateHash) {
       if (clientCertificateHash != null) {
-        checkArgument(Pattern.matches("[A-Za-z0-9+/]+", clientCertificateHash),
+        checkArgument(
+            Pattern.matches("[A-Za-z0-9+/]+", clientCertificateHash),
             "--cert_hash not a valid base64 (no padding) value");
-        checkArgument(base64().decode(clientCertificateHash).length == 256 / 8,
+        checkArgument(
+            base64().decode(clientCertificateHash).length == 256 / 8,
             "--cert_hash base64 does not decode to 256 bits");
       }
       getInstance().clientCertificate = null;
@@ -745,8 +854,9 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
 
     public Builder setPassword(String password) {
       // Passwords must be [6,16] chars long. See "pwType" in the base EPP schema of RFC 5730.
-      checkArgument(password != null && password.length() >= 6 && password.length() <= 16,
-          "Password must be [6,16] characters long.");
+      checkArgument(
+          Range.closed(6, 16).contains(nullToEmpty(password).length()),
+          "Password must be 6-16 characters long.");
       getInstance().salt = base64().encode(saltSupplier.get());
       getInstance().passwordHash = getInstance().hashPassword(password);
       return this;
@@ -761,10 +871,19 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
       return this;
     }
 
+    public Builder setPremiumPriceAckRequired(boolean premiumPriceAckRequired) {
+      getInstance().premiumPriceAckRequired = premiumPriceAckRequired;
+      return this;
+    }
+
     /** Build the registrar, nullifying empty fields. */
     @Override
     public Registrar build() {
-      checkNotNull(getInstance().type, "Registrar type cannot be null");
+      checkArgumentNotNull(getInstance().type, "Registrar type cannot be null");
+      checkArgumentNotNull(getInstance().registrarName, "Registrar name cannot be null");
+      checkArgument(
+          getInstance().localizedAddress != null || getInstance().internationalizedAddress != null,
+          "Must specify at least one of localized or internationalized address");
       checkArgument(getInstance().type.isValidIanaId(getInstance().ianaIdentifier),
           String.format("Supplied IANA ID is not valid for %s registrar type: %s",
             getInstance().type, getInstance().ianaIdentifier));
@@ -772,123 +891,26 @@ public class Registrar extends ImmutableObject implements Buildable, Jsonifiable
     }
   }
 
-  /** Load a registrar entity by its client id outside of a transaction. */
-  @Nullable
-  public static Registrar loadByClientId(final String clientId) {
-    return ofy().doTransactionless(new Work<Registrar>() {
-      @Override
-      public Registrar run() {
-        return ofy().load()
-            .type(Registrar.class)
-            .parent(getCrossTldKey())
-            .id(clientId)
-            .now();
-      }});
-  }
-
-  /**
-   * Load registrar entities by client id range outside of a transaction.
-   *
-   * @param clientIdStart returned registrars will have a client id greater than or equal to this
-   * @param clientIdAfterEnd returned registrars will have a client id less than this
-   * @param resultSetMaxSize the maximum number of registrar entities to be returned
-   */
-  public static Iterable<Registrar> loadByClientIdRange(
-      final String clientIdStart, final String clientIdAfterEnd, final int resultSetMaxSize) {
-    return ofy().doTransactionless(new Work<Iterable<Registrar>>() {
-      @Override
-      public Iterable<Registrar> run() {
-        return ofy().load()
-            .type(Registrar.class)
-            .filterKey(">=", Key.create(getCrossTldKey(), Registrar.class, clientIdStart))
-            .filterKey("<", Key.create(getCrossTldKey(), Registrar.class, clientIdAfterEnd))
-            .limit(resultSetMaxSize);
-      }});
-  }
-
-  /** Load a registrar entity by its name outside of a transaction. */
-  @Nullable
-  public static Registrar loadByName(final String name) {
-    return ofy().doTransactionless(new Work<Registrar>() {
-      @Override
-      public Registrar run() {
-        return ofy().load()
-            .type(Registrar.class)
-            .filter("registrarName", name)
-            .first()
-            .now();
-      }});
-  }
-
-  /**
-   * Load registrar entities by registrar name range, inclusive of the start but not the end,
-   * outside of a transaction.
-   *
-   * @param nameStart returned registrars will have a name greater than or equal to this
-   * @param nameAfterEnd returned registrars will have a name less than this
-   * @param resultSetMaxSize the maximum number of registrar entities to be returned
-   */
-  public static Iterable<Registrar> loadByNameRange(
-      final String nameStart, final String nameAfterEnd, final int resultSetMaxSize) {
-    return ofy().doTransactionless(new Work<Iterable<Registrar>>() {
-      @Override
-      public Iterable<Registrar> run() {
-        return ofy().load()
-            .type(Registrar.class)
-            .filter("registrarName >=", nameStart)
-            .filter("registrarName <", nameAfterEnd)
-            .limit(resultSetMaxSize);
-      }});
-  }
-
-  /**
-   * Load registrar entities by IANA identifier range outside of a transaction.
-   *
-   * @param ianaIdentifierStart returned registrars will have an IANA id greater than or equal to
-   *        this
-   * @param ianaIdentifierAfterEnd returned registrars will have an IANA id less than this
-   * @param resultSetMaxSize the maximum number of registrar entities to be returned
-   */
-  public static Iterable<Registrar> loadByIanaIdentifierRange(
-      final Long ianaIdentifierStart,
-      final Long ianaIdentifierAfterEnd,
-      final int resultSetMaxSize) {
-    return ofy().doTransactionless(new Work<Iterable<Registrar>>() {
-      @Override
-      public Iterable<Registrar> run() {
-        return ofy().load()
-            .type(Registrar.class)
-            .filter("ianaIdentifier >=", ianaIdentifierStart)
-            .filter("ianaIdentifier <", ianaIdentifierAfterEnd)
-            .limit(resultSetMaxSize);
-      }});
-  }
-
-  /** Loads all registrar entities. */
+  /** Loads all registrar entities directly from Datastore. */
   public static Iterable<Registrar> loadAll() {
-    return ofy().load().type(Registrar.class).ancestor(getCrossTldKey());
+    return ImmutableList.copyOf(ofy().load().type(Registrar.class).ancestor(getCrossTldKey()));
   }
 
-  /** Loads all active registrar entities. */
-  public static FluentIterable<Registrar> loadAllActive() {
-    return FluentIterable.from(loadAll()).filter(IS_ACTIVE);
+  /** Loads all registrar entities using an in-memory cache. */
+  public static Iterable<Registrar> loadAllCached() {
+    return CACHE_BY_CLIENT_ID.get().values();
   }
 
-  private static final Predicate<Registrar> IS_ACTIVE = new Predicate<Registrar>() {
-    @Override
-    public boolean apply(Registrar registrar) {
-      return registrar.isActive();
-    }};
-
-  /** Loads all active registrar entities. */
-  public static FluentIterable<Registrar> loadAllActiveAndPubliclyVisible() {
-    return FluentIterable.from(loadAll()).filter(IS_ACTIVE_AND_PUBLICLY_VISIBLE);
+  /** Loads and returns a registrar entity by its client id directly from Datastore. */
+  public static Optional<Registrar> loadByClientId(String clientId) {
+    checkArgument(!Strings.isNullOrEmpty(clientId), "clientId must be specified");
+    return Optional.ofNullable(
+        ofy().load().type(Registrar.class).parent(getCrossTldKey()).id(clientId).now());
   }
 
-  private static final Predicate<Registrar> IS_ACTIVE_AND_PUBLICLY_VISIBLE =
-      new Predicate<Registrar>() {
-        @Override
-        public boolean apply(Registrar registrar) {
-          return registrar.isActiveAndPubliclyVisible();
-        }};
+  /** Loads and returns a registrar entity by its client id using an in-memory cache. */
+  public static Optional<Registrar> loadByClientIdCached(String clientId) {
+    checkArgument(!Strings.isNullOrEmpty(clientId), "clientId must be specified");
+    return Optional.ofNullable(CACHE_BY_CLIENT_ID.get().get(clientId));
+  }
 }

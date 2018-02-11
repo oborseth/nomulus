@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,31 +14,27 @@
 
 package google.registry.model.domain;
 
-import static com.google.appengine.tools.development.testing.LocalMemcacheServiceTestConfig.getLocalMemcacheService;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.getOnlyElement;
-import static com.google.common.collect.Iterables.skip;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.EppResourceUtils.loadByForeignKey;
 import static google.registry.testing.DatastoreHelper.cloneAndSetAutoTimestamps;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.newHostResource;
-import static google.registry.testing.DatastoreHelper.persistActiveContact;
-import static google.registry.testing.DatastoreHelper.persistActiveHost;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.DomainResourceSubject.assertAboutDomains;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static org.joda.money.CurrencyUnit.USD;
 
-import com.google.appengine.api.memcache.MemcacheServicePb.MemcacheFlushRequest;
-import com.google.appengine.tools.development.LocalRpcService;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Ordering;
+import com.google.common.collect.Streams;
 import com.googlecode.objectify.Key;
-import google.registry.flows.EppXmlTransformer;
 import google.registry.model.EntityTestCase;
 import google.registry.model.billing.BillingEvent;
 import google.registry.model.billing.BillingEvent.Reason;
@@ -50,33 +46,19 @@ import google.registry.model.domain.secdns.DelegationSignerData;
 import google.registry.model.eppcommon.AuthInfo.PasswordAuth;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.eppcommon.Trid;
-import google.registry.model.eppoutput.EppOutput;
-import google.registry.model.eppoutput.EppResponse;
-import google.registry.model.eppoutput.Result;
-import google.registry.model.eppoutput.Result.Code;
 import google.registry.model.host.HostResource;
-import google.registry.model.ofy.RequestCapturingAsyncDatastoreService;
 import google.registry.model.poll.PollMessage;
 import google.registry.model.registry.Registry;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.model.transfer.TransferData;
-import google.registry.model.transfer.TransferData.TransferServerApproveEntity;
 import google.registry.model.transfer.TransferStatus;
-import google.registry.testing.ExceptionRule;
-import google.registry.xml.ValidationMode;
-import java.util.List;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 
 /** Unit tests for {@link DomainResource}. */
 public class DomainResourceTest extends EntityTestCase {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   DomainResource domain;
 
   @Before
@@ -110,7 +92,7 @@ public class DomainResourceTest extends EntityTestCase {
     Key<PollMessage.OneTime> onetimePollKey =
         Key.create(historyEntryKey, PollMessage.OneTime.class, 1);
     // Set up a new persisted domain entity.
-    domain = cloneAndSetAutoTimestamps(
+    domain = persistResource(cloneAndSetAutoTimestamps(
         new DomainResource.Builder()
             .setFullyQualifiedDomainName("example.com")
             .setRepoId("4-COM")
@@ -129,7 +111,7 @@ public class DomainResourceTest extends EntityTestCase {
             .setContacts(ImmutableSet.of(DesignatedContact.create(Type.ADMIN, contact2Key)))
             .setNameservers(ImmutableSet.of(hostKey))
             .setSubordinateHosts(ImmutableSet.of("ns1.example.com"))
-            .setCurrentSponsorClientId("ThirdRegistrar")
+            .setPersistedCurrentSponsorClientId("ThirdRegistrar")
             .setRegistrationExpirationTime(clock.nowUtc().plusYears(1))
             .setAuthInfo(DomainAuthInfo.create(PasswordAuth.create("password")))
             .setDsData(ImmutableSet.of(DelegationSignerData.create(1, 2, 3, new byte[] {0, 1, 2})))
@@ -137,21 +119,18 @@ public class DomainResourceTest extends EntityTestCase {
                 LaunchNotice.create("tcnid", "validatorId", START_OF_TIME, START_OF_TIME))
             .setTransferData(
                 new TransferData.Builder()
-                    .setExtendedRegistrationYears(1)
                     .setGainingClientId("gaining")
                     .setLosingClientId("losing")
                     .setPendingTransferExpirationTime(clock.nowUtc())
                     .setServerApproveEntities(
-                        ImmutableSet.<Key<? extends TransferServerApproveEntity>>of(
-                            oneTimeBillKey,
-                            recurringBillKey,
-                            autorenewPollKey))
+                        ImmutableSet.of(oneTimeBillKey, recurringBillKey, autorenewPollKey))
                     .setServerApproveBillingEvent(oneTimeBillKey)
                     .setServerApproveAutorenewEvent(recurringBillKey)
                     .setServerApproveAutorenewPollMessage(autorenewPollKey)
                     .setTransferRequestTime(clock.nowUtc().plusDays(1))
                     .setTransferStatus(TransferStatus.SERVER_APPROVED)
-                    .setTransferRequestTrid(Trid.create("client trid"))
+                    .setTransferRequestTrid(Trid.create("client-trid", "server-trid"))
+                    .setTransferredRegistrationExpirationTime(clock.nowUtc().plusYears(2))
                     .build())
             .setDeletePollMessage(onetimePollKey)
             .setAutorenewBillingEvent(recurringBillKey)
@@ -161,8 +140,7 @@ public class DomainResourceTest extends EntityTestCase {
             .setApplication(Key.create(DomainApplication.class, 1))
             .addGracePeriod(GracePeriod.create(
                 GracePeriodStatus.ADD, clock.nowUtc().plusDays(1), "registrar", null))
-            .build());
-    persistResource(domain);
+            .build()));
   }
 
   @Test
@@ -175,10 +153,8 @@ public class DomainResourceTest extends EntityTestCase {
   public void testIndexing() throws Exception {
     verifyIndexing(
         domain,
-        "allContacts.contactId.linked",
         "allContacts.contact",
         "fullyQualifiedDomainName",
-        "nameservers.linked",
         "nsHosts",
         "currentSponsorClientId",
         "deletionTime",
@@ -188,17 +164,17 @@ public class DomainResourceTest extends EntityTestCase {
   @Test
   public void testEmptyStringsBecomeNull() {
     assertThat(newDomainResource("example.com").asBuilder()
-        .setCurrentSponsorClientId(null)
+        .setPersistedCurrentSponsorClientId(null)
         .build()
             .getCurrentSponsorClientId())
                 .isNull();
     assertThat(newDomainResource("example.com").asBuilder()
-            .setCurrentSponsorClientId("")
+            .setPersistedCurrentSponsorClientId("")
             .build()
                 .getCurrentSponsorClientId())
                     .isNull();
     assertThat(newDomainResource("example.com").asBuilder()
-        .setCurrentSponsorClientId(" ")
+        .setPersistedCurrentSponsorClientId(" ")
         .build()
             .getCurrentSponsorClientId())
                 .isNotNull();
@@ -206,11 +182,15 @@ public class DomainResourceTest extends EntityTestCase {
 
   @Test
   public void testEmptySetsAndArraysBecomeNull() {
-    assertThat(newDomainResource("example.com").asBuilder()
-        .setNameservers(null).build().nsHosts).isNull();
-    assertThat(newDomainResource("example.com").asBuilder()
-        .setNameservers(ImmutableSet.<Key<HostResource>>of()).build().nsHosts)
-            .isNull();
+    assertThat(newDomainResource("example.com").asBuilder().setNameservers(null).build().nsHosts)
+        .isNull();
+    assertThat(
+            newDomainResource("example.com")
+                .asBuilder()
+                .setNameservers(ImmutableSet.of())
+                .build()
+                .nsHosts)
+        .isNull();
     assertThat(newDomainResource("example.com").asBuilder()
         .setNameservers(ImmutableSet.of(Key.create(newHostResource("foo.example.tld"))))
             .build().nsHosts)
@@ -236,7 +216,7 @@ public class DomainResourceTest extends EntityTestCase {
         newDomainResource("example.com").asBuilder().setTransferData(null).build();
     DomainResource withEmpty = withNull.asBuilder().setTransferData(TransferData.EMPTY).build();
     assertThat(withNull).isEqualTo(withEmpty);
-    assertThat(withEmpty.hasTransferData()).isFalse();
+    assertThat(withEmpty.transferData).isNull();
   }
 
   @Test
@@ -312,23 +292,27 @@ public class DomainResourceTest extends EntityTestCase {
             .setPeriodYears(1)
             .setParent(historyEntry)
             .build());
-    domain = domain.asBuilder()
-       .setRegistrationExpirationTime(oldExpirationTime)
-       .setTransferData(domain.getTransferData().asBuilder()
-           .setTransferStatus(TransferStatus.PENDING)
-           .setTransferRequestTime(clock.nowUtc().minusDays(4))
-           .setPendingTransferExpirationTime(clock.nowUtc().plusDays(1))
-           .setGainingClientId("winner")
-           .setServerApproveBillingEvent(Key.create(transferBillingEvent))
-           .setServerApproveEntities(ImmutableSet.<Key<? extends TransferServerApproveEntity>>of(
-               Key.create(transferBillingEvent)))
-           .setExtendedRegistrationYears(1)
-           .build())
-        .addGracePeriod(
-            // Okay for billing event to be null since the point of this grace period is just
-            // to check that the transfer will clear all existing grace periods.
-            GracePeriod.create(GracePeriodStatus.ADD, clock.nowUtc().plusDays(100), "foo", null))
-        .build();
+    domain =
+        domain
+            .asBuilder()
+            .setRegistrationExpirationTime(oldExpirationTime)
+            .setTransferData(
+                domain
+                    .getTransferData()
+                    .asBuilder()
+                    .setTransferStatus(TransferStatus.PENDING)
+                    .setTransferRequestTime(clock.nowUtc().minusDays(4))
+                    .setPendingTransferExpirationTime(clock.nowUtc().plusDays(1))
+                    .setGainingClientId("winner")
+                    .setServerApproveBillingEvent(Key.create(transferBillingEvent))
+                    .setServerApproveEntities(ImmutableSet.of(Key.create(transferBillingEvent)))
+                    .build())
+            .addGracePeriod(
+                // Okay for billing event to be null since the point of this grace period is just
+                // to check that the transfer will clear all existing grace periods.
+                GracePeriod.create(
+                    GracePeriodStatus.ADD, clock.nowUtc().plusDays(100), "foo", null))
+            .build();
     DomainResource afterTransfer = domain.cloneProjectedAtTime(clock.nowUtc().plusDays(1));
     DateTime newExpirationTime = oldExpirationTime.plusYears(1);
     Key<BillingEvent.Recurring> serverApproveAutorenewEvent =
@@ -362,7 +346,7 @@ public class DomainResourceTest extends EntityTestCase {
 
   @Test
   public void testStackedGracePeriods() {
-    List<GracePeriod> gracePeriods = ImmutableList.of(
+    ImmutableList<GracePeriod> gracePeriods = ImmutableList.of(
         GracePeriod.create(GracePeriodStatus.ADD, clock.nowUtc().plusDays(3), "foo", null),
         GracePeriod.create(GracePeriodStatus.ADD, clock.nowUtc().plusDays(2), "bar", null),
         GracePeriod.create(GracePeriodStatus.ADD, clock.nowUtc().plusDays(1), "baz", null));
@@ -371,6 +355,26 @@ public class DomainResourceTest extends EntityTestCase {
       assertThat(domain.cloneProjectedAtTime(clock.nowUtc().plusDays(i)).getGracePeriods())
           .containsExactlyElementsIn(Iterables.limit(gracePeriods, 3 - i));
     }
+  }
+
+  @Test
+  public void testGracePeriodsByType() {
+    ImmutableSet<GracePeriod> addGracePeriods = ImmutableSet.of(
+        GracePeriod.create(GracePeriodStatus.ADD, clock.nowUtc().plusDays(3), "foo", null),
+        GracePeriod.create(GracePeriodStatus.ADD, clock.nowUtc().plusDays(1), "baz", null));
+    ImmutableSet<GracePeriod> renewGracePeriods = ImmutableSet.of(
+        GracePeriod.create(GracePeriodStatus.RENEW, clock.nowUtc().plusDays(3), "foo", null),
+        GracePeriod.create(GracePeriodStatus.RENEW, clock.nowUtc().plusDays(1), "baz", null));
+    domain =
+        domain
+            .asBuilder()
+            .setGracePeriods(
+                Streams.concat(addGracePeriods.stream(), renewGracePeriods.stream())
+                    .collect(toImmutableSet()))
+            .build();
+    assertThat(domain.getGracePeriodsOfType(GracePeriodStatus.ADD)).isEqualTo(addGracePeriods);
+    assertThat(domain.getGracePeriodsOfType(GracePeriodStatus.RENEW)).isEqualTo(renewGracePeriods);
+    assertThat(domain.getGracePeriodsOfType(GracePeriodStatus.TRANSFER)).isEmpty();
   }
 
   @Test
@@ -435,49 +439,29 @@ public class DomainResourceTest extends EntityTestCase {
   }
 
   @Test
-  public void testMarshalingLoadsResourcesEfficiently() throws Exception {
-    // All of the resources are in memcache because they were put there when initially persisted.
-    // Clear out memcache so that we count actual datastore calls.
-    getLocalMemcacheService().flushAll(
-        new LocalRpcService.Status(), MemcacheFlushRequest.newBuilder().build());
-    int numPreviousReads = RequestCapturingAsyncDatastoreService.getReads().size();
-    EppXmlTransformer.marshal(
-        EppOutput.create(new EppResponse.Builder()
-            .setResult(Result.create(Code.SUCCESS))
-            .setResData(ImmutableList.of(domain))
-            .setTrid(Trid.create(null, "abc"))
-            .build()),
-        ValidationMode.STRICT);
-    // Assert that there was only one call to datastore (that may have loaded many keys).
-    assertThat(skip(RequestCapturingAsyncDatastoreService.getReads(), numPreviousReads)).hasSize(1);
-  }
-
-  @Test
   public void testToHydratedString_notCircular() {
     domain.toHydratedString();  // If there are circular references, this will overflow the stack.
   }
 
-  // TODO(b/28713909): Remove these tests once ReferenceUnion migration is complete.
   @Test
-  public void testDualSavingOfDesignatedContact() {
-    ContactResource contact = persistActiveContact("time1006");
-    DesignatedContact designatedContact = new DesignatedContact();
-    designatedContact.contact = Key.create(contact);
-    designatedContact.type = Type.ADMIN;
-    DomainResource domainWithContact =
-        domain.asBuilder().setContacts(ImmutableSet.of(designatedContact)).build();
-    assertThat(getOnlyElement(domainWithContact.getContacts()).contactId).isNull();
-    DomainResource reloadedDomain = persistResource(domainWithContact);
-    assertThat(getOnlyElement(reloadedDomain.getContacts()).contactId)
-        .isEqualTo(ReferenceUnion.create(Key.create(contact)));
+  public void testFailure_uppercaseDomainName() {
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> domain.asBuilder().setFullyQualifiedDomainName("AAA.BBB"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Domain name must be in puny-coded, lower-case form");
   }
 
   @Test
-  public void testDualSavingOfNameservers() {
-    HostResource host = persistActiveHost("zzz.xxx.yyy");
-    DomainResource domain = newDomainResource("python-django-unchained.com", host);
-    assertThat(domain.nameservers).isNull();
-    DomainResource djangoReloaded = persistResource(domain);
-    assertThat(djangoReloaded.nameservers).containsExactly(ReferenceUnion.create(Key.create(host)));
+  public void testFailure_utf8DomainName() {
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> domain.asBuilder().setFullyQualifiedDomainName("みんな.みんな"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Domain name must be in puny-coded, lower-case form");
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,12 +24,13 @@ import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.model.registry.Registries.assertTldExists;
 import static google.registry.util.DateTimeUtils.isAtOrAfter;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Comparator.comparing;
+import static java.util.stream.Collectors.joining;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Multimap;
@@ -41,6 +42,8 @@ import google.registry.model.contact.ContactResource;
 import google.registry.model.contact.PostalInfo;
 import google.registry.model.domain.DomainApplication;
 import google.registry.model.domain.launch.ApplicationStatus;
+import google.registry.model.eppcommon.Address;
+import google.registry.model.eppcommon.PhoneNumber;
 import google.registry.model.registrar.Registrar;
 import google.registry.model.registrar.RegistrarAddress;
 import google.registry.model.registrar.RegistrarContact;
@@ -51,10 +54,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import org.joda.time.DateTime;
@@ -132,9 +136,9 @@ final class GenerateAuctionDataCommand implements RemoteApiCommand {
 
     // Output records for the registrars of any applications we emitted above.
     for (String clientId : registrars) {
-      Registrar registrar =
-          checkNotNull(Registrar.loadByClientId(clientId), "Registrar %s does not exist", clientId);
-      result.add(emitRegistrar(registrar));
+      Optional<Registrar> registrar = Registrar.loadByClientId(clientId);
+      checkState(registrar.isPresent(), "Registrar %s does not exist", clientId);
+      result.add(emitRegistrar(registrar.get()));
     }
 
     Files.write(output, result, UTF_8);
@@ -143,12 +147,8 @@ final class GenerateAuctionDataCommand implements RemoteApiCommand {
   /** Return a map of all fully-qualified domain names mapped to the applications for that name. */
   private static Multimap<String, DomainApplication> getDomainApplicationMap(final String tld) {
     DateTime now = DateTime.now(UTC);
-    Multimap<String, DomainApplication> domainApplicationMap = TreeMultimap.create(
-        Ordering.natural(), new Comparator<DomainApplication>() {
-          @Override
-          public int compare(DomainApplication o1, DomainApplication o2) {
-            return o1.getForeignKey().compareTo(o2.getForeignKey());
-          }});
+    Multimap<String, DomainApplication> domainApplicationMap =
+        TreeMultimap.create(Ordering.natural(), comparing(DomainApplication::getForeignKey));
     Iterable<DomainApplication> domainApplications =
         ofy().load().type(DomainApplication.class).filter("tld", tld);
     for (DomainApplication domainApplication : domainApplications) {
@@ -188,13 +188,13 @@ final class GenerateAuctionDataCommand implements RemoteApiCommand {
   /** Return a record line for the given application. */
   private String emitApplication(DomainApplication domainApplication, ContactResource registrant) {
     Optional<PostalInfo> postalInfo =
-        Optional.fromNullable(registrant.getInternationalizedPostalInfo())
-            .or(Optional.fromNullable(registrant.getLocalizedPostalInfo()));
+        Optional.ofNullable(
+            Optional.ofNullable(registrant.getInternationalizedPostalInfo())
+                .orElse(registrant.getLocalizedPostalInfo()));
     Optional<ContactAddress> address =
-        Optional.fromNullable(postalInfo.isPresent() ? postalInfo.get().getAddress() : null);
-    List<String> street =
-        address.isPresent() ? address.get().getStreet() : ImmutableList.<String>of();
-    Optional<ContactPhoneNumber> phoneNumber = Optional.fromNullable(registrant.getVoiceNumber());
+        Optional.ofNullable(postalInfo.map(PostalInfo::getAddress).orElse(null));
+    List<String> street = address.map(Address::getStreet).orElseGet(ImmutableList::of);
+    Optional<ContactPhoneNumber> phoneNumber = Optional.ofNullable(registrant.getVoiceNumber());
 
     // Each line containing an auction participant has the following format:
     //
@@ -202,36 +202,40 @@ final class GenerateAuctionDataCommand implements RemoteApiCommand {
     // Registrant Name|Registrant Company|Registrant Address 1|Registrant Address 2|
     // Registrant City|Registrant Province|Registrant Postal Code|Registrant Country|
     // Registrant Email|Registrant Telephone|Reserve|Application Type
-    return Joiner.on('|').join(ImmutableList.of(
-        domainApplication.getFullyQualifiedDomainName(),
-        domainApplication.getForeignKey(),
-        formatter.print(domainApplication.getCreationTime()),
-        domainApplication.getLastEppUpdateTime() != null
-            ? formatter.print(domainApplication.getLastEppUpdateTime()) : "",
-        domainApplication.getCurrentSponsorClientId(),
-        nullToEmpty(postalInfo.isPresent() ? postalInfo.get().getName() : ""),
-        nullToEmpty(postalInfo.isPresent() ? postalInfo.get().getOrg() : ""),
-        Iterables.getFirst(street, ""),
-        Joiner.on(' ').skipNulls().join(Iterables.skip(street, 1)),
-        nullToEmpty(address.isPresent() ? address.get().getCity() : ""),
-        nullToEmpty(address.isPresent() ? address.get().getState() : ""),
-        nullToEmpty(address.isPresent() ? address.get().getZip() : ""),
-        nullToEmpty(address.isPresent() ? address.get().getCountryCode() : ""),
-        nullToEmpty(registrant.getEmailAddress()),
-        nullToEmpty(phoneNumber.isPresent() ? phoneNumber.get().toPhoneString() : ""),
-        "",
-        domainApplication.getEncodedSignedMarks().isEmpty() ? "Landrush" : "Sunrise"));
+    return Joiner.on('|')
+        .join(
+            ImmutableList.of(
+                domainApplication.getFullyQualifiedDomainName(),
+                domainApplication.getForeignKey(),
+                formatter.print(domainApplication.getCreationTime()),
+                domainApplication.getLastEppUpdateTime() != null
+                    ? formatter.print(domainApplication.getLastEppUpdateTime())
+                    : "",
+                domainApplication.getCurrentSponsorClientId(),
+                nullToEmpty(postalInfo.map(PostalInfo::getName).orElse("")),
+                nullToEmpty(postalInfo.map(PostalInfo::getOrg).orElse("")),
+                Iterables.getFirst(street, ""),
+                street.stream().skip(1).filter(Objects::nonNull).collect(joining(" ")),
+                nullToEmpty(address.map(Address::getCity).orElse("")),
+                nullToEmpty(address.map(Address::getState).orElse("")),
+                nullToEmpty(address.map(Address::getZip).orElse("")),
+                nullToEmpty(address.map(Address::getCountryCode).orElse("")),
+                nullToEmpty(registrant.getEmailAddress()),
+                nullToEmpty(phoneNumber.map(PhoneNumber::toPhoneString).orElse("")),
+                "",
+                domainApplication.getEncodedSignedMarks().isEmpty() ? "Landrush" : "Sunrise"));
   }
 
   /** Return a record line for the given registrar. */
   private static String emitRegistrar(Registrar registrar) {
     // TODO(b/19016140): Determine if this set-up is required.
     Optional<RegistrarContact> contact =
-        Optional.fromNullable(Iterables.getFirst(registrar.getContacts(), null));
-    Optional<RegistrarAddress> address = Optional.fromNullable(registrar.getLocalizedAddress())
-        .or(Optional.fromNullable(registrar.getInternationalizedAddress()));
-    List<String> street =
-        address.isPresent() ? address.get().getStreet() : ImmutableList.<String>of();
+        Optional.ofNullable(Iterables.getFirst(registrar.getContacts(), null));
+    Optional<RegistrarAddress> address =
+        Optional.ofNullable(
+            Optional.ofNullable(registrar.getLocalizedAddress())
+                .orElse(registrar.getInternationalizedAddress()));
+    List<String> street = address.map(Address::getStreet).orElseGet(ImmutableList::of);
 
     // Each line containing the registrar of an auction participant has the following format:
     //
@@ -240,14 +244,16 @@ final class GenerateAuctionDataCommand implements RemoteApiCommand {
     // Registrar Country|Registrar Email|Registrar Telephone
     return Joiner.on('|').join(ImmutableList.of(
         registrar.getClientId(),
-        contact.isPresent() ? contact.get().getName() : "N/A",
+        contact.map(RegistrarContact::getName).orElse("N/A"),
         nullToEmpty(registrar.getRegistrarName()),
         Iterables.getFirst(street, ""),
         Iterables.get(street, 1, ""),
-        address.isPresent() ? nullToEmpty(address.get().getCity()) : "",
-        address.isPresent() ? nullToEmpty(address.get().getState()) : "",
-        address.isPresent() ? nullToEmpty(address.get().getZip()) : "",
-        address.isPresent() ? nullToEmpty(address.get().getCountryCode()) : "",
+        address.map(registrarAddress -> nullToEmpty(registrarAddress.getCity())).orElse(""),
+        address.map(registrarAddress1 ->
+            nullToEmpty(registrarAddress1.getState())).orElse(""),
+        address.map(registrarAddress2 -> nullToEmpty(registrarAddress2.getZip())).orElse(""),
+        address.map(registrarAddress3 ->
+            nullToEmpty(registrarAddress3.getCountryCode())).orElse(""),
         nullToEmpty(registrar.getEmailAddress()),
         nullToEmpty(registrar.getPhoneNumber())));
   }

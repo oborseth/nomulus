@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,38 +15,35 @@
 package google.registry.tools;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.deleteResource;
 import static google.registry.testing.DatastoreHelper.persistActiveHost;
+import static google.registry.testing.DatastoreHelper.persistNewRegistrar;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static org.joda.time.DateTimeZone.UTC;
 
 import google.registry.model.host.HostResource;
 import google.registry.model.registrar.Registrar;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import java.util.Arrays;
 import org.joda.time.DateTime;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link MutatingCommand}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class MutatingCommandTest {
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder()
       .withDatastore()
       .build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   Registrar registrar1;
   Registrar registrar2;
   Registrar newRegistrar1;
@@ -58,16 +55,8 @@ public class MutatingCommandTest {
 
   @Before
   public void init() {
-    registrar1 = persistResource(new Registrar.Builder()
-        .setType(Registrar.Type.REAL)
-        .setClientId("Registrar1")
-        .setIanaIdentifier(1L)
-        .build());
-    registrar2 = persistResource(new Registrar.Builder()
-        .setType(Registrar.Type.REAL)
-        .setClientId("Registrar2")
-        .setIanaIdentifier(2L)
-        .build());
+    registrar1 = persistNewRegistrar("Registrar1", "Registrar1", Registrar.Type.REAL, 1L);
+    registrar2 = persistNewRegistrar("Registrar2", "Registrar2", Registrar.Type.REAL, 2L);
     newRegistrar1 = registrar1.asBuilder().setBillingIdentifier(42L).build();
     newRegistrar2 = registrar2.asBuilder().setBlockPremiumNames(true).build();
 
@@ -77,7 +66,7 @@ public class MutatingCommandTest {
     newHost1 = host1.asBuilder()
         .setLastEppUpdateTime(DateTime.parse("2014-09-09T09:09:09.000Z"))
         .build();
-    newHost2 = host2.asBuilder().setCurrentSponsorClientId("Registrar2").build();
+    newHost2 = host2.asBuilder().setPersistedCurrentSponsorClientId("Registrar2").build();
   }
 
   @Test
@@ -106,16 +95,16 @@ public class MutatingCommandTest {
     String changes = command.prompt();
     assertThat(changes).isEqualTo(
         "Update HostResource@2-ROID\n"
-            + "lastEppUpdateTime -> [null, 2014-09-09T09:09:09.000Z]\n"
+            + "lastEppUpdateTime: null -> 2014-09-09T09:09:09.000Z\n"
             + "\n"
             + "Update HostResource@3-ROID\n"
-            + "currentSponsorClientId -> [TheRegistrar, Registrar2]\n"
+            + "currentSponsorClientId: TheRegistrar -> Registrar2\n"
             + "\n"
             + "Update Registrar@Registrar1\n"
-            + "billingIdentifier -> [null, 42]\n"
+            + "billingIdentifier: null -> 42\n"
             + "\n"
             + "Update Registrar@Registrar2\n"
-            + "blockPremiumNames -> [false, true]\n");
+            + "blockPremiumNames: false -> true\n");
     String results = command.execute();
     assertThat(results).isEqualTo("Updated 4 entities.\n");
     assertThat(ofy().load().entity(host1).now()).isEqualTo(newHost1);
@@ -236,13 +225,13 @@ public class MutatingCommandTest {
             + host1 + "\n"
             + "\n"
             + "Update HostResource@3-ROID\n"
-            + "currentSponsorClientId -> [TheRegistrar, Registrar2]\n"
+            + "currentSponsorClientId: TheRegistrar -> Registrar2\n"
             + "\n"
             + "Delete Registrar@Registrar1\n"
             + registrar1 + "\n"
             + "\n"
             + "Update Registrar@Registrar2\n"
-            + "blockPremiumNames -> [false, true]\n");
+            + "blockPremiumNames: false -> true\n");
     String results = command.execute();
     assertThat(results).isEqualTo("Updated 4 entities.\n");
     assertThat(ofy().load().entity(host1).now()).isNull();
@@ -276,53 +265,49 @@ public class MutatingCommandTest {
             + host1 + "\n"
             + "\n"
             + "Update HostResource@3-ROID\n"
-            + "currentSponsorClientId -> [TheRegistrar, Registrar2]\n"
+            + "currentSponsorClientId: TheRegistrar -> Registrar2\n"
             + "\n"
             + "Delete Registrar@Registrar1\n"
             + registrar1 + "\n"
             + "\n"
             + "Update Registrar@Registrar2\n"
-            + "blockPremiumNames -> [false, true]\n");
-    try {
-      command.execute();
-      assertWithMessage("Expected transaction to fail with IllegalStateException").fail();
-    } catch (IllegalStateException e) {
-      assertThat(e.getMessage()).contains("Entity changed since init() was called.");
-      assertThat(ofy().load().entity(host1).now()).isNull();
-      assertThat(ofy().load().entity(host2).now()).isEqualTo(newHost2);
+            + "blockPremiumNames: false -> true\n");
 
-      // These two shouldn't've changed.
-      assertThat(ofy().load().entity(registrar1).now()).isEqualTo(registrar1);
-      assertThat(ofy().load().entity(registrar2).now()).isEqualTo(registrar2);
-    }
+    IllegalStateException thrown = expectThrows(IllegalStateException.class, command::execute);
+    assertThat(thrown).hasMessageThat().contains("Entity changed since init() was called.");
+    assertThat(ofy().load().entity(host1).now()).isNull();
+    assertThat(ofy().load().entity(host2).now()).isEqualTo(newHost2);
+    // These two shouldn't've changed.
+    assertThat(ofy().load().entity(registrar1).now()).isEqualTo(registrar1);
+    assertThat(ofy().load().entity(registrar2).now()).isEqualTo(registrar2);
   }
 
   @Test
   public void testFailure_nullEntityChange() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
     MutatingCommand command = new MutatingCommand() {
       @Override
       protected void init() {
         stageEntityChange(null, null);
       }
     };
-    command.init();
+    assertThrows(IllegalArgumentException.class, command::init);
   }
 
   @Test
   public void testFailure_updateSameEntityTwice() throws Exception {
-    MutatingCommand command = new MutatingCommand() {
-      @Override
-      protected void init() {
-        stageEntityChange(host1, newHost1);
-        stageEntityChange(host1, host1.asBuilder()
-            .setLastEppUpdateTime(DateTime.now(UTC))
-            .build());
-      }
-    };
-    thrown.expect(
-        IllegalArgumentException.class, "Cannot apply multiple changes for the same entity");
-    command.init();
+    MutatingCommand command =
+        new MutatingCommand() {
+          @Override
+          protected void init() {
+            stageEntityChange(host1, newHost1);
+            stageEntityChange(
+                host1, host1.asBuilder().setLastEppUpdateTime(DateTime.now(UTC)).build());
+          }
+        };
+    IllegalArgumentException thrown = expectThrows(IllegalArgumentException.class, command::init);
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Cannot apply multiple changes for the same entity");
   }
 
   @Test
@@ -333,93 +318,99 @@ public class MutatingCommandTest {
         stageEntityChange(host1, host2);
       }
     };
-    thrown.expect(
-        IllegalArgumentException.class,
-        "Both entity versions in an update must have the same Key.");
-    command.init();
+    IllegalArgumentException thrown = expectThrows(IllegalArgumentException.class, command::init);
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Both entity versions in an update must have the same Key.");
   }
 
   @Test
   public void testFailure_updateDifferentStringId() throws Exception {
-    MutatingCommand command = new MutatingCommand() {
-      @Override
-      public void init() {
-        stageEntityChange(registrar1, registrar2);
-      }
-    };
-    thrown.expect(
-        IllegalArgumentException.class,
-        "Both entity versions in an update must have the same Key.");
-    command.init();
+    MutatingCommand command =
+        new MutatingCommand() {
+          @Override
+          public void init() {
+            stageEntityChange(registrar1, registrar2);
+          }
+        };
+    IllegalArgumentException thrown = expectThrows(IllegalArgumentException.class, command::init);
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Both entity versions in an update must have the same Key.");
   }
 
   @Test
   public void testFailure_updateDifferentKind() throws Exception {
-    MutatingCommand command = new MutatingCommand() {
-      @Override
-      public void init() {
-        stageEntityChange(host1, registrar1);
-      }
-    };
-    thrown.expect(
-        IllegalArgumentException.class,
-        "Both entity versions in an update must have the same Key.");
-    command.init();
+    MutatingCommand command =
+        new MutatingCommand() {
+          @Override
+          public void init() {
+            stageEntityChange(host1, registrar1);
+          }
+        };
+    IllegalArgumentException thrown = expectThrows(IllegalArgumentException.class, command::init);
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Both entity versions in an update must have the same Key.");
   }
 
   @Test
   public void testFailure_updateModifiedEntity() throws Exception {
-    MutatingCommand command = new MutatingCommand() {
-      @Override
-      public void init() {
-        stageEntityChange(host1, newHost1);
-      }
-    };
+    MutatingCommand command =
+        new MutatingCommand() {
+          @Override
+          public void init() {
+            stageEntityChange(host1, newHost1);
+          }
+        };
     command.init();
     persistResource(newHost1);
-    thrown.expect(IllegalStateException.class, "Entity changed since init() was called.");
-    command.execute();
+    IllegalStateException thrown = expectThrows(IllegalStateException.class, command::execute);
+    assertThat(thrown).hasMessageThat().contains("Entity changed since init() was called.");
   }
 
   @Test
   public void testFailure_createExistingEntity() throws Exception {
-    MutatingCommand command = new MutatingCommand() {
-      @Override
-      protected void init() {
-        stageEntityChange(null, newHost1);
-      }
-    };
+    MutatingCommand command =
+        new MutatingCommand() {
+          @Override
+          protected void init() {
+            stageEntityChange(null, newHost1);
+          }
+        };
     command.init();
     persistResource(newHost1);
-    thrown.expect(IllegalStateException.class, "Entity changed since init() was called.");
-    command.execute();
+    IllegalStateException thrown = expectThrows(IllegalStateException.class, command::execute);
+    assertThat(thrown).hasMessageThat().contains("Entity changed since init() was called.");
   }
 
   @Test
   public void testFailure_deleteChangedEntity() throws Exception {
-    MutatingCommand command = new MutatingCommand() {
-      @Override
-      protected void init() {
-        stageEntityChange(host1, null);
-      }
-    };
+    MutatingCommand command =
+        new MutatingCommand() {
+          @Override
+          protected void init() {
+            stageEntityChange(host1, null);
+          }
+        };
     command.init();
     persistResource(newHost1);
-    thrown.expect(IllegalStateException.class, "Entity changed since init() was called.");
-    command.execute();
+    IllegalStateException thrown = expectThrows(IllegalStateException.class, command::execute);
+    assertThat(thrown).hasMessageThat().contains("Entity changed since init() was called.");
   }
 
   @Test
   public void testFailure_deleteRemovedEntity() throws Exception {
-    MutatingCommand command = new MutatingCommand() {
-      @Override
-      protected void init() {
-        stageEntityChange(host1, null);
-      }
-    };
+    MutatingCommand command =
+        new MutatingCommand() {
+          @Override
+          protected void init() {
+            stageEntityChange(host1, null);
+          }
+        };
     command.init();
     deleteResource(host1);
-    thrown.expect(IllegalStateException.class, "Entity changed since init() was called.");
-    command.execute();
+    IllegalStateException thrown = expectThrows(IllegalStateException.class, command::execute);
+    assertThat(thrown).hasMessageThat().contains("Entity changed since init() was called.");
   }
 }

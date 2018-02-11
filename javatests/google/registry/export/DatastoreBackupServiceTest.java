@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,16 +17,16 @@ package google.registry.export;
 import static com.google.appengine.api.datastore.DatastoreServiceFactory.getDatastoreService;
 import static com.google.common.collect.Iterables.transform;
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.google.appengine.api.datastore.Entity;
 import com.google.appengine.api.modules.ModulesService;
-import com.google.common.base.Function;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.InjectRule;
 import google.registry.testing.TaskQueueHelper.TaskMatcher;
 import java.util.Date;
@@ -35,15 +35,11 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link DatastoreBackupService}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class DatastoreBackupServiceTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   @Rule
   public final InjectRule inject = new InjectRule();
@@ -54,8 +50,7 @@ public class DatastoreBackupServiceTest {
       .withTaskQueue()
       .build();
 
-  @Mock
-  private ModulesService modulesService;
+  private final ModulesService modulesService = mock(ModulesService.class);
 
   private static final DateTime START_TIME = DateTime.parse("2014-08-01T01:02:03Z");
 
@@ -99,41 +94,33 @@ public class DatastoreBackupServiceTest {
             .param("kind", "bar"));
   }
 
-  private static final Function<DatastoreBackupInfo, String> BACKUP_NAME_GETTER =
-      new Function<DatastoreBackupInfo, String>() {
-        @Override
-        public String apply(DatastoreBackupInfo backup) {
-          return backup.getName();
-        }};
-
   @Test
   public void testSuccess_findAllByNamePrefix() throws Exception {
-    assertThat(transform(backupService.findAllByNamePrefix("backupA"), BACKUP_NAME_GETTER))
+    assertThat(
+            transform(backupService.findAllByNamePrefix("backupA"), DatastoreBackupInfo::getName))
         .containsExactly("backupA1", "backupA2", "backupA3");
-    assertThat(transform(backupService.findAllByNamePrefix("backupB"), BACKUP_NAME_GETTER))
+    assertThat(
+            transform(backupService.findAllByNamePrefix("backupB"), DatastoreBackupInfo::getName))
         .containsExactly("backupB1", "backupB42");
-    assertThat(transform(backupService.findAllByNamePrefix("backupB4"), BACKUP_NAME_GETTER))
+    assertThat(
+            transform(backupService.findAllByNamePrefix("backupB4"), DatastoreBackupInfo::getName))
         .containsExactly("backupB42");
     assertThat(backupService.findAllByNamePrefix("backupX")).isEmpty();
   }
 
   @Test
   public void testSuccess_findByName() throws Exception {
-    assertThat(BACKUP_NAME_GETTER.apply(backupService.findByName("backupA1")))
-        .isEqualTo("backupA1");
-    assertThat(BACKUP_NAME_GETTER.apply(backupService.findByName("backupB4")))
-        .isEqualTo("backupB42");
+    assertThat(backupService.findByName("backupA1").getName()).isEqualTo("backupA1");
+    assertThat(backupService.findByName("backupB4").getName()).isEqualTo("backupB42");
   }
 
   @Test
   public void testFailure_findByName_multipleMatchingBackups() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    backupService.findByName("backupA");
+    assertThrows(IllegalArgumentException.class, () -> backupService.findByName("backupA"));
   }
 
   @Test
   public void testFailure_findByName_noMatchingBackups() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    backupService.findByName("backupX");
+    assertThrows(IllegalArgumentException.class, () -> backupService.findByName("backupX"));
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ public interface FeeCheckResponseExtension<F extends FeeCheckResponseExtensionIt
    * If currency is not supported at the top level of Check responses for this version of the fee
    * extension, this function has not effect.
    */
-  public void setCurrencyIfSupported(CurrencyUnit currency);
+  void setCurrencyIfSupported(CurrencyUnit currency);
 
-  public ImmutableList<F> getItems();
+  ImmutableList<F> getItems();
 }

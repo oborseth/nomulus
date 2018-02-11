@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,12 +14,11 @@
 
 package google.registry.rdap;
 
-import com.google.common.base.Optional;
 import dagger.Module;
 import dagger.Provides;
 import google.registry.request.Parameter;
 import google.registry.request.RequestParameters;
-import java.net.InetAddress;
+import java.util.Optional;
 import javax.servlet.http.HttpServletRequest;
 
 /** Dagger module for the RDAP package. */
@@ -40,14 +39,14 @@ public final class RdapModule {
 
   @Provides
   @Parameter("nsIp")
-  static Optional<InetAddress> provideNsIp(HttpServletRequest req) {
-    return RequestParameters.extractOptionalInetAddressParameter(req, "nsIp");
+  static Optional<String> provideNsIp(HttpServletRequest req) {
+    return RequestParameters.extractOptionalParameter(req, "nsIp");
   }
 
   @Provides
   @Parameter("ip")
-  static Optional<InetAddress> provideIp(HttpServletRequest req) {
-    return RequestParameters.extractOptionalInetAddressParameter(req, "ip");
+  static Optional<String> provideIp(HttpServletRequest req) {
+    return RequestParameters.extractOptionalParameter(req, "ip");
   }
 
   @Provides
@@ -60,5 +59,35 @@ public final class RdapModule {
   @Parameter("handle")
   static Optional<String> provideHandle(HttpServletRequest req) {
     return RequestParameters.extractOptionalParameter(req, "handle");
+  }
+
+  @Provides
+  @Parameter("registrar")
+  static Optional<String> provideRegistrar(HttpServletRequest req) {
+    return RequestParameters.extractOptionalParameter(req, "registrar");
+  }
+
+  @Provides
+  @Parameter("subtype")
+  static Optional<String> provideSubtype(HttpServletRequest req) {
+    return RequestParameters.extractOptionalParameter(req, "subtype");
+  }
+
+  @Provides
+  @Parameter("includeDeleted")
+  static Optional<Boolean> provideIncludeDeleted(HttpServletRequest req) {
+    return RequestParameters.extractOptionalBooleanParameter(req, "includeDeleted");
+  }
+
+  @Provides
+  @Parameter("formatOutput")
+  static Optional<Boolean> provideFormatOutput(HttpServletRequest req) {
+    return RequestParameters.extractOptionalBooleanParameter(req, "formatOutput");
+  }
+
+  @Provides
+  @Parameter("cursor")
+  static Optional<String> provideCursor(HttpServletRequest req) {
+    return RequestParameters.extractOptionalParameter(req, "cursor");
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,10 @@ package google.registry.flows.host;
 import static google.registry.model.eppoutput.CheckData.HostCheck.create;
 import static google.registry.testing.DatastoreHelper.persistActiveHost;
 import static google.registry.testing.DatastoreHelper.persistDeletedHost;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
+import google.registry.flows.EppException;
 import google.registry.flows.ResourceCheckFlowTestCase;
 import google.registry.flows.exceptions.TooManyResourceChecksException;
 import google.registry.model.host.HostResource;
@@ -62,7 +65,7 @@ public class HostCheckFlowTest extends ResourceCheckFlowTestCase<HostCheckFlow, 
   @Test
   public void testXmlMatches() throws Exception {
     persistActiveHost("ns2.example.tld");
-    runFlowAssertResponse(readFile("host_check_response.xml"));
+    runFlowAssertResponse(loadFile("host_check_response.xml"));
   }
 
   @Test
@@ -75,7 +78,13 @@ public class HostCheckFlowTest extends ResourceCheckFlowTestCase<HostCheckFlow, 
   @Test
   public void testTooManyIds() throws Exception {
     setEppInput("host_check_51.xml");
-    thrown.expect(TooManyResourceChecksException.class);
+    EppException thrown = expectThrows(TooManyResourceChecksException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testIcannActivityReportField_getsLogged() throws Exception {
     runFlow();
+    assertIcannReportingActivityFieldLogged("srs-host-check");
   }
 }

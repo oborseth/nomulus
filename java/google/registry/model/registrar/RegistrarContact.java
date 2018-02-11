@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,23 +14,19 @@
 
 package google.registry.model.registrar;
 
-import static com.google.common.base.Functions.toStringFunction;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.collect.Iterables.transform;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Sets.difference;
 import static google.registry.model.ofy.ObjectifyService.ofy;
-import static google.registry.model.ofy.Ofy.RECOMMENDED_MEMCACHE_EXPIRATION;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableSortedCopy;
-import static google.registry.util.ObjectifyUtils.OBJECTS_TO_KEYS;
+import static java.util.stream.Collectors.joining;
 
 import com.google.common.base.Enums;
-import com.google.common.base.Joiner;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
+import com.google.common.collect.Streams;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.VoidWork;
-import com.googlecode.objectify.annotation.Cache;
 import com.googlecode.objectify.annotation.Entity;
 import com.googlecode.objectify.annotation.Id;
 import com.googlecode.objectify.annotation.Index;
@@ -39,6 +35,7 @@ import google.registry.model.Buildable;
 import google.registry.model.ImmutableObject;
 import google.registry.model.JsonMapBuilder;
 import google.registry.model.Jsonifiable;
+import google.registry.model.annotations.ReportedOn;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Set;
@@ -51,7 +48,7 @@ import java.util.Set;
  * *MUST* also modify the persisted Registrar entity with {@link Registrar#contactsRequireSyncing}
  * set to true.
  */
-@Cache(expirationSeconds = RECOMMENDED_MEMCACHE_EXPIRATION)
+@ReportedOn
 @Entity
 public class RegistrarContact extends ImmutableObject implements Jsonifiable {
 
@@ -85,7 +82,7 @@ public class RegistrarContact extends ImmutableObject implements Jsonifiable {
       return required;
     }
 
-    private Type(String display, boolean required) {
+    Type(String display, boolean required) {
       this.displayName = display;
       this.required = required;
     }
@@ -121,21 +118,30 @@ public class RegistrarContact extends ImmutableObject implements Jsonifiable {
   String gaeUserId;
 
   /**
-   * Whether this contact is publicly visible in WHOIS results as an Admin contact.
+   * Whether this contact is publicly visible in WHOIS registrar query results as an Admin contact.
    */
   boolean visibleInWhoisAsAdmin = false;
 
   /**
-   * Whether this contact is publicly visible in WHOIS results as a Technical contact.
+   * Whether this contact is publicly visible in WHOIS registrar query results as a Technical
+   * contact.
    */
   boolean visibleInWhoisAsTech = false;
+
+  /**
+   * Whether this contact's phone number and email address is publicly visible in WHOIS domain query
+   * results as registrar abuse contact info.
+   */
+  boolean visibleInDomainWhoisAsAbuse = false;
 
   public static ImmutableSet<Type> typesFromCSV(String csv) {
     return typesFromStrings(Arrays.asList(csv.split(",")));
   }
 
   public static ImmutableSet<Type> typesFromStrings(Iterable<String> typeNames) {
-    return FluentIterable.from(typeNames).transform(Enums.stringConverter(Type.class)).toSet();
+    return Streams.stream(typeNames)
+        .map(Enums.stringConverter(Type.class))
+        .collect(toImmutableSet());
   }
 
   /**
@@ -148,15 +154,25 @@ public class RegistrarContact extends ImmutableObject implements Jsonifiable {
    */
   public static void updateContacts(
       final Registrar registrar, final Set<RegistrarContact> contacts) {
-    ofy().transact(new VoidWork() {
-      @Override
-      public void vrun() {
-        ofy().delete().keys(difference(
-            ImmutableSet.copyOf(
-                ofy().load().type(RegistrarContact.class).ancestor(registrar).keys()),
-            FluentIterable.from(contacts).transform(OBJECTS_TO_KEYS).toSet()));
-        ofy().save().entities(contacts);
-      }});
+    ofy()
+        .transact(
+            new VoidWork() {
+              @Override
+              public void vrun() {
+                ofy()
+                    .delete()
+                    .keys(
+                        difference(
+                            ImmutableSet.copyOf(
+                                ofy()
+                                    .load()
+                                    .type(RegistrarContact.class)
+                                    .ancestor(registrar)
+                                    .keys()),
+                            contacts.stream().map(Key::create).collect(toImmutableSet())));
+                ofy().save().entities(contacts);
+              }
+            });
   }
 
   public Key<Registrar> getParent() {
@@ -191,6 +207,10 @@ public class RegistrarContact extends ImmutableObject implements Jsonifiable {
     return visibleInWhoisAsTech;
   }
 
+  public boolean getVisibleInDomainWhoisAsAbuse() {
+    return visibleInDomainWhoisAsAbuse;
+  }
+
   public String getGaeUserId() {
     return gaeUserId;
   }
@@ -223,11 +243,19 @@ public class RegistrarContact extends ImmutableObject implements Jsonifiable {
       result.append("Fax: ").append(getFaxNumber()).append('\n');
     }
     result.append("Types: ").append(getTypes()).append('\n');
-    result.append("Visible in WHOIS as Admin contact: ")
+    result
+        .append("Visible in registrar WHOIS query as Admin contact: ")
         .append(getVisibleInWhoisAsAdmin() ? "Yes" : "No")
         .append("\n");
-    result.append("Visible in WHOIS as Technical contact: ")
+    result
+        .append("Visible in registrar WHOIS query as Technical contact: ")
         .append(getVisibleInWhoisAsTech() ? "Yes" : "No")
+        .append("\n");
+    result
+        .append(
+            "Phone number and email visible in domain WHOIS query as "
+                + "Registrar Abuse contact info: ")
+        .append(getVisibleInDomainWhoisAsAbuse() ? "Yes" : "No")
         .append("\n");
     if (getGaeUserId() != null) {
       result.append("GAE-UserID: ").append(getGaeUserId()).append('\n');
@@ -242,9 +270,10 @@ public class RegistrarContact extends ImmutableObject implements Jsonifiable {
         .put("emailAddress", emailAddress)
         .put("phoneNumber", phoneNumber)
         .put("faxNumber", faxNumber)
-        .put("types", Joiner.on(',').join(transform(getTypes(), toStringFunction())))
+        .put("types", getTypes().stream().map(Object::toString).collect(joining(",")))
         .put("visibleInWhoisAsAdmin", visibleInWhoisAsAdmin)
         .put("visibleInWhoisAsTech", visibleInWhoisAsTech)
+        .put("visibleInDomainWhoisAsAbuse", visibleInDomainWhoisAsAbuse)
         .put("gaeUserId", gaeUserId)
         .build();
   }
@@ -306,6 +335,11 @@ public class RegistrarContact extends ImmutableObject implements Jsonifiable {
 
     public Builder setVisibleInWhoisAsTech(boolean visible) {
       getInstance().visibleInWhoisAsTech = visible;
+      return this;
+    }
+
+    public Builder setVisibleInDomainWhoisAsAbuse(boolean visible) {
+      getInstance().visibleInDomainWhoisAsAbuse = visible;
       return this;
     }
 

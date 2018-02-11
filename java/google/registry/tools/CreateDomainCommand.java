@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,64 +16,23 @@ package google.registry.tools;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.google.template.soy.data.SoyMapData;
 import google.registry.tools.soy.DomainCreateSoyInfo;
 import google.registry.util.StringGenerator;
-import java.util.List;
 import javax.inject.Inject;
 
 /** A command to create a new domain via EPP. */
 @Parameters(separators = " =", commandDescription = "Create a new domain via EPP.")
-final class CreateDomainCommand extends MutatingEppToolCommand {
-
-  @Parameter(
-      names = {"-c", "--client"},
-      description = "Client identifier of the registrar to execute the command as",
-      required = true)
-  String clientId;
-
-  @Parameter(
-      names = "--domain",
-      description = "Domain name",
-      required = true)
-  private String domain;
+final class CreateDomainCommand extends CreateOrUpdateDomainCommand {
 
   @Parameter(
       names = "--period",
       description = "Initial registration period, in years.")
   private Integer period;
-
-  @Parameter(
-      names = {"-n", "--nameservers"},
-      description = "List of nameservers, up to 13.",
-      variableArity = true)
-  private List<String> ns;
-
-  @Parameter(
-      names = {"-r", "--registrant"},
-      description = "Domain registrant.",
-      required = true)
-  private String registrant;
-
-  @Parameter(
-      names = {"-a", "--admin"},
-      description = "Admin contact.",
-      required = true)
-  private String admin;
-
-  @Parameter(
-      names = {"-t", "--tech"},
-      description = "Technical contact.",
-      required = true)
-  private String tech;
-
-  @Parameter(
-      names = {"-p", "--password"},
-      description = "Password. Optional, randomly generated if not provided.")
-  private String password;
 
   @Inject
   StringGenerator passwordGenerator;
@@ -82,19 +41,26 @@ final class CreateDomainCommand extends MutatingEppToolCommand {
 
   @Override
   protected void initMutatingEppToolCommand() {
+    checkArgumentNotNull(registrant, "Registrant must be specified");
+    checkArgument(!admins.isEmpty(), "At least one admin must be specified");
+    checkArgument(!techs.isEmpty(), "At least one tech must be specified");
     if (isNullOrEmpty(password)) {
       password = passwordGenerator.createString(PASSWORD_LENGTH);
     }
-    checkArgument(ns == null || ns.size() <= 13, "There can be at most 13 nameservers.");
 
-    setSoyTemplate(DomainCreateSoyInfo.getInstance(), DomainCreateSoyInfo.DOMAINCREATE);
-    addSoyRecord(clientId, new SoyMapData(
-        "domain", domain,
-        "period", period == null ? null : period.toString(),
-        "ns", ns,
-        "registrant", registrant,
-        "admin", admin,
-        "tech", tech,
-        "password", password));
+    for (String domain : domains) {
+      setSoyTemplate(DomainCreateSoyInfo.getInstance(), DomainCreateSoyInfo.DOMAINCREATE);
+      addSoyRecord(
+          clientId,
+          new SoyMapData(
+              "domain", domain,
+              "period", period == null ? null : period.toString(),
+              "nameservers", nameservers,
+              "registrant", registrant,
+              "admins", admins,
+              "techs", techs,
+              "password", password,
+              "dsRecords", DsRecord.convertToSoy(dsRecords)));
+    }
   }
 }

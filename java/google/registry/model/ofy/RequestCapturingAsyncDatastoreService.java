@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,9 +39,9 @@ public class RequestCapturingAsyncDatastoreService implements AsyncDatastoreServ
 
   private final AsyncDatastoreService delegate;
 
-  // Each outer lists represents datastore operations, with inner lists representing the keys or
+  // Each outer lists represents Datastore operations, with inner lists representing the keys or
   // entities involved in that operation. We use static lists because we care about overall calls to
-  // datastore, not calls via a specific instance of the service.
+  // Datastore, not calls via a specific instance of the service.
 
   private static List<List<Key>> reads = synchronizedList(new ArrayList<List<Key>>());
   private static List<List<Key>> deletes = synchronizedList(new ArrayList<List<Key>>());

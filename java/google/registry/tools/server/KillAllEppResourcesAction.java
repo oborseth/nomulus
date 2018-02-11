@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ import static google.registry.util.PipelineUtils.createJobPath;
 import com.google.appengine.tools.mapreduce.Mapper;
 import com.google.common.collect.ImmutableList;
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.Work;
 import google.registry.config.RegistryEnvironment;
 import google.registry.mapreduce.MapreduceRunner;
 import google.registry.mapreduce.inputs.EppResourceInputs;
@@ -33,10 +32,22 @@ import google.registry.model.index.EppResourceIndex;
 import google.registry.model.index.ForeignKeyIndex;
 import google.registry.request.Action;
 import google.registry.request.Response;
+import google.registry.request.auth.Auth;
 import javax.inject.Inject;
 
-/** Deletes all {@link EppResource} objects in datastore, including indices and descendants. */
-@Action(path = "/_dr/task/killAllEppResources", method = POST)
+/**
+ * Deletes all {@link EppResource} objects in Datastore, including indices and descendants.
+ *
+ * <p>Because there are no auth settings in the {@link Action} annotation, this command can only be
+ * run internally, or by pretending to be internal by setting the X-AppEngine-QueueName header,
+ * which only admin users can do. That makes this command hard to use, which is appropriate, given
+ * the drastic consequences of accidental execution.
+ */
+@Action(
+  path = "/_dr/task/killAllEppResources",
+  method = POST,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public class KillAllEppResourcesAction implements Runnable {
 
   @Inject MapreduceRunner mrRunner;
@@ -85,14 +96,7 @@ public class KillAllEppResourcesAction implements Runnable {
       for (Key<Object> key : ofy().load().ancestor(resourceKey).keys()) {
         emitAndIncrementCounter(resourceKey, key);
       }
-      // Load in a transaction to make sure we don't get stale data (in case of host renames).
-      // TODO(b/27424173): A transaction is overkill. When we have memcache-skipping, use that.
-      EppResource resource = ofy().transactNewReadOnly(
-          new Work<EppResource>() {
-            @Override
-            public EppResource run() {
-              return ofy().load().key(eri.getKey()).now();
-            }});
+      EppResource resource = ofy().load().key(eri.getKey()).now();
       // TODO(b/28247733): What about FKI's for renamed hosts?
       Key<?> indexKey = resource instanceof DomainApplication
           ? DomainApplicationIndex.createKey((DomainApplication) resource)

@@ -5,14 +5,14 @@
       "objectClassName" : "nameserver",
       "handle" : "14-ROID",
       "status" : ["active"],
-      "ldhName" : "ns1.cat.lol",
+      "ldhName" : "nsx1.cat.lol",
       "links" :
       [
         {
-          "value" : "https://example.tld/rdap/nameserver/ns1.cat.lol",
+          "value" : "https://example.tld/rdap/nameserver/nsx1.cat.lol",
           "rel" : "self",
           "type" : "application/rdap+json",
-          "href" : "https://example.tld/rdap/nameserver/ns1.cat.lol"
+          "href" : "https://example.tld/rdap/nameserver/nsx1.cat.lol"
         }
       ],
       "ipAddresses" :
@@ -33,14 +33,14 @@
       "objectClassName" : "nameserver",
       "handle" : "15-ROID",
       "status" : ["active"],
-      "ldhName" : "ns2.cat.lol",
+      "ldhName" : "nsx2.cat.lol",
       "links" :
       [
         {
-          "value" : "https://example.tld/rdap/nameserver/ns2.cat.lol",
+          "value" : "https://example.tld/rdap/nameserver/nsx2.cat.lol",
           "rel" : "self",
           "type" : "application/rdap+json",
-          "href" : "https://example.tld/rdap/nameserver/ns2.cat.lol"
+          "href" : "https://example.tld/rdap/nameserver/nsx2.cat.lol"
         }
       ],
       "ipAddresses" :
@@ -61,14 +61,14 @@
       "objectClassName" : "nameserver",
       "handle" : "16-ROID",
       "status" : ["active"],
-      "ldhName" : "ns3.cat.lol",
+      "ldhName" : "nsx3.cat.lol",
       "links" :
       [
         {
-          "value" : "https://example.tld/rdap/nameserver/ns3.cat.lol",
+          "value" : "https://example.tld/rdap/nameserver/nsx3.cat.lol",
           "rel" : "self",
           "type" : "application/rdap+json",
-          "href" : "https://example.tld/rdap/nameserver/ns3.cat.lol"
+          "href" : "https://example.tld/rdap/nameserver/nsx3.cat.lol"
         }
       ],
       "ipAddresses" :
@@ -89,14 +89,14 @@
       "objectClassName" : "nameserver",
       "handle" : "17-ROID",
       "status" : ["active"],
-      "ldhName" : "ns4.cat.lol",
+      "ldhName" : "nsx4.cat.lol",
       "links" :
       [
         {
-          "value" : "https://example.tld/rdap/nameserver/ns4.cat.lol",
+          "value" : "https://example.tld/rdap/nameserver/nsx4.cat.lol",
           "rel" : "self",
           "type" : "application/rdap+json",
-          "href" : "https://example.tld/rdap/nameserver/ns4.cat.lol"
+          "href" : "https://example.tld/rdap/nameserver/nsx4.cat.lol"
         }
       ],
       "ipAddresses" :
@@ -125,7 +125,7 @@
         "Any information provided is 'as is' without any guarantee of accuracy.",
         "Please do not misuse the Domain Database. It is intended solely for query-based access.",
         "Don't use the Domain Database to allow, enable, or otherwise support the transmission of mass unsolicited, commercial advertising or solicitations.",
-        "Don't access our Domain Database through the use of high volume, automated electronic processes that send queries or data to the systems of Charleston Road Registry or any ICANN-accredited registrar.",
+        "Don't access our Domain Database through the use of high volume, automated electronic processes that send queries or data to the systems of any ICANN-accredited registrar.",
         "You may only use the information contained in the Domain Database for lawful purposes.",
         "Do not compile, repackage, disseminate, or otherwise use the information contained in the Domain Database in its entirety, or in any substantial portion, without our prior written permission.",
         "We may retain certain details about queries to our Domain Database for the purposes of detecting and preventing misuse.",
@@ -137,7 +137,7 @@
         {
           "value" : "https://example.tld/rdap/help/tos",
           "rel" : "alternate",
-          "href" : "https://www.registry.google/about/rdap/tos.html",
+          "href" : "https://www.registry.tld/about/rdap/tos.html",
           "type" : "text/html"
         }
       ]

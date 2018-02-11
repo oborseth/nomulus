@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ class EppResourceIndexReader extends EppResourceBaseReader<EppResourceIndex> {
   public EppResourceIndexReader(Key<EppResourceIndexBucket> bucketKey) {
     // Estimate 1MB of memory for this reader, which is massive overkill.
     // Use an empty set for the filter kinds, which disables filtering.
-    super(bucketKey, ONE_MB, ImmutableSet.<String>of());
+    super(bucketKey, ONE_MB, ImmutableSet.of());
   }
 
   /**

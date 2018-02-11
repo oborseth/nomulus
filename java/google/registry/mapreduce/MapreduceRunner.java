@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
 
 package google.registry.mapreduce;
 
-import static com.google.appengine.api.search.checkers.Preconditions.checkNotNull;
 import static com.google.appengine.tools.pipeline.PipelineServiceFactory.newPipelineService;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
 
 import com.google.appengine.tools.mapreduce.Input;
@@ -33,12 +33,12 @@ import com.google.appengine.tools.mapreduce.outputs.NoOutput;
 import com.google.appengine.tools.pipeline.Job0;
 import com.google.appengine.tools.pipeline.JobSetting;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Optional;
 import google.registry.mapreduce.inputs.ConcatenatingInput;
 import google.registry.request.Parameter;
 import google.registry.util.FormattingLogger;
 import google.registry.util.PipelineUtils;
 import java.io.Serializable;
+import java.util.Optional;
 import javax.inject.Inject;
 import org.joda.time.Duration;
 
@@ -62,7 +62,7 @@ public class MapreduceRunner {
   private final Optional<Integer> httpParamMapShards;
   private final Optional<Integer> httpParamReduceShards;
 
-  // Default to 3 minutes since many slices will contain datastore queries that time out at 4:30.
+  // Default to 3 minutes since many slices will contain Datastore queries that time out at 4:30.
   private Duration sliceDuration = Duration.standardMinutes(3);
   private String jobName;
   private String moduleName;
@@ -143,7 +143,7 @@ public class MapreduceRunner {
     return new MapJob<>(
         new MapSpecification.Builder<I, O, R>()
             .setJobName(jobName)
-            .setInput(new ConcatenatingInput<>(inputs, httpParamMapShards.or(defaultMapShards)))
+            .setInput(new ConcatenatingInput<>(inputs, httpParamMapShards.orElse(defaultMapShards)))
             .setMapper(mapper)
             .setOutput(output)
             .build(),
@@ -199,13 +199,13 @@ public class MapreduceRunner {
     return new MapReduceJob<>(
         new MapReduceSpecification.Builder<I, K, V, O, R>()
             .setJobName(jobName)
-            .setInput(new ConcatenatingInput<>(inputs, httpParamMapShards.or(defaultMapShards)))
+            .setInput(new ConcatenatingInput<>(inputs, httpParamMapShards.orElse(defaultMapShards)))
             .setMapper(mapper)
             .setReducer(reducer)
             .setOutput(output)
-            .setKeyMarshaller(Marshallers.<K>getSerializationMarshaller())
-            .setValueMarshaller(Marshallers.<V>getSerializationMarshaller())
-            .setNumReducers(httpParamReduceShards.or(defaultReduceShards))
+            .setKeyMarshaller(Marshallers.getSerializationMarshaller())
+            .setValueMarshaller(Marshallers.getSerializationMarshaller())
+            .setNumReducers(httpParamReduceShards.orElse(defaultReduceShards))
             .build(),
         new MapReduceSettings.Builder()
             .setWorkerQueueName(QUEUE_NAME)

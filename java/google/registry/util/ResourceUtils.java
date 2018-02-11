@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,17 +26,21 @@ import java.net.URL;
 /** Utility methods related to reading java resources. */
 public final class ResourceUtils {
 
-  /** Loads a file as a string, assuming UTF-8 encoding. */
+  /** Loads a resource from a file as a string, assuming UTF-8 encoding. */
   public static String readResourceUtf8(String filename) {
-    return resourceToString(getResource(filename));
+    return readResourceUtf8(getResource(filename));
   }
 
-  /** Loads a file (specified relative to the contextClass) as a string, assuming UTF-8 encoding. */
+  /**
+   * Loads a resource from a file (specified relative to the contextClass) as a string, assuming
+   * UTF-8 encoding.
+   */
   public static String readResourceUtf8(Class<?> contextClass, String filename) {
-    return resourceToString(getResource(contextClass, filename));
+    return readResourceUtf8(getResource(contextClass, filename));
   }
 
-  private static String resourceToString(URL url) {
+  /** Loads a resource from a URL as a string, assuming UTF-8 encoding. */
+  public static String readResourceUtf8(URL url) {
     try {
       return Resources.toString(url, UTF_8);
     } catch (IOException e) {

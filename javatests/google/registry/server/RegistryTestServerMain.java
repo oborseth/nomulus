@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package google.registry.server;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
+import com.beust.jcommander.Parameters;
 import com.google.common.collect.ImmutableList;
 import com.google.common.net.HostAndPort;
 import google.registry.testing.AppEngineRule;
@@ -27,6 +28,7 @@ import org.junit.runner.Description;
 import org.junit.runners.model.Statement;
 
 /** Command-line interface for {@link RegistryTestServer}. */
+@Parameters(separators = " =", commandDescription = "Runs web development server.")
 public final class RegistryTestServerMain {
 
   private static final String RESET = "\u001b[0m";
@@ -49,7 +51,7 @@ public final class RegistryTestServerMain {
 
   @Parameter(
       names = "--fixtures",
-      description = "Fixtures to load into the datastore.")
+      description = "Fixtures to load into Datastore.")
   private List<Fixture> fixtures = ImmutableList.of(Fixture.BASIC);
 
   @Parameter(
@@ -135,7 +137,7 @@ public final class RegistryTestServerMain {
     Statement runner = new Statement() {
       @Override
       public void evaluate() throws InterruptedException {
-        System.out.printf("%sLoading datastore fixtures...%s\n", BLUE, RESET);
+        System.out.printf("%sLoading Datastore fixtures...%s\n", BLUE, RESET);
         for (Fixture fixture : fixtures) {
           fixture.load();
         }

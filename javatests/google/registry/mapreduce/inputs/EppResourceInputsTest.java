@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,18 +20,19 @@ import static google.registry.mapreduce.inputs.EppResourceInputs.createEntityInp
 import static google.registry.mapreduce.inputs.EppResourceInputs.createKeyInput;
 import static google.registry.model.index.EppResourceIndexBucket.getBucketKey;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.DatastoreHelper.newContactResource;
 import static google.registry.testing.DatastoreHelper.newDomainApplication;
 import static google.registry.testing.DatastoreHelper.newDomainResource;
+import static google.registry.testing.DatastoreHelper.newHostResource;
 import static google.registry.testing.DatastoreHelper.persistActiveContact;
-import static google.registry.testing.DatastoreHelper.persistActiveDomain;
-import static google.registry.testing.DatastoreHelper.persistActiveDomainApplication;
-import static google.registry.testing.DatastoreHelper.persistActiveHost;
+import static google.registry.testing.DatastoreHelper.persistEppResourceInFirstBucket;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.DatastoreHelper.persistSimpleResource;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import com.google.appengine.tools.mapreduce.InputReader;
 import com.googlecode.objectify.Key;
-import google.registry.config.TestRegistryConfig;
 import google.registry.model.EppResource;
 import google.registry.model.contact.ContactResource;
 import google.registry.model.domain.DomainApplication;
@@ -40,8 +41,6 @@ import google.registry.model.domain.DomainResource;
 import google.registry.model.host.HostResource;
 import google.registry.model.index.EppResourceIndex;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
-import google.registry.testing.RegistryConfigRule;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.ObjectInputStream;
@@ -62,22 +61,6 @@ public class EppResourceInputsTest {
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder().withDatastore().build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Rule
-  public final RegistryConfigRule configRule = new RegistryConfigRule();
-
-  private void overrideBucketCount(final int count) {
-    configRule.override(new TestRegistryConfig() {
-      @Override
-      public int getEppResourceIndexBucketCount() {
-        return count;
-      }
-    });
-  }
-
   @SuppressWarnings("unchecked")
   private <T> T serializeAndDeserialize(T obj) throws Exception {
     try (ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
@@ -97,14 +80,18 @@ public class EppResourceInputsTest {
 
   @Test
   public void testFailure_keyInputType_polymorphicSubclass() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "non-polymorphic");
-    createKeyInput(DomainResource.class);
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> createKeyInput(DomainResource.class));
+    assertThat(thrown).hasMessageThat().contains("non-polymorphic");
   }
 
   @Test
   public void testFailure_keyInputType_noInheritanceBetweenTypes_eppResource() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "inheritance");
-    createKeyInput(EppResource.class, DomainBase.class);
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> createKeyInput(EppResource.class, DomainBase.class));
+    assertThat(thrown).hasMessageThat().contains("inheritance");
   }
 
   @Test
@@ -116,26 +103,30 @@ public class EppResourceInputsTest {
 
   @Test
   public void testFailure_entityInputType_noInheritanceBetweenTypes_eppResource() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "inheritance");
-    createEntityInput(EppResource.class, DomainResource.class);
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> createEntityInput(EppResource.class, DomainResource.class));
+    assertThat(thrown).hasMessageThat().contains("inheritance");
   }
 
   @Test
   public void testFailure_entityInputType_noInheritanceBetweenTypes_subclasses() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "inheritance");
-    createEntityInput(DomainBase.class, DomainResource.class);
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> createEntityInput(DomainBase.class, DomainResource.class));
+    assertThat(thrown).hasMessageThat().contains("inheritance");
   }
 
   @Test
   public void testReaderCountMatchesBucketCount() throws Exception {
-    overrideBucketCount(123);
-    assertThat(createKeyInput(DomainBase.class).createReaders()).hasSize(123);
-    assertThat(createEntityInput(DomainBase.class).createReaders()).hasSize(123);
+    assertThat(createKeyInput(DomainBase.class).createReaders()).hasSize(3);
+    assertThat(createEntityInput(DomainBase.class).createReaders()).hasSize(3);
   }
 
   @Test
   public void testKeyInput_oneReaderPerBucket() throws Exception {
-    overrideBucketCount(3);
     createTld("tld");
     Set<Key<DomainResource>> domains = new HashSet<>();
     for (int i = 1; i <= 3; i++) {
@@ -149,8 +140,8 @@ public class EppResourceInputsTest {
       reader.beginSlice();
       seen.add(reader.next());
       try {
-        reader.next();
-        assert_().fail("Unexpected element");
+        Key<DomainBase> key = reader.next();
+        assert_().fail("Unexpected element: " + key);
       } catch (NoSuchElementException expected) {
       }
     }
@@ -159,7 +150,6 @@ public class EppResourceInputsTest {
 
   @Test
   public void testEntityInput_oneReaderPerBucket() throws Exception {
-    overrideBucketCount(3);
     createTld("tld");
     Set<DomainResource> domains = new HashSet<>();
     for (int i = 1; i <= 3; i++) {
@@ -175,8 +165,8 @@ public class EppResourceInputsTest {
       reader.beginSlice();
       seen.add(reader.next());
       try {
-        reader.next();
-        assert_().fail("Unexpected element");
+        DomainResource domain = reader.next();
+        assert_().fail("Unexpected element: " + domain);
       } catch (NoSuchElementException expected) {
       }
     }
@@ -186,9 +176,8 @@ public class EppResourceInputsTest {
   @Test
   public void testSuccess_keyReader_survivesAcrossSerialization() throws Exception {
     createTld("tld");
-    overrideBucketCount(1);
-    DomainResource domainA = persistActiveDomain("a.tld");
-    DomainResource domainB = persistActiveDomain("b.tld");
+    DomainResource domainA = persistEppResourceInFirstBucket(newDomainResource("a.tld"));
+    DomainResource domainB = persistEppResourceInFirstBucket(newDomainResource("b.tld"));
     // Should be ignored. We'll know if it isn't because the progress counts will be off.
     persistActiveContact("contact");
     Set<Key<DomainBase>> seen = new HashSet<>();
@@ -205,16 +194,14 @@ public class EppResourceInputsTest {
     seen.add(reader.next());
     assertThat(reader.getProgress()).isWithin(EPSILON).of(1);
     assertThat(seen).containsExactly(Key.create(domainA), Key.create(domainB));
-    thrown.expect(NoSuchElementException.class);
-    reader.next();
+    assertThrows(NoSuchElementException.class, reader::next);
   }
 
   @Test
   public void testSuccess_entityReader_survivesAcrossSerialization() throws Exception {
     createTld("tld");
-    overrideBucketCount(1);
-    DomainResource domainA = persistActiveDomain("a.tld");
-    DomainResource domainB = persistActiveDomain("b.tld");
+    DomainResource domainA = persistEppResourceInFirstBucket(newDomainResource("a.tld"));
+    DomainResource domainB = persistEppResourceInFirstBucket(newDomainResource("b.tld"));
     // Should be ignored. We'll know if it isn't because the progress counts will be off.
     persistActiveContact("contact");
     Set<DomainResource> seen = new HashSet<>();
@@ -226,27 +213,24 @@ public class EppResourceInputsTest {
     seen.add(reader.next());
     assertThat(reader.getProgress()).isWithin(EPSILON).of(0.5);
     reader.endSlice();
-    reader = serializeAndDeserialize(reader);
-    reader.beginSlice();
-    assertThat(reader.getProgress()).isWithin(EPSILON).of(0.5);
-    seen.add(reader.next());
-    assertThat(reader.getProgress()).isWithin(EPSILON).of(1);
-    reader.endSlice();
-    reader.endShard();
+    InputReader<DomainResource> deserializedReader = serializeAndDeserialize(reader);
+    deserializedReader.beginSlice();
+    assertThat(deserializedReader.getProgress()).isWithin(EPSILON).of(0.5);
+    seen.add(deserializedReader.next());
+    assertThat(deserializedReader.getProgress()).isWithin(EPSILON).of(1);
+    deserializedReader.endSlice();
+    deserializedReader.endShard();
     assertThat(seen).containsExactly(domainA, domainB);
-    thrown.expect(NoSuchElementException.class);
-    reader.next();
+    assertThrows(NoSuchElementException.class, deserializedReader::next);
   }
 
   @Test
   public void testSuccess_entityReader_allowsPolymorphicMatches() throws Exception {
     createTld("tld");
-    overrideBucketCount(1);
-    DomainResource domain = persistActiveDomain("a.tld");
-    DomainApplication application = persistActiveDomainApplication("b.tld");
+    DomainResource domain = persistEppResourceInFirstBucket(newDomainResource("a.tld"));
+    DomainApplication application = persistEppResourceInFirstBucket(newDomainApplication("b.tld"));
     Set<DomainBase> seen = new HashSet<>();
-    InputReader<DomainBase> reader =
-        createEntityInput(DomainBase.class).createReaders().get(0);
+    InputReader<DomainBase> reader = createEntityInput(DomainBase.class).createReaders().get(0);
     reader.beginShard();
     reader.beginSlice();
     assertThat(reader.getProgress()).isWithin(EPSILON).of(0);
@@ -255,16 +239,14 @@ public class EppResourceInputsTest {
     seen.add(reader.next());
     assertThat(reader.getProgress()).isWithin(EPSILON).of(1.0);
     assertThat(seen).containsExactly(domain, application);
-    thrown.expect(NoSuchElementException.class);
-    reader.next();
+    assertThrows(NoSuchElementException.class, reader::next);
   }
 
   @Test
   public void testSuccess_entityReader_skipsPolymorphicMismatches() throws Exception {
     createTld("tld");
-    overrideBucketCount(1);
-    persistActiveDomainApplication("b.tld");
-    DomainResource domainA = persistActiveDomain("a.tld");
+    persistEppResourceInFirstBucket(newDomainApplication("b.tld"));
+    DomainResource domainA = persistEppResourceInFirstBucket(newDomainResource("a.tld"));
     InputReader<DomainResource> reader =
         createEntityInput(DomainResource.class).createReaders().get(0);
     reader.beginShard();
@@ -274,17 +256,15 @@ public class EppResourceInputsTest {
     // We can't reliably assert getProgress() here, since it counts before the postfilter that weeds
     // out polymorphic mismatches, and so depending on whether the domain or the application was
     // seen first it will be 0.5 or 1.0. However, there should be nothing left when we call next().
-    thrown.expect(NoSuchElementException.class);
-    reader.next();
+    assertThrows(NoSuchElementException.class, reader::next);
   }
 
   @Test
   public void testSuccess_entityReader_filtersOnMultipleTypes() throws Exception {
     createTld("tld");
-    overrideBucketCount(1);
-    DomainResource domain = persistActiveDomain("a.tld");
-    HostResource host = persistActiveHost("ns1.example.com");
-    persistActiveContact("contact");
+    DomainResource domain = persistEppResourceInFirstBucket(newDomainResource("a.tld"));
+    HostResource host = persistEppResourceInFirstBucket(newHostResource("ns1.example.com"));
+    persistEppResourceInFirstBucket(newContactResource("contact"));
     Set<EppResource> seen = new HashSet<>();
     InputReader<EppResource> reader =
         EppResourceInputs.<EppResource>createEntityInput(
@@ -297,19 +277,18 @@ public class EppResourceInputsTest {
     seen.add(reader.next());
     assertThat(reader.getProgress()).isWithin(EPSILON).of(1.0);
     assertThat(seen).containsExactly(domain, host);
-    thrown.expect(NoSuchElementException.class);
-    reader.next();
+    assertThrows(NoSuchElementException.class, reader::next);
   }
 
   @Test
   public void testSuccess_entityReader_noFilteringWhenUsingEppResource() throws Exception {
     createTld("tld");
-    overrideBucketCount(1);
-    ContactResource contact = persistActiveContact("contact");
+    ContactResource contact = persistEppResourceInFirstBucket(newContactResource("contact"));
     // Specify the contact since persistActiveDomain{Application} creates a hidden one.
-    DomainResource domain = persistResource(newDomainResource("a.tld", contact));
-    DomainApplication application = persistResource(newDomainApplication("b.tld", contact));
-    HostResource host = persistActiveHost("ns1.example.com");
+    DomainResource domain = persistEppResourceInFirstBucket(newDomainResource("a.tld", contact));
+    DomainApplication application =
+        persistEppResourceInFirstBucket(newDomainApplication("b.tld", contact));
+    HostResource host = persistEppResourceInFirstBucket(newHostResource("ns1.example.com"));
     Set<EppResource> seen = new HashSet<>();
     InputReader<EppResource> reader = createEntityInput(EppResource.class).createReaders().get(0);
     reader.beginShard();
@@ -324,7 +303,6 @@ public class EppResourceInputsTest {
     seen.add(reader.next());
     assertThat(reader.getProgress()).isWithin(EPSILON).of(1.0);
     assertThat(seen).containsExactly(domain, host, application, contact);
-    thrown.expect(NoSuchElementException.class);
-    reader.next();
+    assertThrows(NoSuchElementException.class, reader::next);
   }
 }

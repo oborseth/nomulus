@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,11 +17,10 @@ package google.registry.tools.server;
 import static com.google.common.truth.Truth.assertThat;
 import static javax.servlet.http.HttpServletResponse.SC_OK;
 
-import com.google.common.base.Optional;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeJsonResponse;
 import java.util.List;
+import java.util.Optional;
 import java.util.regex.Pattern;
 import org.junit.Rule;
 
@@ -35,12 +34,9 @@ public class ListActionTestCase {
       .withDatastore()
       .build();
 
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   private FakeJsonResponse response;
 
-  void runAction(
+  private void runAction(
       ListObjectsAction<?> action,
       Optional<String> fields,
       Optional<Boolean> printHeaderRow,
@@ -51,7 +47,6 @@ public class ListActionTestCase {
     action.printHeaderRow = printHeaderRow;
     action.fullFieldNames = fullFieldNames;
     action.run();
-    assertThat(response.getStatus()).isEqualTo(SC_OK);
   }
 
   void testRunSuccess(
@@ -62,6 +57,7 @@ public class ListActionTestCase {
       String ... expectedLinePatterns) {
     assertThat(expectedLinePatterns).isNotNull();
     runAction(action, fields, printHeaderRow, fullFieldNames);
+    assertThat(response.getStatus()).isEqualTo(SC_OK);
     assertThat(response.getResponseMap().get("status")).isEqualTo("success");
     Object obj = response.getResponseMap().get("lines");
     assertThat(obj).isInstanceOf(List.class);
@@ -81,6 +77,7 @@ public class ListActionTestCase {
       String expectedErrorPattern) {
     assertThat(expectedErrorPattern).isNotNull();
     runAction(action, fields, printHeaderRow, fullFieldNames);
+    assertThat(response.getStatus()).isEqualTo(SC_OK);
     assertThat(response.getResponseMap().get("status")).isEqualTo("error");
     Object obj = response.getResponseMap().get("error");
     assertThat(obj).isInstanceOf(String.class);

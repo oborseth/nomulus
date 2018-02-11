@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,21 +15,27 @@
 package google.registry.tools.server;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static google.registry.model.registry.label.PremiumListUtils.savePremiumListAndEntries;
 import static google.registry.request.Action.Method.POST;
 
-import com.google.common.base.Optional;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableMap;
 import google.registry.model.registry.label.PremiumList;
 import google.registry.request.Action;
+import google.registry.request.auth.Auth;
 import java.util.List;
+import java.util.Optional;
 import javax.inject.Inject;
 
 /**
  * An action that creates a premium list, for use by the {@code nomulus create_premium_list}
  * command.
  */
-@Action(path = UpdatePremiumListAction.PATH, method = POST)
+@Action(
+  path = UpdatePremiumListAction.PATH,
+  method = POST,
+  auth = Auth.AUTH_INTERNAL_OR_ADMIN
+)
 public class UpdatePremiumListAction extends CreateOrUpdatePremiumListAction {
 
   public static final String PATH = "/_dr/admin/updatePremiumList";
@@ -38,9 +44,9 @@ public class UpdatePremiumListAction extends CreateOrUpdatePremiumListAction {
 
   @Override
   protected void savePremiumList() {
-    Optional<PremiumList> existingName = PremiumList.get(name);
+    Optional<PremiumList> existingPremiumList = PremiumList.get(name);
     checkArgument(
-        existingName.isPresent(),
+        existingPremiumList.isPresent(),
         "Could not update premium list %s because it doesn't exist.",
         name);
 
@@ -48,21 +54,14 @@ public class UpdatePremiumListAction extends CreateOrUpdatePremiumListAction {
     logger.infofmt("Got the following input data: %s", inputData);
     List<String> inputDataPreProcessed =
         Splitter.on('\n').omitEmptyStrings().splitToList(inputData);
-    PremiumList premiumList = existingName.get().asBuilder()
-        .setPremiumListMapFromLines(inputDataPreProcessed)
-        .build();
-    premiumList.saveAndUpdateEntries();
+    PremiumList newPremiumList =
+        savePremiumListAndEntries(existingPremiumList.get(), inputDataPreProcessed);
 
-    logger.infofmt("Updated premium list %s with entries %s",
-        premiumList.getName(),
-        premiumList.getPremiumListEntries());
-
-    String message = String.format(
-        "Saved premium list %s with %d entries.\n",
-        premiumList.getName(),
-        premiumList.getPremiumListEntries().size());
-    response.setPayload(ImmutableMap.of(
-        "status", "success",
-        "message", message));
+    String message =
+        String.format(
+            "Updated premium list %s with %d entries.",
+            newPremiumList.getName(), inputDataPreProcessed.size());
+    logger.info(message);
+    response.setPayload(ImmutableMap.of("status", "success", "message", message));
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ package google.registry.tools;
 
 import static com.google.common.base.CaseFormat.UPPER_CAMEL;
 import static com.google.common.base.CaseFormat.UPPER_UNDERSCORE;
-import static com.google.common.base.Functions.toStringFunction;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
@@ -24,11 +23,9 @@ import static com.google.common.base.Strings.emptyToNull;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.util.DatastoreServiceUtils.getNameOrId;
 import static google.registry.util.DiffUtils.prettyPrintEntityDeepDiff;
+import static java.util.stream.Collectors.joining;
 
-import com.google.common.base.Joiner;
 import com.google.common.base.MoreObjects;
-import com.google.common.base.Optional;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -41,10 +38,11 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
 
-/** A {@link ConfirmingCommand} that changes objects in the datastore. */
+/** A {@link ConfirmingCommand} that changes objects in Datastore. */
 public abstract class MutatingCommand extends ConfirmingCommand implements RemoteApiCommand {
 
   /**
@@ -55,7 +53,7 @@ public abstract class MutatingCommand extends ConfirmingCommand implements Remot
   private static class EntityChange {
 
     /** The possible types of mutation that can be performed on an entity. */
-    public static enum ChangeType {
+    public enum ChangeType {
       CREATE, DELETE, UPDATE;
 
       /** Return the ChangeType corresponding to the given combination of version existences. */
@@ -105,7 +103,7 @@ public abstract class MutatingCommand extends ConfirmingCommand implements Remot
       if (type == ChangeType.UPDATE) {
         String diffText = prettyPrintEntityDeepDiff(
             oldEntity.toDiffableFieldMap(), newEntity.toDiffableFieldMap());
-        changeText = Optional.fromNullable(emptyToNull(diffText)).or("[no changes]\n");
+        changeText = Optional.ofNullable(emptyToNull(diffText)).orElse("[no changes]\n");
       } else {
         changeText = MoreObjects.firstNonNull(oldEntity, newEntity) + "\n";
       }
@@ -228,8 +226,6 @@ public abstract class MutatingCommand extends ConfirmingCommand implements Remot
   protected String prompt() {
     return changedEntitiesMap.isEmpty()
         ? "No entity changes to apply."
-        : Joiner.on("\n").join(FluentIterable
-            .from(changedEntitiesMap.values())
-            .transform(toStringFunction()));
+        : changedEntitiesMap.values().stream().map(Object::toString).collect(joining("\n"));
   }
 }

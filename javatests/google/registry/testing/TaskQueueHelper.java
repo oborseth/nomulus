@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,26 +19,24 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Predicates.in;
 import static com.google.common.base.Predicates.not;
 import static com.google.common.collect.Iterables.getFirst;
-import static com.google.common.collect.Iterables.transform;
 import static com.google.common.collect.Multisets.containsOccurrences;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assert_;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.util.DiffUtils.prettyPrintEntityDeepDiff;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Arrays.asList;
+import static java.util.stream.Collectors.joining;
 
 import com.google.appengine.api.taskqueue.dev.QueueStateInfo;
 import com.google.appengine.api.taskqueue.dev.QueueStateInfo.HeaderWrapper;
 import com.google.appengine.api.taskqueue.dev.QueueStateInfo.TaskStateInfo;
 import com.google.common.base.Ascii;
-import com.google.common.base.Function;
 import com.google.common.base.Joiner;
-import com.google.common.base.Predicate;
 import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.FluentIterable;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableMultiset;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
 import com.google.common.net.HttpHeaders;
@@ -46,14 +44,17 @@ import com.google.common.net.MediaType;
 import google.registry.dns.DnsConstants;
 import google.registry.model.ImmutableObject;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import javax.annotation.Nonnull;
 import org.joda.time.Duration;
 
@@ -65,7 +66,22 @@ public class TaskQueueHelper {
    */
   public static class TaskMatcher implements Predicate<TaskStateInfo> {
 
-    MatchableTaskInfo expected = new MatchableTaskInfo();
+    private final MatchableTaskInfo expected;
+
+    public TaskMatcher() {
+      expected = new MatchableTaskInfo();
+    }
+
+    /**
+     * Constructor to create a TaskMatcher that should exactly match an existing TaskStateInfo.
+     *
+     * This is useful for checking that a pre-existing task as returned by TaskStateInfo is still
+     * in the queue; we can't just directly compare the lists of TaskStateInfos because they have
+     * no equals() override and there's no guarantee that reference equality is sufficient.
+     */
+    private TaskMatcher(TaskStateInfo taskStateInfo) {
+      expected = new MatchableTaskInfo(taskStateInfo);
+    }
 
     public TaskMatcher taskName(String taskName) {
       expected.taskName = taskName;
@@ -77,6 +93,10 @@ public class TaskQueueHelper {
       return this;
     }
 
+    /**
+     * Sets the HTTP method to match against.  WARNING: due to b/38459667, pull queue tasks will
+     * report "POST" as their method.
+     */
     public TaskMatcher method(String method) {
       expected.method = method;
       return this;
@@ -136,7 +156,7 @@ public class TaskQueueHelper {
      * TaskStateInfo).
      */
     @Override
-    public boolean apply(@Nonnull TaskStateInfo info) {
+    public boolean test(@Nonnull TaskStateInfo info) {
       MatchableTaskInfo actual = new MatchableTaskInfo(info);
       return (expected.taskName == null || Objects.equals(expected.taskName, actual.taskName))
           && (expected.url == null || Objects.equals(expected.url, actual.url))
@@ -158,12 +178,7 @@ public class TaskQueueHelper {
           .join(
               Maps.transformValues(
                   expected.toMap(),
-                  new Function<Object, String>() {
-                    @Override
-                    public String apply(Object input) {
-                      return "\t" + String.valueOf(input).replaceAll("\n", "\n\t");
-                    }
-                  }));
+                  input -> "\t" + String.valueOf(input).replaceAll("\n", "\n\t")));
     }
   }
 
@@ -181,20 +196,24 @@ public class TaskQueueHelper {
       Function<TaskStateInfo, String> propertyGetter,
       String... expectedTaskProperties) throws Exception {
     // Ordering is irrelevant but duplicates should be considered independently.
-    assertThat(transform(getQueueInfo(queueName).getTaskInfo(), propertyGetter))
+    assertThat(getQueueInfo(queueName).getTaskInfo().stream().map(propertyGetter))
         .containsExactly((Object[]) expectedTaskProperties);
   }
 
   /** Ensures that the tasks in the named queue are exactly those with the expected names. */
   public static void assertTasksEnqueued(String queueName, String... expectedTaskNames)
       throws Exception {
-    Function<TaskStateInfo, String> nameGetter = new Function<TaskStateInfo, String>() {
-      @Nonnull
-      @Override
-      public String apply(@Nonnull TaskStateInfo taskStateInfo) {
-        return taskStateInfo.getTaskName();
-      }};
+    Function<TaskStateInfo, String> nameGetter = TaskStateInfo::getTaskName;
     assertTasksEnqueuedWithProperty(queueName, nameGetter, expectedTaskNames);
+  }
+
+  public static void assertTasksEnqueued(String queueName, Iterable<TaskStateInfo> taskStateInfos)
+      throws Exception {
+    ImmutableList.Builder<TaskMatcher> taskMatchers = new ImmutableList.Builder<>();
+    for (TaskStateInfo taskStateInfo : taskStateInfos) {
+      taskMatchers.add(new TaskMatcher(taskStateInfo));
+    }
+    assertTasksEnqueued(queueName, taskMatchers.build());
   }
 
   /**
@@ -210,31 +229,31 @@ public class TaskQueueHelper {
    * Ensures that the only tasks in the named queue are exactly those that match the expected
    * matchers.
    */
-  public static void assertTasksEnqueued(String queueName, List<TaskMatcher> taskMatchers)
+  public static void assertTasksEnqueued(String queueName, Collection<TaskMatcher> taskMatchers)
       throws Exception {
     QueueStateInfo qsi = getQueueInfo(queueName);
     assertThat(qsi.getTaskInfo()).hasSize(taskMatchers.size());
-    LinkedList<TaskStateInfo> taskInfos = new LinkedList<>(qsi.getTaskInfo());
+    List<TaskStateInfo> taskInfos = new ArrayList<>(qsi.getTaskInfo());
     for (final TaskMatcher taskMatcher : taskMatchers) {
       try {
-        taskInfos.remove(Iterables.find(taskInfos, taskMatcher));
+        taskInfos.remove(taskInfos.stream().filter(taskMatcher).findFirst().get());
       } catch (NoSuchElementException e) {
         final Map<String, Object> taskMatcherMap = taskMatcher.expected.toMap();
-        assert_().fail(
-            "Task not found in queue %s:\n\n%s\n\nPotential candidate match diffs:\n\n%s",
-            queueName,
-            taskMatcher,
-            FluentIterable.from(taskInfos)
-                .transform(new Function<TaskStateInfo, String>() {
-                    @Override
-                    public String apply(TaskStateInfo input) {
-                      return prettyPrintEntityDeepDiff(
-                          taskMatcherMap,
-                          Maps.filterKeys(
-                              new MatchableTaskInfo(input).toMap(),
-                              in(taskMatcherMap.keySet())));
-                    }})
-                .join(Joiner.on('\n')));
+        assert_()
+            .fail(
+                "Task not found in queue %s:\n\n%s\n\nPotential candidate match diffs:\n\n%s",
+                queueName,
+                taskMatcher,
+                taskInfos
+                    .stream()
+                    .map(
+                        input ->
+                            prettyPrintEntityDeepDiff(
+                                taskMatcherMap,
+                                Maps.filterKeys(
+                                    new MatchableTaskInfo(input).toMap(),
+                                    in(taskMatcherMap.keySet()))))
+                    .collect(joining("\n")));
       }
     }
   }
@@ -265,12 +284,7 @@ public class TaskQueueHelper {
   public static void assertDnsTasksEnqueued(String... expectedTaskTargetNames) throws Exception {
     assertTasksEnqueuedWithProperty(
         DnsConstants.DNS_PULL_QUEUE_NAME,
-        new Function<TaskStateInfo, String>() {
-          @Nonnull
-          @Override
-          public String apply(@Nonnull TaskStateInfo taskStateInfo) {
-            return getParamFromTaskInfo(taskStateInfo, DnsConstants.DNS_TARGET_NAME_PARAM);
-          }},
+        taskStateInfo -> getParamFromTaskInfo(taskStateInfo, DnsConstants.DNS_TARGET_NAME_PARAM),
         expectedTaskTargetNames);
   }
 
@@ -322,8 +336,16 @@ public class TaskQueueHelper {
       if (query != null) {
         inputParams.putAll(UriParameters.parse(query));
       }
-      if (headers.containsEntry(
-          Ascii.toLowerCase(HttpHeaders.CONTENT_TYPE), MediaType.FORM_DATA.toString())) {
+      boolean hasFormDataContentType =
+          headers.containsEntry(
+              Ascii.toLowerCase(HttpHeaders.CONTENT_TYPE), MediaType.FORM_DATA.toString());
+      // Try decoding the body as a parameter map if it either has the "x-www-form-urlencoded"
+      // content type, or if it's a POST or PULL task (in which case parameters should be encoded
+      // into the body automatically upon being enqueued).  Note that pull queue tasks also report
+      // "POST" as their method (which is misleading - see b/38459667) so we just check for "POST".
+      if (hasFormDataContentType || "POST".equals(this.method)) {
+        // Note that UriParameters.parse() does not throw an IAE on a bad query string (e.g. one
+        // where parameters are not properly URL-encoded); it always does a best-effort parse.
         inputParams.putAll(UriParameters.parse(info.getBody()));
       }
       this.params = inputParams.build();

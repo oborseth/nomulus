@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,12 +16,11 @@ package google.registry.rde;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
-import com.google.appengine.api.ThreadManager;
 import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.JSchException;
 import dagger.Module;
 import dagger.Provides;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.keyring.api.KeyModule.Key;
 
 /** Dagger module for {@link JSch} which provides SSH/SFTP connectivity. */
@@ -33,7 +32,6 @@ public final class JSchModule {
       @Config("rdeSshIdentity") String identity,
       @Key("rdeSshClientPrivateKey") String privateKey,
       @Key("rdeSshClientPublicKey") String publicKey) {
-    applyAppEngineKludge();
     JSch jsch = new JSch();
     try {
       jsch.addIdentity(
@@ -47,15 +45,5 @@ public final class JSchModule {
     // TODO(b/13028224): Implement known hosts checking.
     JSch.setConfig("StrictHostKeyChecking", "no");
     return jsch;
-  }
-
-  /**
-   * Overrides the threadFactory used in JSch and disable {@link Thread#setName(String)} in order to
-   * ensure GAE compatibility. By default it uses the default executor, which fails under GAE. This
-   * is currently a Google-specific patch that needs to be sent upstream.
-   */
-  private static void applyAppEngineKludge() {
-    JSch.threadFactory = ThreadManager.currentRequestThreadFactory();
-    JSch.useThreadNames = false;
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,24 +15,26 @@
 package google.registry.flows;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Sets.difference;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.flows.EppXmlTransformer.marshal;
 import static google.registry.model.ofy.ObjectifyService.ofy;
-import static google.registry.testing.DatastoreHelper.BILLING_EVENT_ID_STRIPPER;
+import static google.registry.testing.DatastoreHelper.POLL_MESSAGE_ID_STRIPPER;
 import static google.registry.testing.DatastoreHelper.getPollMessages;
-import static google.registry.util.ResourceUtils.readResourceUtf8;
+import static google.registry.testing.DatastoreHelper.stripBillingEventId;
 import static google.registry.xml.XmlTestUtils.assertXmlEquals;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Arrays.asList;
 import static org.joda.time.DateTimeZone.UTC;
 
-import com.google.common.base.Function;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
+import com.google.common.collect.ObjectArrays;
+import com.google.common.collect.Streams;
+import google.registry.config.RegistryConfig.ConfigModule.TmchCaMode;
 import google.registry.flows.EppTestComponent.FakesAndMocksModule;
 import google.registry.flows.picker.FlowPicker;
 import google.registry.model.billing.BillingEvent;
@@ -45,33 +47,37 @@ import google.registry.model.ofy.Ofy;
 import google.registry.model.poll.PollMessage;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.model.tmch.ClaimsListShard.ClaimsListSingleton;
+import google.registry.monitoring.whitebox.EppMetric;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.EppLoader;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.FakeHttpSession;
 import google.registry.testing.InjectRule;
 import google.registry.testing.ShardableTestCase;
 import google.registry.testing.TestDataHelper;
+import google.registry.tmch.TmchCertificateAuthority;
+import google.registry.tmch.TmchXmlSignature;
 import google.registry.util.TypeUtils.TypeInstantiator;
 import google.registry.xml.ValidationMode;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import org.joda.time.DateTime;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.runner.RunWith;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /**
  * Base class for resource flow unit tests.
  *
  * @param <F> the flow type
  */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
 
-  /** Whether to actually write to the datastore or just simulate. */
+  /** Whether to actually write to Datastore or just simulate. */
   public enum CommitMode { LIVE, DRY_RUN }
 
   /** Whether to run in normal or superuser mode. */
@@ -84,9 +90,6 @@ public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
       .build();
 
   @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Rule
   public final InjectRule inject = new InjectRule();
 
   protected EppLoader eppLoader;
@@ -94,6 +97,9 @@ public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
   protected FakeClock clock = new FakeClock(DateTime.now(UTC));
   protected TransportCredentials credentials = new PasswordOnlyTransportCredentials();
   protected EppRequestSource eppRequestSource = EppRequestSource.UNIT_TEST;
+  protected TmchXmlSignature testTmchXmlSignature = null;
+
+  private EppMetric.Builder eppMetricBuilder;
 
   @Before
   public void init() throws Exception {
@@ -110,7 +116,7 @@ public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
   }
 
   protected void setEppInput(String inputFilename) {
-    eppLoader = new EppLoader(this, inputFilename, ImmutableMap.<String, String>of());
+    eppLoader = new EppLoader(this, inputFilename, ImmutableMap.of());
   }
 
   protected void setEppInput(String inputFilename, Map<String, String> substitutions) {
@@ -118,16 +124,21 @@ public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
   }
 
   /** Returns the EPP data loaded by a previous call to setEppInput. */
-  protected EppInput getEppInput() throws Exception {
+  protected EppInput getEppInput() throws EppException {
     return eppLoader.getEpp();
   }
 
-  protected String readFile(String filename) {
-    return readResourceUtf8(getClass(), "testdata/" + filename);
+  protected EppMetric getEppMetric() {
+    checkNotNull(eppMetricBuilder, "Run the flow first before checking EPP metrics");
+    return eppMetricBuilder.build();
   }
 
-  protected String readFile(String filename, Map<String, String> substitutions) {
-    return TestDataHelper.loadFileWithSubstitutions(getClass(), filename, substitutions);
+  protected String loadFile(String filename) {
+    return TestDataHelper.loadFile(getClass(), filename);
+  }
+
+  protected String loadFile(String filename, Map<String, String> substitutions) {
+    return TestDataHelper.loadFile(getClass(), filename, substitutions);
   }
 
   protected String getClientTrid() throws Exception {
@@ -156,7 +167,7 @@ public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
     }
   }
 
-  public void assertNoHistory() throws Exception {
+  protected void assertNoHistory() throws Exception {
     assertThat(ofy().load().type(HistoryEntry.class)).isEmpty();
   }
 
@@ -165,19 +176,6 @@ public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
   }
 
   /** Helper to remove the grace period's billing event key to facilitate comparison. */
-  private static final Function<GracePeriod, GracePeriod> GRACE_PERIOD_KEY_STRIPPER =
-      new Function<GracePeriod, GracePeriod>() {
-        @Override
-        public GracePeriod apply(GracePeriod gracePeriod) {
-          return GracePeriod.create(
-              gracePeriod.isSunrushAddGracePeriod()
-                  ? GracePeriodStatus.SUNRUSH_ADD
-                  : gracePeriod.getType(),
-              gracePeriod.getExpirationTime(),
-              gracePeriod.getClientId(),
-              null);
-        }};
-
   /** A helper class that sets the billing event parent history entry to facilitate comparison. */
   public static class BillingEventParentSetter implements Function<BillingEvent, BillingEvent> {
     private HistoryEntry historyEntry;
@@ -207,10 +205,31 @@ public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
     ImmutableMap.Builder<GracePeriod, BillingEvent> builder = new ImmutableMap.Builder<>();
     for (Map.Entry<GracePeriod, ? extends BillingEvent> entry : gracePeriods.entrySet()) {
       builder.put(
-          GRACE_PERIOD_KEY_STRIPPER.apply(entry.getKey()),
-          BILLING_EVENT_ID_STRIPPER.apply(entry.getValue()));
+          ((Function<GracePeriod, GracePeriod>)
+                  gracePeriod ->
+                      GracePeriod.create(
+                          gracePeriod.isSunrushAddGracePeriod()
+                              ? GracePeriodStatus.SUNRUSH_ADD
+                              : gracePeriod.getType(),
+                          gracePeriod.getExpirationTime(),
+                          gracePeriod.getClientId(),
+                          null))
+              .apply(entry.getKey()),
+          stripBillingEventId(entry.getValue()));
     }
     return builder.build();
+  }
+
+  private static BillingEvent expandGracePeriod(GracePeriod gracePeriod) {
+    assertThat(gracePeriod.hasBillingEvent())
+        .named("Billing event is present for grace period: " + gracePeriod)
+        .isTrue();
+    return ofy()
+        .load()
+        .key(
+            firstNonNull(
+                gracePeriod.getOneTimeBillingEvent(), gracePeriod.getRecurringBillingEvent()))
+        .now();
   }
 
   /**
@@ -221,20 +240,7 @@ public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
   public void assertGracePeriods(
       Iterable<GracePeriod> actual,
       ImmutableMap<GracePeriod, ? extends BillingEvent> expected) {
-    Function<GracePeriod, BillingEvent> gracePeriodExpander =
-        new Function<GracePeriod, BillingEvent>() {
-          @Override
-          public BillingEvent apply(GracePeriod gracePeriod) {
-            assertThat(gracePeriod.hasBillingEvent())
-                .named("Billing event is present for grace period: " + gracePeriod)
-                .isTrue();
-            return ofy().load()
-                .key(firstNonNull(
-                    gracePeriod.getOneTimeBillingEvent(),
-                    gracePeriod.getRecurringBillingEvent()))
-                .now();
-          }};
-    assertThat(canonicalizeGracePeriods(Maps.toMap(actual, gracePeriodExpander)))
+    assertThat(canonicalizeGracePeriods(Maps.toMap(actual, FlowTestCase::expandGracePeriod)))
         .isEqualTo(canonicalizeGracePeriods(expected));
   }
 
@@ -255,33 +261,34 @@ public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
     assertPollMessagesHelper(getPollMessages(), expected);
   }
 
-  /** Assert that the list matches all the poll messages in the fake datastore. */
+  /** Assert that the list matches all the poll messages in the fake Datastore. */
   public void assertPollMessagesHelper(Iterable<PollMessage> pollMessages, PollMessage... expected)
       throws Exception {
-    // To facilitate comparison, remove the ids.
-    Function<PollMessage, PollMessage> idStripper =
-        new Function<PollMessage, PollMessage>() {
-          @Override
-          public PollMessage apply(PollMessage pollMessage) {
-            return pollMessage.asBuilder().setId(1L).build();
-          }};
     // Ordering is irrelevant but duplicates should be considered independently.
-    assertThat(FluentIterable.from(pollMessages).transform(idStripper))
-        .containsExactlyElementsIn(FluentIterable.from(asList(expected)).transform(idStripper));
+    assertThat(
+            Streams.stream(pollMessages).map(POLL_MESSAGE_ID_STRIPPER).collect(toImmutableList()))
+        .containsExactlyElementsIn(
+            Arrays.stream(expected).map(POLL_MESSAGE_ID_STRIPPER).collect(toImmutableList()));
   }
 
   private EppOutput runFlowInternal(CommitMode commitMode, UserPrivileges userPrivileges)
       throws Exception {
+    eppMetricBuilder = EppMetric.builderForRequest("request-id-1", clock);
     // Assert that the xml triggers the flow we expect.
     assertThat(FlowPicker.getFlowClass(eppLoader.getEpp()))
         .isEqualTo(new TypeInstantiator<F>(getClass()){}.getExactType());
     // Run the flow.
+    TmchXmlSignature tmchXmlSignature =
+        testTmchXmlSignature != null
+            ? testTmchXmlSignature
+            : new TmchXmlSignature(new TmchCertificateAuthority(tmchCaMode));
     return DaggerEppTestComponent.builder()
-        .fakesAndMocksModule(new FakesAndMocksModule(clock))
+        .fakesAndMocksModule(FakesAndMocksModule.create(clock, eppMetricBuilder, tmchXmlSignature))
         .build()
         .startRequest()
         .flowComponentBuilder()
-            .flowModule(new FlowModule.Builder()
+        .flowModule(
+            new FlowModule.Builder()
                 .setSessionMetadata(sessionMetadata)
                 .setCredentials(credentials)
                 .setEppRequestSource(eppRequestSource)
@@ -290,9 +297,9 @@ public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
                 .setInputXmlBytes(eppLoader.getEppXml().getBytes(UTF_8))
                 .setEppInput(eppLoader.getEpp())
                 .build())
-            .build()
-            .flowRunner()
-            .run();
+        .build()
+        .flowRunner()
+        .run(eppMetricBuilder);
   }
 
   /** Run a flow and marshal the result to EPP, or throw if it doesn't validate. */
@@ -307,15 +314,17 @@ public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
     return runFlow(CommitMode.LIVE, UserPrivileges.NORMAL);
   }
 
+  /** Shortcut to call {@link #runFlow(CommitMode, UserPrivileges)} as super user and live run. */
+  public EppOutput runFlowAsSuperuser() throws Exception {
+    return runFlow(CommitMode.LIVE, UserPrivileges.SUPERUSER);
+  }
+
   /** Run a flow, marshal the result to EPP, and assert that the output is as expected. */
   public EppOutput runFlowAssertResponse(
       CommitMode commitMode, UserPrivileges userPrivileges, String xml, String... ignoredPaths)
       throws Exception {
     // Always ignore the server trid, since it's generated and meaningless to flow correctness.
-    // TODO(user): Remove asList()
-    String[] ignoredPathsPlusTrid = FluentIterable.from(asList(ignoredPaths))
-        .append("epp.response.trID.svTRID")
-        .toArray(String.class);
+    String[] ignoredPathsPlusTrid = ObjectArrays.concat(ignoredPaths, "epp.response.trID.svTRID");
     EppOutput output = runFlowInternal(commitMode, userPrivileges);
     if (output.isResponse()) {
       assertThat(output.isSuccess()).isTrue();
@@ -337,6 +346,12 @@ public abstract class FlowTestCase<F extends Flow> extends ShardableTestCase {
     // Clear the cache so that we don't see stale results in tests.
     ofy().clearSessionCache();
     return output;
+  }
+
+  private TmchCaMode tmchCaMode = TmchCaMode.PILOT;
+
+  protected void useTmchProdCert() {
+    tmchCaMode = TmchCaMode.PRODUCTION;
   }
 
   public EppOutput dryRunFlowAssertResponse(String xml, String... ignoredPaths) throws Exception {

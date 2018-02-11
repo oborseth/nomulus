@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,40 @@
 
 package google.registry.flows;
 
+import static com.google.common.truth.Truth8.assertThat;
+import static google.registry.model.EppResourceUtils.loadByForeignKey;
+import static google.registry.model.eppoutput.Result.Code.SUCCESS;
+import static google.registry.model.eppoutput.Result.Code.SUCCESS_AND_CLOSE;
+import static google.registry.model.eppoutput.Result.Code.SUCCESS_WITH_ACTION_PENDING;
+import static google.registry.model.ofy.ObjectifyService.ofy;
+import static google.registry.testing.DatastoreHelper.assertBillingEventsForResource;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.createTlds;
+import static google.registry.testing.DatastoreHelper.getOnlyHistoryEntryOfType;
+import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.DatastoreHelper.stripBillingEventId;
+import static google.registry.testing.EppMetricSubject.assertThat;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
+import static org.joda.money.CurrencyUnit.USD;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.re2j.Matcher;
 import com.google.re2j.Pattern;
+import com.googlecode.objectify.Key;
+import google.registry.model.billing.BillingEvent;
+import google.registry.model.billing.BillingEvent.Flag;
+import google.registry.model.billing.BillingEvent.OneTime;
+import google.registry.model.billing.BillingEvent.Reason;
+import google.registry.model.domain.DomainResource;
+import google.registry.model.registry.Registry;
 import google.registry.model.registry.Registry.TldState;
+import google.registry.model.reporting.HistoryEntry.Type;
 import google.registry.testing.AppEngineRule;
+import java.util.Objects;
+import java.util.Optional;
+import org.joda.money.Money;
 import org.joda.time.DateTime;
 import org.junit.Before;
 import org.junit.Rule;
@@ -36,10 +60,8 @@ import org.junit.runners.JUnit4;
 public class EppLifecycleDomainTest extends EppTestCase {
 
   @Rule
-  public final AppEngineRule appEngine = AppEngineRule.builder()
-      .withDatastore()
-      .withTaskQueue()
-      .build();
+  public final AppEngineRule appEngine =
+      AppEngineRule.builder().withDatastore().withTaskQueue().build();
 
   @Before
   public void initTld() {
@@ -48,25 +70,37 @@ public class EppLifecycleDomainTest extends EppTestCase {
 
   /** Create the two administrative contacts and two hosts. */
   void createContactsAndHosts() throws Exception {
-    DateTime startTime = DateTime.parse("2000-06-01T00:00:00Z");
-    assertCommandAndResponse(
-        "contact_create_sh8013.xml",
-        ImmutableMap.<String, String>of(),
-        "contact_create_response_sh8013.xml",
-        ImmutableMap.of("CRDATE", "2000-06-01T00:00:00Z"),
-        startTime);
-    assertCommandAndResponse(
-        "contact_create_jd1234.xml",
-        "contact_create_response_jd1234.xml",
-        startTime.plusMinutes(1));
+    DateTime createTime = DateTime.parse("2000-06-01T00:00:00Z");
+    createContacts(createTime);
     assertCommandAndResponse(
         "host_create.xml",
+        ImmutableMap.of("HOSTNAME", "ns1.example.external"),
         "host_create_response.xml",
-        startTime.plusMinutes(2));
+        ImmutableMap.of(
+            "HOSTNAME", "ns1.example.external", "CRDATE", createTime.plusMinutes(2).toString()),
+        createTime.plusMinutes(2));
     assertCommandAndResponse(
-        "host_create2.xml",
-        "host_create2_response.xml",
-        startTime.plusMinutes(3));
+        "host_create.xml",
+        ImmutableMap.of("HOSTNAME", "ns2.example.external"),
+        "host_create_response.xml",
+        ImmutableMap.of(
+            "HOSTNAME", "ns2.example.external", "CRDATE", createTime.plusMinutes(3).toString()),
+        createTime.plusMinutes(3));
+  }
+
+  private void createContacts(DateTime createTime) throws Exception {
+    assertCommandAndResponse(
+        "contact_create_sh8013.xml",
+        ImmutableMap.of(),
+        "contact_create_response_sh8013.xml",
+        ImmutableMap.of("CRDATE", createTime.toString()),
+        createTime);
+    assertCommandAndResponse(
+        "contact_create_jd1234.xml",
+        ImmutableMap.of(),
+        "contact_create_response_jd1234.xml",
+        ImmutableMap.of("CRDATE", createTime.plusMinutes(1).toString()),
+        createTime.plusMinutes(1));
   }
 
   /** Creates the domain fakesite.example with two nameservers on it. */
@@ -74,7 +108,12 @@ public class EppLifecycleDomainTest extends EppTestCase {
     createContactsAndHosts();
     assertCommandAndResponse(
         "domain_create_fakesite.xml",
-        "domain_create_response_fakesite.xml",
+        ImmutableMap.of(),
+        "domain_create_response.xml",
+        ImmutableMap.of(
+            "NAME", "fakesite.example",
+            "CRDATE", "2000-06-01T00:04:00.0Z",
+            "EXDATE", "2002-06-01T00:04:00.0Z"),
         DateTime.parse("2000-06-01T00:04:00Z"));
     assertCommandAndResponse(
         "domain_info_fakesite.xml",
@@ -102,36 +141,30 @@ public class EppLifecycleDomainTest extends EppTestCase {
     // Verify that nameserver's data was set correctly.
     assertCommandAndResponse(
         "host_info_fakesite.xml",
-        "host_info_response_fakesite.xml",
+        "host_info_response_fakesite_linked.xml",
         DateTime.parse("2000-06-08T00:02:00Z"));
   }
 
   @Test
   public void testDomainDeleteRestore() throws Exception {
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
+    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
 
-    // Create contacts sh8013 and jd1234.
-    assertCommandAndResponse(
-        "contact_create_sh8013.xml",
-        null,
-        "contact_create_response_sh8013.xml",
-        ImmutableMap.of("CRDATE", "2000-06-01T00:00:00Z"),
-        DateTime.parse("2000-06-01T00:00:00Z"));
-    assertCommandAndResponse(
-        "contact_create_jd1234.xml",
-        "contact_create_response_jd1234.xml",
-        DateTime.parse("2000-06-01T00:01:00Z"));
-
-    // Create domain example.tld.
+    // Create domain example.tld
     assertCommandAndResponse(
         "domain_create_no_hosts_or_dsdata.xml",
+        ImmutableMap.of(),
         "domain_create_response.xml",
+        ImmutableMap.of(
+            "NAME", "example.tld",
+            "CRDATE", "2000-06-01T00:02:00.0Z",
+            "EXDATE", "2002-06-01T00:02:00.0Z"),
         DateTime.parse("2000-06-01T00:02:00Z"));
 
     // Delete domain example.tld after its add grace period has expired.
     assertCommandAndResponse(
-        "domain_delete.xml",
-        "generic_success_action_pending_response.xml",
+        "domain_delete.xml", ImmutableMap.of("NAME", "example.tld"),
+        "generic_success_action_pending_response.xml", ImmutableMap.of(),
         DateTime.parse("2000-07-01T00:02:00Z"));
 
     // Restore the domain.
@@ -144,40 +177,251 @@ public class EppLifecycleDomainTest extends EppTestCase {
   }
 
   @Test
-  public void testDomainDeletion_withinAddGracePeriod() throws Exception {
+  public void testDomainDeletion_withinAddGracePeriod_deletesImmediately() throws Exception {
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
+    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
 
-    // Create contacts sh8013 and jd1234.
-    assertCommandAndResponse(
-        "contact_create_sh8013.xml",
-        null,
-        "contact_create_response_sh8013.xml",
-        ImmutableMap.of("CRDATE", "2000-06-01T00:00:00Z"),
-        DateTime.parse("2000-06-01T00:00:00Z"));
-    assertCommandAndResponse(
-        "contact_create_jd1234.xml",
-        "contact_create_response_jd1234.xml",
-        DateTime.parse("2000-06-01T00:01:00Z"));
-
-    // Create domain example.tld.
+    // Create domain example.tld
+    DateTime createTime = DateTime.parse("2000-06-01T00:02:00Z");
     assertCommandAndResponse(
         "domain_create_no_hosts_or_dsdata.xml",
+        ImmutableMap.of(),
         "domain_create_response.xml",
-        DateTime.parse("2000-06-01T00:02:00Z"));
+        ImmutableMap.of(
+            "NAME", "example.tld",
+            "CRDATE", "2000-06-01T00:02:00.0Z",
+            "EXDATE", "2002-06-01T00:02:00.0Z"),
+        createTime);
 
-    // Delete domain example.tld after its add grace period has expired.
+    DomainResource domain =
+        loadByForeignKey(DomainResource.class, "example.tld", createTime.plusHours(1));
+
+    // Delete domain example.tld within the add grace period.
+    DateTime deleteTime = createTime.plusDays(1);
     assertCommandAndResponse(
-        "domain_delete.xml",
-        "generic_success_action_pending_response.xml",
-        DateTime.parse("2000-07-01T00:02:00Z"));
+        "domain_delete.xml", ImmutableMap.of("NAME", "example.tld"),
+        "generic_success_response.xml", ImmutableMap.of(),
+        deleteTime);
 
-    // Poke the domain a little at various times to see its status
+    // Verify that it is immediately non-existent.
     assertCommandAndResponse(
         "domain_info.xml",
-        "domain_info_response_pendingdelete.xml",
-        DateTime.parse("2000-08-01T00:02:00Z"));  // 1 day out.
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of(
+            "MSG", "The domain with given ID (example.tld) doesn't exist.", "CODE", "2303"),
+        deleteTime.plusSeconds(1));
+
+    // The expected one-time billing event, that should have an associated Cancellation.
+    OneTime oneTimeCreateBillingEvent = makeOneTimeCreateBillingEvent(domain, createTime);
+    // Verify that the OneTime billing event associated with the domain creation is canceled.
+    assertBillingEventsForResource(
+        domain,
+        // Check the existence of the expected create one-time billing event.
+        oneTimeCreateBillingEvent,
+        makeRecurringCreateBillingEvent(domain, createTime, deleteTime),
+        // Check for the existence of a cancellation for the given one-time billing event.
+        makeCancellationBillingEventFor(
+            domain, oneTimeCreateBillingEvent, createTime, deleteTime));
 
     assertCommandAndResponse("logout.xml", "logout_response.xml");
+  }
+
+  @Test
+  public void testDomainDeletion_outsideAddGracePeriod_showsRedemptionPeriod() throws Exception {
+    assertCommandAndResponse("login_valid.xml", "login_response.xml");
+    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
+
+    DateTime createTime = DateTime.parse("2000-06-01T00:02:00Z");
+    // Create domain example.tld
+    assertCommandAndResponse(
+        "domain_create_no_hosts_or_dsdata.xml",
+        ImmutableMap.of(),
+        "domain_create_response.xml",
+        ImmutableMap.of(
+            "NAME", "example.tld",
+            "CRDATE", "2000-06-01T00:02:00.0Z",
+            "EXDATE", "2002-06-01T00:02:00.0Z"),
+        createTime);
+
+    DateTime deleteTime = DateTime.parse("2000-07-07T00:02:00Z"); // 1 month and 6 days after
+    // Delete domain example.tld after its add grace period has expired.
+    assertCommandAndResponse(
+        "domain_delete.xml", ImmutableMap.of("NAME", "example.tld"),
+        "generic_success_action_pending_response.xml", ImmutableMap.of(),
+        deleteTime);
+
+    // Verify that domain shows redemptionPeriod soon after deletion.
+    assertCommandAndResponse(
+        "domain_info.xml",
+        ImmutableMap.of(),
+        "domain_info_response_wildcard.xml",
+        ImmutableMap.of("STATUS", "redemptionPeriod"),
+        DateTime.parse("2000-07-08T00:00:00Z"));
+
+    // Verify that the domain shows pendingDelete next.
+    assertCommandAndResponse(
+        "domain_info.xml",
+        ImmutableMap.of(),
+        "domain_info_response_wildcard.xml",
+        ImmutableMap.of("STATUS", "pendingDelete"),
+        DateTime.parse("2000-08-08T00:00:00Z"));
+
+    // Verify that the domain is non-existent (available for registration) later.
+    assertCommandAndResponse(
+        "domain_info.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of(
+            "MSG", "The domain with given ID (example.tld) doesn't exist.", "CODE", "2303"),
+        DateTime.parse("2000-09-01T00:00:00Z"));
+
+    DomainResource domain =
+        loadByForeignKey(
+            DomainResource.class, "example.tld", DateTime.parse("2000-08-01T00:02:00Z"));
+    // Verify that the autorenew was ended and that the one-time billing event is not canceled.
+    assertBillingEventsForResource(
+        domain,
+        makeOneTimeCreateBillingEvent(domain, createTime),
+        makeRecurringCreateBillingEvent(domain, createTime, deleteTime));
+
+    assertCommandAndResponse("logout.xml", "logout_response.xml");
+  }
+
+  @Test
+  public void testEapDomainDeletion_withinAddGracePeriod_eapFeeIsNotRefunded() throws Exception {
+    assertCommandAndResponse("login_valid_fee_extension.xml", "login_response.xml");
+    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
+
+    // Set the EAP schedule.
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setEapFeeSchedule(
+                ImmutableSortedMap.of(
+                    START_OF_TIME, Money.of(USD, 0),
+                    DateTime.parse("2000-06-01T00:00:00Z"), Money.of(USD, 100),
+                    DateTime.parse("2000-06-02T00:00:00Z"), Money.of(USD, 0)))
+            .build());
+
+    // Create domain example.tld, which should have an EAP fee of USD 100.
+    DateTime createTime = DateTime.parse("2000-06-01T00:02:00Z");
+    assertCommandAndResponse(
+        "domain_create_eap_fee.xml",
+        "domain_create_response_eap_fee.xml",
+        createTime);
+
+    DomainResource domain =
+        loadByForeignKey(
+            DomainResource.class, "example.tld", DateTime.parse("2000-06-01T00:03:00Z"));
+
+    // Delete domain example.tld within the add grade period.
+    DateTime deleteTime = createTime.plusDays(1);
+    assertCommandAndResponse(
+        "domain_delete.xml", ImmutableMap.of("NAME", "example.tld"),
+        "domain_delete_response_fee.xml", ImmutableMap.of(),
+        deleteTime);
+
+    // Verify that the OneTime billing event associated with the base fee of domain registration and
+    // is canceled and the autorenew is ended, but that the EAP fee is not canceled.
+    OneTime expectedCreateEapBillingEvent =
+        new BillingEvent.OneTime.Builder()
+            .setReason(Reason.FEE_EARLY_ACCESS)
+            .setTargetId("example.tld")
+            .setClientId("NewRegistrar")
+            .setCost(Money.parse("USD 100.00"))
+            .setEventTime(createTime)
+            .setBillingTime(createTime.plus(Registry.get("tld").getRenewGracePeriodLength()))
+            .setParent(getOnlyHistoryEntryOfType(domain, Type.DOMAIN_CREATE))
+            .build();
+
+    // The expected one-time billing event, that should have an associated Cancellation.
+    OneTime expectedOneTimeCreateBillingEvent = makeOneTimeCreateBillingEvent(domain, createTime);
+    assertBillingEventsForResource(
+        domain,
+        // Check for the expected create one-time billing event ...
+        expectedOneTimeCreateBillingEvent,
+        // ... and the expected one-time EAP fee billing event ...
+        expectedCreateEapBillingEvent,
+        makeRecurringCreateBillingEvent(domain, createTime, deleteTime),
+        // ... and verify that the create one-time billing event was canceled ...
+        makeCancellationBillingEventFor(
+            domain, expectedOneTimeCreateBillingEvent, createTime, deleteTime));
+    // ... but there was NOT a Cancellation for the EAP fee, as this would fail if additional
+    // billing events were present.
+
+    assertCommandAndResponse("logout.xml", "logout_response.xml");
+  }
+
+  /** Makes a one-time billing event corresponding to the given domain's creation. */
+  private static BillingEvent.OneTime makeOneTimeCreateBillingEvent(
+      DomainResource domain, DateTime createTime) {
+    return new BillingEvent.OneTime.Builder()
+        .setReason(Reason.CREATE)
+        .setTargetId(domain.getFullyQualifiedDomainName())
+        .setClientId(domain.getCurrentSponsorClientId())
+        .setCost(Money.parse("USD 26.00"))
+        .setPeriodYears(2)
+        .setEventTime(createTime)
+        .setBillingTime(createTime.plus(Registry.get(domain.getTld()).getRenewGracePeriodLength()))
+        .setParent(getOnlyHistoryEntryOfType(domain, Type.DOMAIN_CREATE))
+        .build();
+  }
+
+  /** Makes a recurring billing event corresponding to the given domain's creation. */
+  private static BillingEvent.Recurring makeRecurringCreateBillingEvent(
+      DomainResource domain, DateTime createTime, DateTime endTime) {
+    return new BillingEvent.Recurring.Builder()
+        .setReason(Reason.RENEW)
+        .setFlags(ImmutableSet.of(Flag.AUTO_RENEW))
+        .setTargetId(domain.getFullyQualifiedDomainName())
+        .setClientId(domain.getCurrentSponsorClientId())
+        .setEventTime(createTime.plusYears(2))
+        .setRecurrenceEndTime(endTime)
+        .setParent(getOnlyHistoryEntryOfType(domain, Type.DOMAIN_CREATE))
+        .build();
+  }
+
+  /** Makes a cancellation billing event cancelling out the given domain create billing event. */
+  private static BillingEvent.Cancellation makeCancellationBillingEventFor(
+      DomainResource domain,
+      OneTime billingEventToCancel,
+      DateTime createTime,
+      DateTime deleteTime) {
+    return new BillingEvent.Cancellation.Builder()
+        .setTargetId(domain.getFullyQualifiedDomainName())
+        .setClientId(domain.getCurrentSponsorClientId())
+        .setEventTime(deleteTime)
+        .setOneTimeEventKey(findKeyToActualOneTimeBillingEvent(billingEventToCancel))
+        .setBillingTime(createTime.plus(Registry.get(domain.getTld()).getRenewGracePeriodLength()))
+        .setReason(Reason.CREATE)
+        .setParent(getOnlyHistoryEntryOfType(domain, Type.DOMAIN_DELETE))
+        .build();
+  }
+
+  /**
+   * Finds the Key to the actual one-time create billing event associated with a domain's creation.
+   *
+   * <p>This is used in the situation where we have created an expected billing event associated
+   * with the domain's creation (which is passed as the parameter here), then need to locate the key
+   * to the actual billing event in Datastore that would be seen on a Cancellation billing event.
+   * This is necessary because the ID will be different even though all the rest of the fields are
+   * the same.
+   */
+  private static Key<OneTime> findKeyToActualOneTimeBillingEvent(OneTime expectedBillingEvent) {
+    Optional<OneTime> actualCreateBillingEvent =
+        ofy()
+            .load()
+            .type(BillingEvent.OneTime.class)
+            .list()
+            .stream()
+            .filter(
+                b ->
+                    Objects.equals(
+                        stripBillingEventId(b), stripBillingEventId(expectedBillingEvent)))
+            .findFirst();
+    assertThat(actualCreateBillingEvent).isPresent();
+    return Key.create(actualCreateBillingEvent.get());
   }
 
   @Test
@@ -186,8 +430,10 @@ public class EppLifecycleDomainTest extends EppTestCase {
     createFakesite();
     createSubordinateHost();
     assertCommandAndResponse(
-        "domain_delete_fakesite.xml",
-        "domain_delete_response_prohibited.xml",
+        "domain_delete.xml",
+        ImmutableMap.of("NAME", "fakesite.example"),
+        "response_error.xml",
+        ImmutableMap.of("MSG", "Domain to be deleted has subordinate hosts", "CODE", "2305"),
         DateTime.parse("2002-05-30T01:01:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
   }
@@ -195,6 +441,14 @@ public class EppLifecycleDomainTest extends EppTestCase {
   @Test
   public void testDeletionOfDomain_afterRenameOfSubordinateHost_succeeds() throws Exception {
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
+    assertThat(getRecordedEppMetric())
+        .hasClientId("NewRegistrar")
+        .and()
+        .hasNoTld()
+        .and()
+        .hasCommandName("Login")
+        .and()
+        .hasStatus(SUCCESS);
     createFakesite();
     createSubordinateHost();
     // Update the ns3 host to no longer be on fakesite.example domain.
@@ -202,23 +456,74 @@ public class EppLifecycleDomainTest extends EppTestCase {
         "host_update_fakesite.xml",
         "generic_success_response.xml",
         DateTime.parse("2002-05-30T01:01:00Z"));
+    // Add assert about EppMetric
+    assertThat(getRecordedEppMetric())
+        .hasClientId("NewRegistrar")
+        .and()
+        .hasCommandName("HostUpdate")
+        .and()
+        .hasEppTarget("ns3.fakesite.example")
+        .and()
+        .hasStatus(SUCCESS);
     // Delete the fakesite.example domain (which should succeed since it no longer has subords).
     assertCommandAndResponse(
-        "domain_delete_fakesite.xml",
-        "generic_success_action_pending_response.xml",
+        "domain_delete.xml", ImmutableMap.of("NAME", "fakesite.example"),
+        "generic_success_action_pending_response.xml", ImmutableMap.of(),
         DateTime.parse("2002-05-30T01:02:00Z"));
+    assertThat(getRecordedEppMetric())
+        .hasClientId("NewRegistrar")
+        .and()
+        .hasTld("example")
+        .and()
+        .hasCommandName("DomainDelete")
+        .and()
+        .hasEppTarget("fakesite.example")
+        .and()
+        .hasStatus(SUCCESS_WITH_ACTION_PENDING);
     // Check info on the renamed host and verify that it's still around and wasn't deleted.
     assertCommandAndResponse(
         "host_info_ns9000_example.xml",
         "host_info_response_ns9000_example.xml",
         DateTime.parse("2002-06-30T01:03:00Z"));
+    assertThat(getRecordedEppMetric())
+        .hasClientId("NewRegistrar")
+        .and()
+        .hasCommandName("HostInfo")
+        .and()
+        .hasEppTarget("ns9000.example.external")
+        .and()
+        .hasStatus(SUCCESS);
     assertCommandAndResponse("logout.xml", "logout_response.xml");
+    assertThat(getRecordedEppMetric())
+        .hasClientId("NewRegistrar")
+        .and()
+        .hasCommandName("Logout")
+        .and()
+        .hasStatus(SUCCESS_AND_CLOSE);
   }
 
   @Test
   public void testDeletionOfDomain_afterUpdateThatCreatesSubordinateHost_fails() throws Exception {
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
     createFakesite();
+
+    // Create domain example.tld
+    assertCommandAndResponse(
+        "domain_create_no_hosts_or_dsdata.xml",
+        ImmutableMap.of(),
+        "domain_create_response.xml",
+        ImmutableMap.of(
+            "NAME", "example.tld",
+            "CRDATE", "2000-06-02T00:00:00.0Z",
+            "EXDATE", "2002-06-02T00:00:00.0Z"),
+        DateTime.parse("2000-06-02T00:00:00Z"));
+
+    // Create nameserver ns1.example.tld
+    assertCommandAndResponse(
+        "host_create_example.xml",
+        "host_create_response_example.xml",
+        DateTime.parse("2000-06-02T00:01:00Z"));
+
     // Update the ns1 host to be on the fakesite.example domain.
     assertCommandAndResponse(
         "host_update_ns1_to_fakesite.xml",
@@ -227,8 +532,10 @@ public class EppLifecycleDomainTest extends EppTestCase {
     // Attempt to delete the fakesite.example domain (which should fail since it now has a
     // subordinate host).
     assertCommandAndResponse(
-        "domain_delete_fakesite.xml",
-        "domain_delete_response_prohibited.xml",
+        "domain_delete.xml",
+        ImmutableMap.of("NAME", "fakesite.example"),
+        "response_error.xml",
+        ImmutableMap.of("MSG", "Domain to be deleted has subordinate hosts", "CODE", "2305"),
         DateTime.parse("2002-05-30T01:02:00Z"));
     // Check info on the renamed host and verify that it's still around and wasn't deleted.
     assertCommandAndResponse(
@@ -244,38 +551,17 @@ public class EppLifecycleDomainTest extends EppTestCase {
   }
 
   @Test
-  public void testRenamingHostToExistingHost_fails() throws Exception {
-    assertCommandAndResponse("login_valid.xml", "login_response.xml");
-    // Create the two hosts.
-    assertCommandAndResponse(
-        "host_create.xml", "host_create_response.xml", DateTime.parse("2000-06-01T00:02:00Z"));
-    assertCommandAndResponse(
-        "host_create2.xml", "host_create2_response.xml", DateTime.parse("2000-06-01T00:03:00Z"));
-    // Verify that host1 and host2 were created as we expect them.
-    assertCommandAndResponse(
-        "host_info_ns1.xml", "host_info_response_ns1.xml", DateTime.parse("2000-06-01T00:04:00Z"));
-    assertCommandAndResponse(
-        "host_info_ns2.xml", "host_info_response_ns2.xml", DateTime.parse("2000-06-01T00:05:00Z"));
-    // Attempt overwriting of host1 on top of host2 (and verify that it fails).
-    assertCommandAndResponse(
-        "host_update_ns1_to_ns2.xml",
-        "host_update_failed_response.xml",
-        DateTime.parse("2000-06-01T00:06:00Z"));
-    // Verify that host1 and host2 still exist in their unmodified states.
-    assertCommandAndResponse(
-        "host_info_ns1.xml", "host_info_response_ns1.xml", DateTime.parse("2000-06-01T00:07:00Z"));
-    assertCommandAndResponse(
-        "host_info_ns2.xml", "host_info_response_ns2.xml", DateTime.parse("2000-06-01T00:08:00Z"));
-    assertCommandAndResponse("logout.xml", "logout_response.xml");
-  }
-
-  @Test
   public void testDomainCreation_failsBeforeSunrise() throws Exception {
     DateTime sunriseDate = DateTime.parse("2000-05-30T00:00:00Z");
-    createTld("example", ImmutableSortedMap.of(
-        START_OF_TIME, TldState.PREDELEGATION,
-        sunriseDate, TldState.SUNRISE,
-        sunriseDate.plusMonths(2), TldState.GENERAL_AVAILABILITY));
+    createTld(
+        "example",
+        ImmutableSortedMap.of(
+            START_OF_TIME,
+            TldState.PREDELEGATION,
+            sunriseDate,
+            TldState.SUNRISE,
+            sunriseDate.plusMonths(2),
+            TldState.GENERAL_AVAILABILITY));
 
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
 
@@ -283,12 +569,19 @@ public class EppLifecycleDomainTest extends EppTestCase {
 
     assertCommandAndResponse(
         "domain_create_sunrise_encoded_mark.xml",
-        "domain_create_testvalidate_invalid_phase.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of(
+            "MSG", "Command is not allowed in the current registry phase", "CODE", "2002"),
         sunriseDate.minusDays(1));
 
     assertCommandAndResponse(
         "domain_info_testvalidate.xml",
-        "domain_info_response_testvalidate_doesnt_exist.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of(
+            "MSG", "The domain with given ID (test-validate.example) doesn't exist.",
+            "CODE", "2303"),
         sunriseDate.plusDays(1));
 
     assertCommandAndResponse("logout.xml", "logout_response.xml");
@@ -297,9 +590,11 @@ public class EppLifecycleDomainTest extends EppTestCase {
   @Test
   public void testDomainCheckFee_succeeds() throws Exception {
     DateTime gaDate = DateTime.parse("2000-05-30T00:00:00Z");
-    createTld("example", ImmutableSortedMap.of(
-        START_OF_TIME, TldState.PREDELEGATION,
-        gaDate, TldState.GENERAL_AVAILABILITY));
+    createTld(
+        "example",
+        ImmutableSortedMap.of(
+            START_OF_TIME, TldState.PREDELEGATION,
+            gaDate, TldState.GENERAL_AVAILABILITY));
 
     assertCommandAndResponse("login_valid_fee_extension.xml", "login_response.xml");
 
@@ -307,6 +602,71 @@ public class EppLifecycleDomainTest extends EppTestCase {
         "domain_check_fee_premium.xml",
         "domain_check_fee_premium_response.xml",
         gaDate.plusDays(1));
+    assertThat(getRecordedEppMetric())
+        .hasClientId("NewRegistrar")
+        .and()
+        .hasCommandName("DomainCheck")
+        .and()
+        .hasEppTarget("rich.example")
+        .and()
+        .hasTld("example")
+        .and()
+        .hasStatus(SUCCESS);
+
+    assertCommandAndResponse("logout.xml", "logout_response.xml");
+  }
+
+  @Test
+  public void testDomainCreate_annualAutoRenewPollMessages_haveUniqueIds() throws Exception {
+    assertCommandAndResponse("login_valid.xml", "login_response.xml");
+    // Create the domain.
+    createFakesite();
+
+    // The first autorenew poll message isn't seen until after the initial two years of registration
+    // are up.
+    assertCommandAndResponse(
+        "poll.xml", "poll_response_empty.xml", DateTime.parse("2001-01-01T00:01:00Z"));
+    assertCommandAndResponse(
+        "poll.xml",
+        ImmutableMap.of(),
+        "poll_response_autorenew.xml",
+        ImmutableMap.of(
+            "ID", "1-C-EXAMPLE-13-16-2002",
+            "QDATE", "2002-06-01T00:04:00Z",
+            "DOMAIN", "fakesite.example",
+            "EXDATE", "2003-06-01T00:04:00Z"),
+        DateTime.parse("2002-07-01T00:01:00Z"));
+    assertCommandAndResponse(
+        "poll_ack.xml",
+        ImmutableMap.of("ID", "1-C-EXAMPLE-13-16-2002"),
+        "poll_ack_response_empty.xml",
+        ImmutableMap.of(),
+        DateTime.parse("2002-07-01T00:02:00Z"));
+
+    // The second autorenew poll message isn't seen until after another year, and it should have a
+    // different ID.
+    assertCommandAndResponse(
+        "poll.xml", "poll_response_empty.xml", DateTime.parse("2002-07-01T00:05:00Z"));
+    assertCommandAndResponse(
+        "poll.xml",
+        ImmutableMap.of(),
+        "poll_response_autorenew.xml",
+        ImmutableMap.of(
+            "ID", "1-C-EXAMPLE-13-16-2003", // Note -- Year is different from previous ID.
+            "QDATE", "2003-06-01T00:04:00Z",
+            "DOMAIN", "fakesite.example",
+            "EXDATE", "2004-06-01T00:04:00Z"),
+        DateTime.parse("2003-07-01T00:05:00Z"));
+
+    // Ack the second poll message and verify that none remain.
+    assertCommandAndResponse(
+        "poll_ack.xml",
+        ImmutableMap.of("ID", "1-C-EXAMPLE-13-16-2003"),
+        "poll_ack_response_empty.xml",
+        ImmutableMap.of(),
+        DateTime.parse("2003-07-01T00:05:05Z"));
+    assertCommandAndResponse(
+        "poll.xml", "poll_response_empty.xml", DateTime.parse("2003-07-01T00:05:10Z"));
 
     assertCommandAndResponse("logout.xml", "logout_response.xml");
   }
@@ -320,10 +680,11 @@ public class EppLifecycleDomainTest extends EppTestCase {
 
     // As the winning registrar, request a transfer. Capture the server trid; we'll need it later.
     assertCommandAndResponse("login2_valid.xml", "login_response.xml");
-    String response = assertCommandAndResponse(
-        "domain_transfer_request_1_year.xml",
-        "domain_transfer_response_1_year.xml",
-        DateTime.parse("2001-01-01T00:00:00Z"));
+    String response =
+        assertCommandAndResponse(
+            "domain_transfer_request_1_year.xml",
+            "domain_transfer_response_1_year.xml",
+            DateTime.parse("2001-01-01T00:00:00Z"));
     Matcher matcher = Pattern.compile("<svTRID>(.*)</svTRID>").matcher(response);
     matcher.find();
     String transferRequestTrid = matcher.group(1);
@@ -337,10 +698,10 @@ public class EppLifecycleDomainTest extends EppTestCase {
         DateTime.parse("2001-01-01T00:01:00Z"));
     assertCommandAndResponse(
         "poll_ack.xml",
-        ImmutableMap.of("ID", "1-B-EXAMPLE-17-23"),
+        ImmutableMap.of("ID", "1-C-EXAMPLE-17-23-2001"),
         "poll_ack_response_empty.xml",
-        null,
-    DateTime.parse("2001-01-01T00:01:00Z"));
+        ImmutableMap.of(),
+        DateTime.parse("2001-01-01T00:01:00Z"));
 
     // Five days in the future, expect a server approval poll message to the loser, and ack it.
     assertCommandAndResponse(
@@ -349,9 +710,9 @@ public class EppLifecycleDomainTest extends EppTestCase {
         DateTime.parse("2001-01-06T00:01:00Z"));
     assertCommandAndResponse(
         "poll_ack.xml",
-        ImmutableMap.of("ID", "1-B-EXAMPLE-17-22"),
+        ImmutableMap.of("ID", "1-C-EXAMPLE-17-22-2001"),
         "poll_ack_response_empty.xml",
-        null,
+        ImmutableMap.of(),
         DateTime.parse("2001-01-06T00:01:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
 
@@ -359,21 +720,22 @@ public class EppLifecycleDomainTest extends EppTestCase {
     assertCommandAndResponse("login2_valid.xml", "login_response.xml");
     assertCommandAndResponse(
         "poll.xml",
-        null,
+        ImmutableMap.of(),
         "poll_response_domain_transfer_server_approve_winner.xml",
         ImmutableMap.of("SERVER_TRID", transferRequestTrid),
         DateTime.parse("2001-01-06T00:02:00Z"));
     assertCommandAndResponse(
         "poll_ack.xml",
-        ImmutableMap.of("ID", "1-B-EXAMPLE-17-21"),
+        ImmutableMap.of("ID", "1-C-EXAMPLE-17-21-2001"),
         "poll_ack_response_empty.xml",
-        null,
+        ImmutableMap.of(),
         DateTime.parse("2001-01-06T00:02:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
   }
 
   @Test
-  public void testIgnoredTransferDuringAutoRenewPeriod_succeeds() throws Exception {
+  public void testTransfer_autoRenewGraceActive_onlyAtAutomaticTransferTime_getsSubsumed()
+      throws Exception {
     // Register the domain as the first registrar.
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
     createFakesite();
@@ -382,14 +744,13 @@ public class EppLifecycleDomainTest extends EppTestCase {
     // Request a transfer of the domain to the second registrar.
     assertCommandAndResponse("login2_valid.xml", "login_response.xml");
     assertCommandAndResponse(
-        "domain_transfer_request_2_years.xml",
-        "domain_transfer_response_2_years.xml",
+        "domain_transfer_request.xml",
+        "domain_transfer_response.xml",
         DateTime.parse("2002-05-30T00:00:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
 
     // Log back in as the first registrar and verify things.
-    assertCommandAndResponse(
-        "login_valid.xml", "login_response.xml");
+    assertCommandAndResponse("login_valid.xml", "login_response.xml");
     assertCommandAndResponse(
         "domain_info_fakesite.xml",
         "domain_info_response_fakesite_pending_transfer.xml",
@@ -402,7 +763,8 @@ public class EppLifecycleDomainTest extends EppTestCase {
 
     // Log back in as the second registrar and verify transfer details.
     assertCommandAndResponse("login2_valid.xml", "login_response.xml");
-    // Verify that domain is in the transfer period now with expiration date two years out.
+    // Verify that domain is in the transfer period now with expiration date still one year out,
+    // since the transfer should subsume the autorenew that happened during the transfer window.
     assertCommandAndResponse(
         "domain_info_fakesite.xml",
         "domain_info_response_fakesite_transfer_period.xml",
@@ -425,14 +787,15 @@ public class EppLifecycleDomainTest extends EppTestCase {
     // Request a transfer of the domain to the second registrar.
     assertCommandAndResponse("login2_valid.xml", "login_response.xml");
     assertCommandAndResponse(
-        "domain_transfer_request_2_years.xml",
-        "domain_transfer_response_2_years.xml",
+        "domain_transfer_request.xml",
+        "domain_transfer_response.xml",
         DateTime.parse("2002-05-30T00:00:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
 
     // Log back in as the first registrar and verify domain is pending transfer.
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
-    assertCommandAndResponse("domain_info_fakesite.xml",
+    assertCommandAndResponse(
+        "domain_info_fakesite.xml",
         "domain_info_response_fakesite_3_nameservers_pending_transfer.xml",
         DateTime.parse("2002-05-30T01:00:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
@@ -447,9 +810,9 @@ public class EppLifecycleDomainTest extends EppTestCase {
     // Verify that host's client ID was set to the new registrar and has the transfer date set.
     assertCommandAndResponse(
         "host_info_fakesite.xml",
-        null,
+        ImmutableMap.of(),
         "host_info_response_fakesite_post_transfer.xml",
-        ImmutableMap.of("trDate", "2002-06-04T00:00:00Z"),
+        ImmutableMap.of("TRDATE", "2002-06-04T00:00:00Z"),
         DateTime.parse("2002-06-09T00:01:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
   }
@@ -464,8 +827,8 @@ public class EppLifecycleDomainTest extends EppTestCase {
     // Request a transfer of the domain to the second registrar.
     assertCommandAndResponse("login2_valid.xml", "login_response.xml");
     assertCommandAndResponse(
-        "domain_transfer_request_2_years.xml",
-        "domain_transfer_response_2_years.xml",
+        "domain_transfer_request.xml",
+        "domain_transfer_response.xml",
         DateTime.parse("2002-05-30T00:00:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
 
@@ -477,8 +840,8 @@ public class EppLifecycleDomainTest extends EppTestCase {
         "domain_info_response_fakesite_pending_transfer.xml",
         DateTime.parse("2002-05-30T01:00:00Z"));
     assertCommandAndResponse(
-        "domain_delete_fakesite.xml",
-        "generic_success_action_pending_response.xml",
+        "domain_delete.xml", ImmutableMap.of("NAME", "fakesite.example"),
+        "generic_success_action_pending_response.xml", ImmutableMap.of(),
         DateTime.parse("2002-05-30T01:01:00Z"));
     assertCommandAndResponse(
         "domain_info_fakesite.xml",
@@ -505,7 +868,9 @@ public class EppLifecycleDomainTest extends EppTestCase {
     createSubordinateHost();
     assertCommandAndResponse(
         "domain_transfer_query_fakesite.xml",
-        "domain_transfer_query_response_no_transfer_history.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of("MSG", "Object has no transfer history", "CODE", "2002"),
         DateTime.parse("2000-09-02T00:00:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
 
@@ -513,7 +878,8 @@ public class EppLifecycleDomainTest extends EppTestCase {
     assertCommandAndResponse("login2_valid.xml", "login_response.xml");
     assertCommandAndResponse(
         "domain_transfer_request_1_year.xml",
-        "domain_transfer_response_1_year.xml", DateTime.parse("2001-01-01T00:00:00Z"));
+        "domain_transfer_response_1_year.xml",
+        DateTime.parse("2001-01-01T00:00:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
 
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
@@ -544,7 +910,9 @@ public class EppLifecycleDomainTest extends EppTestCase {
     createSubordinateHost();
     assertCommandAndResponse(
         "domain_transfer_query_fakesite.xml",
-        "domain_transfer_query_response_no_transfer_history.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of("MSG", "Object has no transfer history", "CODE", "2002"),
         DateTime.parse("2000-09-02T00:00:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
     // Request a transfer of the domain to the second registrar.
@@ -556,13 +924,18 @@ public class EppLifecycleDomainTest extends EppTestCase {
     // Verify that the lastTransferTime now reflects the superordinate domain's transfer.
     assertCommandAndResponse(
         "host_info.xml",
-        ImmutableMap.of("hostname", "ns3.fakesite.example"),
+        ImmutableMap.of("HOSTNAME", "ns3.fakesite.example"),
         "host_info_response_fakesite_post_transfer.xml",
-        ImmutableMap.of("trDate", "2001-01-06T00:00:00.000Z"),
+        ImmutableMap.of("TRDATE", "2001-01-06T00:00:00.000Z"),
         DateTime.parse("2001-01-07T00:00:00Z"));
     assertCommandAndResponse(
         "domain_create_secondsite.xml",
-        "domain_create_response_secondsite.xml",
+        ImmutableMap.of(),
+        "domain_create_response.xml",
+        ImmutableMap.of(
+            "NAME", "secondsite.example",
+            "CRDATE", "2001-01-08T00:00:00.0Z",
+            "EXDATE", "2003-01-08T00:00:00.0Z"),
         DateTime.parse("2001-01-08T00:00:00Z"));
     // Update the host to be subordinate to a different domain by renaming it to
     // ns3.secondsite.example
@@ -570,16 +943,16 @@ public class EppLifecycleDomainTest extends EppTestCase {
         "host_update_rename_only.xml",
         ImmutableMap.of("oldName", "ns3.fakesite.example", "newName", "ns3.secondsite.example"),
         "generic_success_response.xml",
-        null,
+        ImmutableMap.of(),
         DateTime.parse("2002-05-30T01:01:00Z"));
     // The last transfer time on the host should still be what it was from the transfer.
     assertCommandAndResponse(
         "host_info.xml",
-        ImmutableMap.of("hostname", "ns3.secondsite.example"),
+        ImmutableMap.of("HOSTNAME", "ns3.secondsite.example"),
         "host_info_response_fakesite_post_transfer_and_update.xml",
         ImmutableMap.of(
-            "hostname", "ns3.secondsite.example",
-            "trDate", "2001-01-06T00:00:00.000Z"),
+            "HOSTNAME", "ns3.secondsite.example",
+            "TRDATE", "2001-01-06T00:00:00.000Z"),
         DateTime.parse("2003-01-07T00:00:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
   }
@@ -597,8 +970,10 @@ public class EppLifecycleDomainTest extends EppTestCase {
     createSubordinateHost();
     assertCommandAndResponse(
         "domain_transfer_query_fakesite.xml",
-        "domain_transfer_query_response_no_transfer_history.xml",
-         DateTime.parse("2000-09-02T00:00:00Z"));
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of("MSG", "Object has no transfer history", "CODE", "2002"),
+        DateTime.parse("2000-09-02T00:00:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
     // Request a transfer of the domain to the second registrar.
     assertCommandAndResponse("login2_valid.xml", "login_response.xml");
@@ -609,9 +984,9 @@ public class EppLifecycleDomainTest extends EppTestCase {
     // Verify that the lastTransferTime now reflects the superordinate domain's transfer.
     assertCommandAndResponse(
         "host_info_fakesite.xml",
-        null,
+        ImmutableMap.of(),
         "host_info_response_fakesite_post_transfer.xml",
-        ImmutableMap.of("trDate", "2001-01-06T00:00:00.000Z"),
+        ImmutableMap.of("TRDATE", "2001-01-06T00:00:00.000Z"),
         DateTime.parse("2001-01-07T00:00:00Z"));
     // Update the host to be external by renaming it to ns3.notarealsite.external
     assertCommandAndResponse(
@@ -620,17 +995,92 @@ public class EppLifecycleDomainTest extends EppTestCase {
             "oldName", "ns3.fakesite.example",
             "newName", "ns3.notarealsite.external"),
         "generic_success_response.xml",
-        null,
+        ImmutableMap.of(),
         DateTime.parse("2002-05-30T01:01:00Z"));
     // The last transfer time on the host should still be what it was from the transfer.
     assertCommandAndResponse(
         "host_info.xml",
-        ImmutableMap.of("hostname", "ns3.notarealsite.external"),
+        ImmutableMap.of("HOSTNAME", "ns3.notarealsite.external"),
         "host_info_response_fakesite_post_transfer_and_update_no_addresses.xml",
         ImmutableMap.of(
-            "hostname", "ns3.notarealsite.external",
-            "trDate", "2001-01-06T00:00:00.000Z"),
+            "HOSTNAME", "ns3.notarealsite.external",
+            "TRDATE", "2001-01-06T00:00:00.000Z"),
         DateTime.parse("2001-01-07T00:00:00Z"));
+    assertCommandAndResponse("logout.xml", "logout_response.xml");
+  }
+
+  @Test
+  public void testSuccess_multipartTldsWithSharedSuffixes() throws Exception {
+    createTlds("bar.foo.tld", "foo.tld");
+
+    assertCommandAndResponse("login_valid.xml", "login_response.xml");
+    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
+
+    // Create domain example.bar.foo.tld
+    assertCommandAndResponse(
+        "domain_create_wildcard.xml",
+        ImmutableMap.of("HOSTNAME", "example.bar.foo.tld"),
+        "domain_create_response.xml",
+        ImmutableMap.of(
+            "NAME", "example.bar.foo.tld",
+            "CRDATE", "2000-06-01T00:02:00.0Z",
+            "EXDATE", "2002-06-01T00:02:00.0Z"),
+        DateTime.parse("2000-06-01T00:02:00Z"));
+
+    // Create domain example.foo.tld
+    assertCommandAndResponse(
+        "domain_create_wildcard.xml",
+        ImmutableMap.of("HOSTNAME", "example.foo.tld"),
+        "domain_create_response.xml",
+        ImmutableMap.of(
+            "NAME", "example.foo.tld",
+            "CRDATE", "2000-06-01T00:02:00.0Z",
+            "EXDATE", "2002-06-01T00:02:00.0Z"),
+        DateTime.parse("2000-06-01T00:02:00Z"));
+
+    // Create domain example.tld
+    assertCommandAndResponse(
+        "domain_create_wildcard.xml",
+        ImmutableMap.of("HOSTNAME", "example.tld"),
+        "domain_create_response.xml",
+        ImmutableMap.of(
+            "NAME", "example.tld",
+            "CRDATE", "2000-06-01T00:02:00.0Z",
+            "EXDATE", "2002-06-01T00:02:00.0Z"),
+        DateTime.parse("2000-06-01T00:02:00Z"));
+
+    assertCommandAndResponse("logout.xml", "logout_response.xml");
+  }
+
+  @Test
+  public void testSuccess_multipartTldsWithSharedPrefixes() throws Exception {
+    createTld("tld.foo");
+
+    assertCommandAndResponse("login_valid.xml", "login_response.xml");
+    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
+
+    // Create domain example.tld.foo
+    assertCommandAndResponse(
+        "domain_create_wildcard.xml",
+        ImmutableMap.of("HOSTNAME", "example.tld.foo"),
+        "domain_create_response.xml",
+        ImmutableMap.of(
+            "NAME", "example.tld.foo",
+            "CRDATE", "2000-06-01T00:02:00.0Z",
+            "EXDATE", "2002-06-01T00:02:00.0Z"),
+        DateTime.parse("2000-06-01T00:02:00Z"));
+
+    // Create domain example.tld
+    assertCommandAndResponse(
+        "domain_create_wildcard.xml",
+        ImmutableMap.of("HOSTNAME", "example.tld"),
+        "domain_create_response.xml",
+        ImmutableMap.of(
+            "NAME", "example.tld",
+            "CRDATE", "2000-06-01T00:02:00.0Z",
+            "EXDATE", "2002-06-01T00:02:00.0Z"),
+        DateTime.parse("2000-06-01T00:02:00Z"));
+
     assertCommandAndResponse("logout.xml", "logout_response.xml");
   }
 }

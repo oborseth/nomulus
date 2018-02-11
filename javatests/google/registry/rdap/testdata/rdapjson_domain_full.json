@@ -1,6 +1,6 @@
 {
   "objectClassName" : "domain",
-  "handle" : "10-Q9JYB4C",
+  "handle" : "17-Q9JYB4C",
   "ldhName" : "cat.xn--q9jyb4c",
   "unicodeName" : "cat.みんな",
   "status" :
@@ -13,9 +13,9 @@
   "links" :
   [
     {
-      "value" : "http://myserver.google.com/domain/cat.xn--q9jyb4c",
+      "value" : "http://myserver.example.com/domain/cat.xn--q9jyb4c",
       "rel" : "self",
-      "href" : "http://myserver.google.com/domain/cat.xn--q9jyb4c",
+      "href" : "http://myserver.example.com/domain/cat.xn--q9jyb4c",
       "type" : "application/rdap+json"
     }
   ],
@@ -42,16 +42,16 @@
   [
     {
       "objectClassName" : "nameserver",
-      "handle" : "8-ROID",
+      "handle" : "A-ROID",
       "ldhName" : "ns1.cat.xn--q9jyb4c",
       "unicodeName" : "ns1.cat.みんな",
-      "status" : ["active"],
+      "status" : ["active", "associated"],
       "links" :
       [
         {
-          "value" : "http://myserver.google.com/nameserver/ns1.cat.xn--q9jyb4c",
+          "value" : "http://myserver.example.com/nameserver/ns1.cat.xn--q9jyb4c",
           "rel" : "self",
-          "href" : "http://myserver.google.com/nameserver/ns1.cat.xn--q9jyb4c",
+          "href" : "http://myserver.example.com/nameserver/ns1.cat.xn--q9jyb4c",
           "type" : "application/rdap+json"
         }
       ],
@@ -73,16 +73,16 @@
     },
     {
       "objectClassName" : "nameserver",
-      "handle" : "A-ROID",
+      "handle" : "C-ROID",
       "ldhName" : "ns2.cat.xn--q9jyb4c",
       "unicodeName" : "ns2.cat.みんな",
-      "status" : ["active"],
+      "status" : ["active", "associated"],
       "links" :
       [
         {
-          "value" : "http://myserver.google.com/nameserver/ns2.cat.xn--q9jyb4c",
+          "value" : "http://myserver.example.com/nameserver/ns2.cat.xn--q9jyb4c",
           "rel" : "self",
-          "href" : "http://myserver.google.com/nameserver/ns2.cat.xn--q9jyb4c",
+          "href" : "http://myserver.example.com/nameserver/ns2.cat.xn--q9jyb4c",
           "type" : "application/rdap+json"
         }
       ],
@@ -108,14 +108,14 @@
     {
       "objectClassName" : "entity",
       "handle" : "4-ROID",
-      "status" : ["active"],
+      "status" : ["active", "associated"],
       "roles" : ["administrative"],
       "links" :
       [
         {
-          "value" : "http://myserver.google.com/entity/4-ROID",
+          "value" : "http://myserver.example.com/entity/4-ROID",
           "rel" : "self",
-          "href" : "http://myserver.google.com/entity/4-ROID",
+          "href" : "http://myserver.example.com/entity/4-ROID",
           "type" : "application/rdap+json"
         }
       ],
@@ -157,14 +157,14 @@
     {
       "objectClassName" : "entity",
       "handle" : "6-ROID",
-      "status" : ["active"],
+      "status" : ["active", "associated"],
       "roles" : ["technical"],
       "links" :
       [
         {
-          "value" : "http://myserver.google.com/entity/6-ROID",
+          "value" : "http://myserver.example.com/entity/6-ROID",
           "rel" : "self",
-          "href" : "http://myserver.google.com/entity/6-ROID",
+          "href" : "http://myserver.example.com/entity/6-ROID",
           "type" : "application/rdap+json"
         }
       ],
@@ -206,14 +206,14 @@
     {
       "objectClassName" : "entity",
       "handle" : "2-ROID",
-      "status" : ["active"],
+      "status" : ["active", "associated"],
       "roles" : ["registrant"],
       "links" :
       [
         {
-          "value" : "http://myserver.google.com/entity/2-ROID",
+          "value" : "http://myserver.example.com/entity/2-ROID",
           "rel" : "self",
-          "href" : "http://myserver.google.com/entity/2-ROID",
+          "href" : "http://myserver.example.com/entity/2-ROID",
           "type" : "application/rdap+json"
         }
       ],

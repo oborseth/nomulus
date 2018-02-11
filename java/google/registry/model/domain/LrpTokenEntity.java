@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,11 +24,13 @@ import com.googlecode.objectify.annotation.Id;
 import com.googlecode.objectify.annotation.Index;
 import google.registry.model.BackupGroupRoot;
 import google.registry.model.Buildable;
+import google.registry.model.annotations.ReportedOn;
 import google.registry.model.reporting.HistoryEntry;
 import java.util.Map;
 import java.util.Set;
 
 /** An entity representing a token distributed to eligible LRP registrants. */
+@ReportedOn
 @Entity
 public class LrpTokenEntity extends BackupGroupRoot implements Buildable {
 

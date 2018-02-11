@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,9 +14,7 @@
 
 package google.registry.model;
 
-import com.google.common.base.Function;
 import com.google.common.collect.ImmutableSet;
-import com.googlecode.objectify.Key;
 import google.registry.model.billing.BillingEvent;
 import google.registry.model.billing.RegistrarBillingEntry;
 import google.registry.model.billing.RegistrarCredit;
@@ -25,11 +23,11 @@ import google.registry.model.common.Cursor;
 import google.registry.model.common.EntityGroupRoot;
 import google.registry.model.common.GaeUserIdConverter;
 import google.registry.model.contact.ContactResource;
+import google.registry.model.domain.AllocationToken;
 import google.registry.model.domain.DomainApplication;
 import google.registry.model.domain.DomainBase;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.LrpTokenEntity;
-import google.registry.model.export.LogsExportCursor;
 import google.registry.model.host.HostResource;
 import google.registry.model.index.DomainApplicationIndex;
 import google.registry.model.index.EppResourceIndex;
@@ -48,6 +46,8 @@ import google.registry.model.registry.Registry;
 import google.registry.model.registry.label.PremiumList;
 import google.registry.model.registry.label.ReservedList;
 import google.registry.model.reporting.HistoryEntry;
+import google.registry.model.server.KmsSecret;
+import google.registry.model.server.KmsSecretRevision;
 import google.registry.model.server.Lock;
 import google.registry.model.server.ServerSecret;
 import google.registry.model.smd.SignedMarkRevocationList;
@@ -62,7 +62,8 @@ public final class EntityClasses {
   /** Set of entity classes. */
   @SuppressWarnings("unchecked") // varargs
   public static final ImmutableSet<Class<? extends ImmutableObject>> ALL_CLASSES =
-      ImmutableSet.<Class<? extends ImmutableObject>>of(
+      ImmutableSet.of(
+          AllocationToken.class,
           BillingEvent.Cancellation.class,
           BillingEvent.Modification.class,
           BillingEvent.OneTime.class,
@@ -90,8 +91,9 @@ public final class EntityClasses {
           GaeUserIdConverter.class,
           HistoryEntry.class,
           HostResource.class,
+          KmsSecret.class,
+          KmsSecretRevision.class,
           Lock.class,
-          LogsExportCursor.class,
           LrpTokenEntity.class,
           PollMessage.class,
           PollMessage.Autorenew.class,
@@ -110,21 +112,6 @@ public final class EntityClasses {
           ServerSecret.class,
           SignedMarkRevocationList.class,
           TmchCrl.class);
-
-  /**
-   * Function that converts an Objectify-registered class to its datastore kind name.
-   *
-   * <p>Note that this mapping is not one-to-one, since polymorphic subclasses of an entity all
-   * have the same datastore kind.  (In theory, two distinct top-level entities could also map to
-   * the same kind since it's just {@code class.getSimpleName()}, but we test against that.)
-   */
-  public static final Function<Class<? extends ImmutableObject>, String> CLASS_TO_KIND_FUNCTION =
-      new Function<Class<? extends ImmutableObject>, String>() {
-        @Override
-        public String apply(Class<? extends ImmutableObject> clazz) {
-          return Key.getKind(clazz);
-        }
-      };
 
   private EntityClasses() {}
 }

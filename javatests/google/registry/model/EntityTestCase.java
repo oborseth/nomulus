@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,8 +20,6 @@ import static com.google.common.truth.Truth.assert_;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static org.joda.time.DateTimeZone.UTC;
 
-import com.google.common.base.Function;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.googlecode.objectify.annotation.Id;
@@ -125,7 +123,7 @@ public class EntityTestCase {
             .that(indexed)
             .isEqualTo(results != 0);
       } catch (IllegalArgumentException e) {
-        // If the field's type was not indexable (because it's not a supported datastore type) then
+        // If the field's type was not indexable (because it's not a supported Datastore type) then
         // this error will be thrown. If we expected no indexing, that's fine. Otherwise, fail.
         if (indexed || !e.getMessage().endsWith(" is not a supported property type.")) {
           assert_().fail(String.format("%s was %sindexed", fieldPath, indexed ? "not " : ""));
@@ -157,14 +155,11 @@ public class EntityTestCase {
           }
           // Descend into persisted ImmutableObject classes, but not anything else.
           if (ImmutableObject.class.isAssignableFrom(fieldClass)) {
-            fields.addAll(FluentIterable
-                .from(getAllPotentiallyIndexedFieldPaths(fieldClass))
-                .transform(new Function<String, String>(){
-                    @Override
-                    public String apply(String subfield) {
-                      return field.getName() + "." + subfield;
-                    }})
-                .toSet());
+            getAllPotentiallyIndexedFieldPaths(fieldClass)
+                .stream()
+                .map(subfield -> field.getName() + "." + subfield)
+                .distinct()
+                .forEachOrdered(fields::add);
           } else {
             fields.add(field.getName());
           }

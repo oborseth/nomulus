@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,10 +20,10 @@ import static google.registry.mapreduce.MapreduceRunner.PARAM_REDUCE_SHARDS;
 import static google.registry.request.RequestParameters.extractBooleanParameter;
 import static google.registry.request.RequestParameters.extractOptionalIntParameter;
 
-import com.google.common.base.Optional;
 import dagger.Module;
 import dagger.Provides;
 import google.registry.request.Parameter;
+import java.util.Optional;
 import javax.servlet.http.HttpServletRequest;
 
 /** Dagger module for the mapreduce package. */

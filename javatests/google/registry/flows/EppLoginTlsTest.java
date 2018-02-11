@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,13 +14,14 @@
 
 package google.registry.flows;
 
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static org.joda.time.DateTimeZone.UTC;
 
-import com.google.common.base.Optional;
-import google.registry.model.registrar.Registrar;
+import com.google.common.collect.ImmutableMap;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.CertificateSamples;
+import java.util.Optional;
 import org.joda.time.DateTime;
 import org.junit.Before;
 import org.junit.Rule;
@@ -45,13 +46,17 @@ public class EppLoginTlsTest extends EppTestCase {
 
   @Before
   public void initTest() throws Exception {
-    persistResource(Registrar.loadByClientId("NewRegistrar").asBuilder()
-        .setClientCertificateHash(CertificateSamples.SAMPLE_CERT_HASH)
-        .build());
+    persistResource(
+        loadRegistrar("NewRegistrar")
+            .asBuilder()
+            .setClientCertificateHash(CertificateSamples.SAMPLE_CERT_HASH)
+            .build());
     // Set a cert for the second registrar, or else any cert will be allowed for login.
-    persistResource(Registrar.loadByClientId("TheRegistrar").asBuilder()
-        .setClientCertificateHash(CertificateSamples.SAMPLE_CERT2_HASH)
-        .build());
+    persistResource(
+        loadRegistrar("TheRegistrar")
+            .asBuilder()
+            .setClientCertificateHash(CertificateSamples.SAMPLE_CERT2_HASH)
+            .build());
   }
 
   @Test
@@ -66,7 +71,10 @@ public class EppLoginTlsTest extends EppTestCase {
     setClientCertificateHash(CertificateSamples.SAMPLE_CERT_HASH);
     // For TLS login, we also check the epp xml password.
     assertCommandAndResponse(
-        "login_invalid_wrong_password.xml", "login_response_wrong_password.xml");
+        "login_invalid_wrong_password.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of("MSG", "Registrar password is incorrect", "CODE", "2200"));
   }
 
   @Test
@@ -76,36 +84,57 @@ public class EppLoginTlsTest extends EppTestCase {
     assertCommandAndResponse("logout.xml", "logout_response.xml");
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
     assertCommandAndResponse("logout.xml", "logout_response.xml");
-    assertCommandAndResponse("login2_valid.xml", "login_response_bad_certificate.xml");
+    assertCommandAndResponse(
+        "login2_valid.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of(
+            "MSG", "Registrar certificate does not match stored certificate", "CODE", "2200"));
   }
 
   @Test
   public void testNonAuthedLogin_fails() throws Exception {
     setClientCertificateHash(CertificateSamples.SAMPLE_CERT_HASH);
-    assertCommandAndResponse("login2_valid.xml", "login_response_bad_certificate.xml");
+    assertCommandAndResponse(
+        "login2_valid.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of(
+            "MSG", "Registrar certificate does not match stored certificate", "CODE", "2200"));
   }
 
 
   @Test
   public void testBadCertificate_failsBadCertificate2200() throws Exception {
     setClientCertificateHash("laffo");
-    assertCommandAndResponse("login_valid.xml", "login_response_bad_certificate.xml");
+    assertCommandAndResponse(
+        "login_valid.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of(
+            "MSG", "Registrar certificate does not match stored certificate", "CODE", "2200"));
   }
 
   @Test
   public void testGfeDidntProvideClientCertificate_failsMissingCertificate2200() throws Exception {
     setClientCertificateHash("");
-    assertCommandAndResponse("login_valid.xml", "login_response_missing_certificate.xml");
+    assertCommandAndResponse(
+        "login_valid.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of("MSG", "Registrar certificate not present", "CODE", "2200"));
   }
 
   @Test
   public void testGoodPrimaryCertificate() throws Exception {
     setClientCertificateHash(CertificateSamples.SAMPLE_CERT_HASH);
     DateTime now = DateTime.now(UTC);
-    persistResource(Registrar.loadByClientId("NewRegistrar").asBuilder()
-        .setClientCertificate(CertificateSamples.SAMPLE_CERT, now)
-        .setFailoverClientCertificate(CertificateSamples.SAMPLE_CERT2, now)
-        .build());
+    persistResource(
+        loadRegistrar("NewRegistrar")
+            .asBuilder()
+            .setClientCertificate(CertificateSamples.SAMPLE_CERT, now)
+            .setFailoverClientCertificate(CertificateSamples.SAMPLE_CERT2, now)
+            .build());
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
   }
 
@@ -113,10 +142,12 @@ public class EppLoginTlsTest extends EppTestCase {
   public void testGoodFailoverCertificate() throws Exception {
     setClientCertificateHash(CertificateSamples.SAMPLE_CERT2_HASH);
     DateTime now = DateTime.now(UTC);
-    persistResource(Registrar.loadByClientId("NewRegistrar").asBuilder()
-        .setClientCertificate(CertificateSamples.SAMPLE_CERT, now)
-        .setFailoverClientCertificate(CertificateSamples.SAMPLE_CERT2, now)
-        .build());
+    persistResource(
+        loadRegistrar("NewRegistrar")
+            .asBuilder()
+            .setClientCertificate(CertificateSamples.SAMPLE_CERT, now)
+            .setFailoverClientCertificate(CertificateSamples.SAMPLE_CERT2, now)
+            .build());
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
   }
 
@@ -124,10 +155,12 @@ public class EppLoginTlsTest extends EppTestCase {
   public void testMissingPrimaryCertificateButHasFailover_usesFailover() throws Exception {
     setClientCertificateHash(CertificateSamples.SAMPLE_CERT2_HASH);
     DateTime now = DateTime.now(UTC);
-    persistResource(Registrar.loadByClientId("NewRegistrar").asBuilder()
-        .setClientCertificate(null, now)
-        .setFailoverClientCertificate(CertificateSamples.SAMPLE_CERT2, now)
-        .build());
+    persistResource(
+        loadRegistrar("NewRegistrar")
+            .asBuilder()
+            .setClientCertificate(null, now)
+            .setFailoverClientCertificate(CertificateSamples.SAMPLE_CERT2, now)
+            .build());
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
   }
 
@@ -135,10 +168,12 @@ public class EppLoginTlsTest extends EppTestCase {
   public void testRegistrarHasNoCertificatesOnFile_disablesCertChecking() throws Exception {
     setClientCertificateHash("laffo");
     DateTime now = DateTime.now(UTC);
-    persistResource(Registrar.loadByClientId("NewRegistrar").asBuilder()
-        .setClientCertificate(null, now)
-        .setFailoverClientCertificate(null, now)
-        .build());
+    persistResource(
+        loadRegistrar("NewRegistrar")
+            .asBuilder()
+            .setClientCertificate(null, now)
+            .setFailoverClientCertificate(null, now)
+            .build());
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
   }
 }

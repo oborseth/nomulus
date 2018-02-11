@@ -5,21 +5,21 @@ package(
 
 licenses(["notice"])  # Apache 2.0
 
-
 java_library(
     name = "params",
     srcs = glob(["*.java"]),
     deps = [
-        "//java/com/google/common/base",
-        "//third_party/java/hamcrest",
-        "//third_party/java/jcommander",
-        "//third_party/java/joda_money",
-        "//third_party/java/joda_time",
-        "//third_party/java/junit",
-        "//third_party/java/truth",
         "//java/google/registry/model",
         "//java/google/registry/tools/params",
         "//javatests/google/registry/testing",
+        "@com_beust_jcommander",
+        "@com_google_guava",
+        "@com_google_truth",
+        "@com_google_truth_extensions_truth_java8_extension",
+        "@joda_time",
+        "@junit",
+        "@org_hamcrest_library",
+        "@org_joda_money",
     ],
 )
 

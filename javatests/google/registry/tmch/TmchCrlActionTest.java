@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,10 +15,12 @@
 package google.registry.tmch;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.ResourceUtils.readResourceBytes;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import google.registry.config.RegistryConfig.ConfigModule.TmchCaMode;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.security.SignatureException;
@@ -30,9 +32,10 @@ import org.junit.Test;
 /** Unit tests for {@link TmchCrlAction}. */
 public class TmchCrlActionTest extends TmchActionTestCase {
 
-  private TmchCrlAction newTmchCrlAction() throws MalformedURLException {
+  private TmchCrlAction newTmchCrlAction(TmchCaMode tmchCaMode) throws MalformedURLException {
     TmchCrlAction action = new TmchCrlAction();
     action.marksdb = marksdb;
+    action.tmchCertificateAuthority = new TmchCertificateAuthority(tmchCaMode);
     action.tmchCrlUrl = new URL("http://sloth.lol/tmch.crl");
     return action;
   }
@@ -40,10 +43,9 @@ public class TmchCrlActionTest extends TmchActionTestCase {
   @Test
   public void testSuccess() throws Exception {
     clock.setTo(DateTime.parse("2013-07-24TZ"));
-    configRule.useTmchProdCert();
     when(httpResponse.getContent()).thenReturn(
         readResourceBytes(TmchCertificateAuthority.class, "icann-tmch.crl").read());
-    newTmchCrlAction().run();
+    newTmchCrlAction(TmchCaMode.PRODUCTION).run();
     verify(httpResponse).getContent();
     verify(fetchService).fetch(httpRequest.capture());
     assertThat(httpRequest.getValue().getURL().toString()).isEqualTo("http://sloth.lol/tmch.crl");
@@ -52,28 +54,37 @@ public class TmchCrlActionTest extends TmchActionTestCase {
   @Test
   public void testFailure_crlTooOld() throws Exception {
     clock.setTo(DateTime.parse("2020-01-01TZ"));
-    configRule.useTmchProdCert();
     when(httpResponse.getContent()).thenReturn(
-        readResourceBytes(TmchCertificateAuthority.class, "icann-tmch-test.crl").read());
-    thrown.expectRootCause(CRLException.class, "New CRL is more out of date than our current CRL.");
-    newTmchCrlAction().run();
+        readResourceBytes(TmchCertificateAuthority.class, "icann-tmch-pilot.crl").read());
+    // We use the pilot CRL here only because we know that it was generated more recently than the
+    // production CRL, and thus attempting to replace it with the production CRL will fail. It
+    // doesn't matter that the wrong CRT would be used to verify it because that check happens after
+    // the age check.
+    TmchCrlAction action = newTmchCrlAction(TmchCaMode.PRODUCTION);
+    Exception e = expectThrows(Exception.class, action::run);
+    assertThat(e).hasCauseThat().isInstanceOf(CRLException.class);
+    assertThat(e)
+        .hasCauseThat()
+        .hasMessageThat()
+        .contains("New CRL is more out of date than our current CRL.");
   }
 
   @Test
   public void testFailure_crlNotSignedByRoot() throws Exception {
     clock.setTo(DateTime.parse("2013-07-24TZ"));
-    when(httpResponse.getContent()).thenReturn(
-        readResourceBytes(TmchCertificateAuthority.class, "icann-tmch.crl").read());
-    thrown.expectRootCause(SignatureException.class, "Signature does not match.");
-    newTmchCrlAction().run();
+    when(httpResponse.getContent())
+        .thenReturn(readResourceBytes(TmchCertificateAuthority.class, "icann-tmch.crl").read());
+    Exception e = expectThrows(Exception.class, newTmchCrlAction(TmchCaMode.PILOT)::run);
+    assertThat(e).hasCauseThat().isInstanceOf(SignatureException.class);
+    assertThat(e).hasCauseThat().hasMessageThat().isEqualTo("Signature does not match.");
   }
 
   @Test
   public void testFailure_crlNotYetValid() throws Exception {
     clock.setTo(DateTime.parse("1984-01-01TZ"));
     when(httpResponse.getContent()).thenReturn(
-        readResourceBytes(TmchCertificateAuthority.class, "icann-tmch-test.crl").read());
-    thrown.expectRootCause(CertificateNotYetValidException.class);
-    newTmchCrlAction().run();
+        readResourceBytes(TmchCertificateAuthority.class, "icann-tmch-pilot.crl").read());
+    Exception e = expectThrows(Exception.class, newTmchCrlAction(TmchCaMode.PILOT)::run);
+    assertThat(e).hasCauseThat().isInstanceOf(CertificateNotYetValidException.class);
   }
 }

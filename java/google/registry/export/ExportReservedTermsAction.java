@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,10 +14,8 @@
 
 package google.registry.export;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.net.MediaType.PLAIN_TEXT_UTF_8;
-import static google.registry.export.ExportUtils.exportReservedTerms;
 import static google.registry.request.Action.Method.POST;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static javax.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
@@ -29,12 +27,17 @@ import google.registry.request.Action;
 import google.registry.request.Parameter;
 import google.registry.request.RequestParameters;
 import google.registry.request.Response;
+import google.registry.request.auth.Auth;
 import google.registry.storage.drive.DriveConnection;
 import google.registry.util.FormattingLogger;
 import javax.inject.Inject;
 
 /** Action that exports the publicly viewable reserved terms list for a TLD to Google Drive. */
-@Action(path = "/_dr/task/exportReservedTerms", method = POST)
+@Action(
+  path = "/_dr/task/exportReservedTerms",
+  method = POST,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public class ExportReservedTermsAction implements Runnable {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
@@ -42,6 +45,7 @@ public class ExportReservedTermsAction implements Runnable {
   static final String RESERVED_TERMS_FILENAME = "reserved_terms.txt";
 
   @Inject DriveConnection driveConnection;
+  @Inject ExportUtils exportUtils;
   @Inject @Parameter(RequestParameters.PARAM_TLD) String tld;
   @Inject Response response;
   @Inject ExportReservedTermsAction() {}
@@ -62,13 +66,16 @@ public class ExportReservedTermsAction implements Runnable {
       if (registry.getReservedLists().isEmpty() && isNullOrEmpty(registry.getDriveFolderId())) {
         resultMsg = "No reserved lists configured";
         logger.infofmt("No reserved terms to export for TLD %s", tld);
+      } else if (registry.getDriveFolderId() == null) {
+        resultMsg = "Skipping export because no Drive folder is associated with this TLD";
+        logger.infofmt(
+            "Skipping reserved terms export for TLD %s because Drive folder isn't specified", tld);
       } else {
-        checkNotNull(registry.getDriveFolderId(), "No drive folder associated with this TLD");
         resultMsg = driveConnection.createOrUpdateFile(
             RESERVED_TERMS_FILENAME,
             EXPORT_MIME_TYPE,
             registry.getDriveFolderId(),
-            exportReservedTerms(registry).getBytes(UTF_8));
+            exportUtils.exportReservedTerms(registry).getBytes(UTF_8));
         logger.infofmt("Exporting reserved terms succeeded for TLD %s, response was: %s",
             tld, resultMsg);
       }

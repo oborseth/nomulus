@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,8 +18,10 @@ import static google.registry.request.Action.Method.GET;
 import static google.registry.request.Action.Method.HEAD;
 
 import com.google.common.collect.ImmutableMap;
+import google.registry.rdap.RdapMetrics.EndpointType;
 import google.registry.request.Action;
 import google.registry.request.HttpException.NotImplementedException;
+import google.registry.request.auth.Auth;
 import javax.inject.Inject;
 
 /**
@@ -27,12 +29,16 @@ import javax.inject.Inject;
  *
  * <p>This feature is not implemented because it's only necessary for <i>address</i> registries like
  * ARIN, not domain registries.
-
  */
-@Action(path = RdapIpAction.PATH, method = {GET, HEAD}, isPrefix = true)
+@Action(
+  path = RdapIpAction.PATH,
+  method = {GET, HEAD},
+  isPrefix = true,
+  auth = Auth.AUTH_PUBLIC_ANONYMOUS
+)
 public class RdapIpAction extends RdapActionBase {
 
-  public static final String PATH = "/rdap/ip";
+  public static final String PATH = "/rdap/ip/";
 
   @Inject RdapIpAction() {}
 
@@ -42,13 +48,18 @@ public class RdapIpAction extends RdapActionBase {
   }
 
   @Override
+  public EndpointType getEndpointType() {
+    return EndpointType.IP;
+  }
+
+  @Override
   public String getActionPath() {
     return PATH;
   }
 
   @Override
   public ImmutableMap<String, Object> getJsonObjectForResource(
-      String pathSearchString, boolean isHeadRequest, String linkBase) {
+      String pathSearchString, boolean isHeadRequest) {
     throw new NotImplementedException("Domain Name Registry information only");
   }
 }

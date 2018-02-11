@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import static google.registry.model.domain.DesignatedContact.Type.ADMIN;
 import static google.registry.model.domain.DesignatedContact.Type.BILLING;
 import static google.registry.model.domain.DesignatedContact.Type.TECH;
 import static google.registry.testing.DatastoreHelper.createTlds;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.newContactResource;
 import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.persistActiveHost;
@@ -135,13 +136,14 @@ public enum Fixture {
               .build());
 
       persistResource(
-          Registrar.loadByClientId("TheRegistrar").asBuilder()
+          loadRegistrar("TheRegistrar")
+              .asBuilder()
               .setAllowedTlds(ImmutableSet.of("example", "xn--q9jyb4c"))
               .setBillingMethod(Registrar.BillingMethod.BRAINTREE)
               .build());
     }
   };
 
-  /** Loads this fixture into the datastore. */
+  /** Loads this fixture into Datastore. */
   public abstract void load();
 }

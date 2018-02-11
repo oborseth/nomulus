@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,10 +15,9 @@
 package google.registry.ui.server.registrar;
 
 import static com.google.common.truth.Truth.assertThat;
-import static google.registry.security.JsonHttpTestUtils.createJsonPayload;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.DatastoreHelper.persistSimpleResource;
-import static org.mockito.Mockito.when;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -31,36 +30,34 @@ import java.util.List;
 import java.util.Map;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /**
- * Unit tests for contact_settings.js use of {@link RegistrarServlet}.
+ * Unit tests for contact_settings.js use of {@link RegistrarSettingsAction}.
  *
  * <p>The default read and session validation tests are handled by the
  * superclass.
  */
-@RunWith(MockitoJUnitRunner.class)
-public class ContactSettingsTest extends RegistrarServletTestCase {
+@RunWith(JUnit4.class)
+public class ContactSettingsTest extends RegistrarSettingsActionTestCase {
 
   @Test
   public void testPost_readContacts_success() throws Exception {
-    when(req.getReader()).thenReturn(createJsonPayload(ImmutableMap.of(
+    Map<String, Object> response = action.handleJsonRequest(ImmutableMap.of(
         "op", "read",
-        "args", ImmutableMap.of())));
-    servlet.service(req, rsp);
+        "args", ImmutableMap.of()));
     @SuppressWarnings("unchecked")
-    List<Map<String, ?>> results = (List<Map<String, ?>>) json.get().get("results");
+    List<Map<String, ?>> results = (List<Map<String, ?>>) response.get("results");
     assertThat(results.get(0).get("contacts"))
-        .isEqualTo(Registrar.loadByClientId(CLIENT_ID).toJsonMap().get("contacts"));
+        .isEqualTo(loadRegistrar(CLIENT_ID).toJsonMap().get("contacts"));
   }
 
   @Test
   public void testPost_loadSaveRegistrar_success() throws Exception {
-    when(req.getReader()).thenReturn(createJsonPayload(ImmutableMap.of(
+    Map<String, Object> response = action.handleJsonRequest(ImmutableMap.of(
         "op", "update",
-        "args", Registrar.loadByClientId(CLIENT_ID).toJsonMap())));
-    servlet.service(req, rsp);
-    assertThat(json.get()).containsEntry("status", "SUCCESS");
+        "args", loadRegistrar(CLIENT_ID).toJsonMap()));
+    assertThat(response).containsEntry("status", "SUCCESS");
   }
 
   @Test
@@ -74,14 +71,12 @@ public class ContactSettingsTest extends RegistrarServletTestCase {
     // Have to keep ADMIN or else expect FormException for at-least-one.
     adminContact1.put("types", "ADMIN");
 
-    Registrar registrar = Registrar.loadByClientId(CLIENT_ID);
+    Registrar registrar = loadRegistrar(CLIENT_ID);
     Map<String, Object> regMap = registrar.toJsonMap();
     regMap.put("contacts", ImmutableList.of(adminContact1));
-    when(req.getReader()).thenReturn(createJsonPayload(ImmutableMap.of(
-        "op", "update",
-        "args", regMap)));
-    servlet.service(req, rsp);
-    assertThat(json.get()).containsEntry("status", "SUCCESS");
+    Map<String, Object> response =
+        action.handleJsonRequest(ImmutableMap.of("op", "update", "args", regMap));
+    assertThat(response).containsEntry("status", "SUCCESS");
 
     RegistrarContact newContact = new RegistrarContact.Builder()
         .setParent(registrar)
@@ -90,31 +85,29 @@ public class ContactSettingsTest extends RegistrarServletTestCase {
         .setPhoneNumber((String) adminContact1.get("phoneNumber"))
         .setTypes(ImmutableList.of(RegistrarContact.Type.ADMIN))
         .build();
-    assertThat(Registrar.loadByClientId(CLIENT_ID).getContacts())
-        .containsExactlyElementsIn(ImmutableSet.of(newContact));
+    assertThat(loadRegistrar(CLIENT_ID).getContacts()).containsExactly(newContact);
   }
 
   @Test
   public void testPost_updateContacts_requiredTypes_error() throws Exception {
-    Map<String, Object> reqJson = Registrar.loadByClientId(CLIENT_ID).toJsonMap();
+    Map<String, Object> reqJson = loadRegistrar(CLIENT_ID).toJsonMap();
     reqJson.put("contacts",
         ImmutableList.of(AppEngineRule.makeRegistrarContact2()
             .asBuilder()
-            .setTypes(ImmutableList.<RegistrarContact.Type>of())
+            .setTypes(ImmutableList.of())
             .build().toJsonMap()));
-    when(req.getReader()).thenReturn(createJsonPayload(ImmutableMap.of(
+    Map<String, Object> response = action.handleJsonRequest(ImmutableMap.of(
         "op", "update",
-        "args", reqJson)));
-    servlet.service(req, rsp);
-    assertThat(json.get()).containsEntry("status", "ERROR");
-    assertThat(json.get()).containsEntry("message", "Must have at least one "
+        "args", reqJson));
+    assertThat(response).containsEntry("status", "ERROR");
+    assertThat(response).containsEntry("message", "Must have at least one "
         + RegistrarContact.Type.ADMIN.getDisplayName() + " contact");
   }
 
   @Test
   public void testPost_updateContacts_requireTechPhone_error() throws Exception {
     // First make the contact a tech contact as well.
-    Registrar registrar = Registrar.loadByClientId(CLIENT_ID);
+    Registrar registrar = loadRegistrar(CLIENT_ID);
     RegistrarContact rc = AppEngineRule.makeRegistrarContact2()
         .asBuilder()
         .setTypes(ImmutableSet.of(RegistrarContact.Type.ADMIN, RegistrarContact.Type.TECH))
@@ -127,12 +120,62 @@ public class ContactSettingsTest extends RegistrarServletTestCase {
     rc = rc.asBuilder().setPhoneNumber(null).build();
     Map<String, Object> reqJson = registrar.toJsonMap();
     reqJson.put("contacts", ImmutableList.of(rc.toJsonMap()));
-    when(req.getReader()).thenReturn(createJsonPayload(ImmutableMap.of(
+    Map<String, Object> response = action.handleJsonRequest(ImmutableMap.of(
         "op", "update",
-        "args", reqJson)));
-    servlet.service(req, rsp);
-    assertThat(json.get()).containsEntry("status", "ERROR");
-    assertThat(json.get()).containsEntry("message", "At least one "
-        + RegistrarContact.Type.TECH.getDisplayName() + " contact must have a phone number");
+        "args", reqJson));
+    assertThat(response).containsEntry("status", "ERROR");
+    assertThat(response).containsEntry("message", "Please provide a phone number for at least one "
+        + RegistrarContact.Type.TECH.getDisplayName() + " contact");
+  }
+
+  @Test
+  public void testPost_updateContacts_cannotRemoveWhoisAbuseContact_error() throws Exception {
+    // First make the contact's info visible in whois as abuse contact info.
+    Registrar registrar = loadRegistrar(CLIENT_ID);
+    RegistrarContact rc =
+        AppEngineRule.makeRegistrarContact2()
+            .asBuilder()
+            .setVisibleInDomainWhoisAsAbuse(true)
+            .build();
+    // Lest we anger the timestamp inversion bug.
+    persistResource(registrar);
+    persistSimpleResource(rc);
+
+    // Now try to remove the contact.
+    rc = rc.asBuilder().setVisibleInDomainWhoisAsAbuse(false).build();
+    Map<String, Object> reqJson = registrar.toJsonMap();
+    reqJson.put("contacts", ImmutableList.of(rc.toJsonMap()));
+    Map<String, Object> response =
+        action.handleJsonRequest(ImmutableMap.of("op", "update", "args", reqJson));
+    assertThat(response).containsEntry("status", "ERROR");
+    assertThat(response)
+        .containsEntry(
+            "message", "An abuse contact visible in domain WHOIS query must be designated");
+  }
+
+  @Test
+  public void testPost_updateContacts_whoisAbuseContactMustHavePhoneNumber_error()
+      throws Exception {
+    // First make the contact's info visible in whois as abuse contact info.
+    Registrar registrar = loadRegistrar(CLIENT_ID);
+    RegistrarContact rc =
+        AppEngineRule.makeRegistrarContact2()
+            .asBuilder()
+            .setVisibleInDomainWhoisAsAbuse(true)
+            .build();
+    // Lest we anger the timestamp inversion bug.
+    persistResource(registrar);
+    persistSimpleResource(rc);
+
+    // Now try to set the phone number to null.
+    rc = rc.asBuilder().setPhoneNumber(null).build();
+    Map<String, Object> reqJson = registrar.toJsonMap();
+    reqJson.put("contacts", ImmutableList.of(rc.toJsonMap()));
+    Map<String, Object> response =
+        action.handleJsonRequest(ImmutableMap.of("op", "update", "args", reqJson));
+    assertThat(response).containsEntry("status", "ERROR");
+    assertThat(response)
+        .containsEntry(
+            "message", "The abuse contact visible in domain WHOIS query must have a phone number");
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,34 +15,30 @@
 package google.registry.request;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.request.RequestParameters.extractBooleanParameter;
 import static google.registry.request.RequestParameters.extractEnumParameter;
 import static google.registry.request.RequestParameters.extractOptionalDatetimeParameter;
+import static google.registry.request.RequestParameters.extractOptionalEnumParameter;
 import static google.registry.request.RequestParameters.extractOptionalParameter;
 import static google.registry.request.RequestParameters.extractRequiredDatetimeParameter;
 import static google.registry.request.RequestParameters.extractRequiredParameter;
+import static google.registry.testing.JUnitBackports.expectThrows;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.google.common.collect.ImmutableMap;
 import google.registry.request.HttpException.BadRequestException;
-import google.registry.testing.ExceptionRule;
 import javax.servlet.http.HttpServletRequest;
 import org.joda.time.DateTime;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link RequestParameters}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class RequestParametersTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Mock
-  private HttpServletRequest req;
+  private final HttpServletRequest req = mock(HttpServletRequest.class);
 
   @Test
   public void testExtractRequiredParameter_valuePresent_returnsValue() throws Exception {
@@ -52,15 +48,17 @@ public class RequestParametersTest {
 
   @Test
   public void testExtractRequiredParameter_notPresent_throwsBadRequest() throws Exception {
-    thrown.expect(BadRequestException.class, "spin");
-    extractRequiredParameter(req, "spin");
+    BadRequestException thrown =
+        expectThrows(BadRequestException.class, () -> extractRequiredParameter(req, "spin"));
+    assertThat(thrown).hasMessageThat().contains("spin");
   }
 
   @Test
   public void testExtractRequiredParameter_empty_throwsBadRequest() throws Exception {
     when(req.getParameter("spin")).thenReturn("");
-    thrown.expect(BadRequestException.class, "spin");
-    extractRequiredParameter(req, "spin");
+    BadRequestException thrown =
+        expectThrows(BadRequestException.class, () -> extractRequiredParameter(req, "spin"));
+    assertThat(thrown).hasMessageThat().contains("spin");
   }
 
   @Test
@@ -71,13 +69,13 @@ public class RequestParametersTest {
 
   @Test
   public void testExtractOptionalParameter_notPresent_returnsAbsent() throws Exception {
-    assertThat(extractOptionalParameter(req, "spin")).isAbsent();
+    assertThat(extractOptionalParameter(req, "spin")).isEmpty();
   }
 
   @Test
   public void testExtractOptionalParameter_empty_returnsAbsent() throws Exception {
     when(req.getParameter("spin")).thenReturn("");
-    assertThat(extractOptionalParameter(req, "spin")).isAbsent();
+    assertThat(extractOptionalParameter(req, "spin")).isEmpty();
   }
 
   @Test
@@ -143,8 +141,31 @@ public class RequestParametersTest {
   @Test
   public void testExtractEnumValue_nonExistentValue_throwsBadRequest() throws Exception {
     when(req.getParameter("spin")).thenReturn("sing");
-    thrown.expect(BadRequestException.class, "spin");
-    extractEnumParameter(req, Club.class, "spin");
+    BadRequestException thrown =
+        expectThrows(
+            BadRequestException.class, () -> extractEnumParameter(req, Club.class, "spin"));
+    assertThat(thrown).hasMessageThat().contains("spin");
+  }
+
+  @Test
+  public void testOptionalExtractEnumValue_givenValue_returnsValue() throws Exception {
+    when(req.getParameter("spin")).thenReturn("DANCE");
+    assertThat(extractOptionalEnumParameter(req, Club.class, "spin")).hasValue(Club.DANCE);
+  }
+
+  @Test
+  public void testOptionalExtractEnumValue_noValue_returnsAbsent() throws Exception {
+    when(req.getParameter("spin")).thenReturn("");
+    assertThat(extractOptionalEnumParameter(req, Club.class, "spin")).isEmpty();
+  }
+
+  @Test
+  public void testOptionalExtractEnumValue_nonExistentValue_throwsBadRequest() throws Exception {
+    when(req.getParameter("spin")).thenReturn("sing");
+    BadRequestException thrown =
+        expectThrows(
+            BadRequestException.class, () -> extractOptionalEnumParameter(req, Club.class, "spin"));
+    assertThat(thrown).hasMessageThat().contains("spin");
   }
 
   @Test
@@ -157,8 +178,10 @@ public class RequestParametersTest {
   @Test
   public void testExtractRequiredDatetimeParameter_badValue_throwsBadRequest() throws Exception {
     when(req.getParameter("timeParam")).thenReturn("Tuesday at three o'clock");
-    thrown.expect(BadRequestException.class, "timeParam");
-    extractRequiredDatetimeParameter(req, "timeParam");
+    BadRequestException thrown =
+        expectThrows(
+            BadRequestException.class, () -> extractRequiredDatetimeParameter(req, "timeParam"));
+    assertThat(thrown).hasMessageThat().contains("timeParam");
   }
 
   @Test
@@ -171,19 +194,23 @@ public class RequestParametersTest {
   @Test
   public void testExtractOptionalDatetimeParameter_badValue_throwsBadRequest() throws Exception {
     when(req.getParameter("timeParam")).thenReturn("Tuesday at three o'clock");
-    thrown.expect(BadRequestException.class, "timeParam");
-    extractOptionalDatetimeParameter(req, "timeParam");
+    BadRequestException thrown =
+        expectThrows(
+            BadRequestException.class, () -> extractOptionalDatetimeParameter(req, "timeParam"));
+    assertThat(thrown).hasMessageThat().contains("timeParam");
   }
 
   @Test
   public void testExtractOptionalDatetimeParameter_empty_returnsAbsent() throws Exception {
     when(req.getParameter("timeParam")).thenReturn("");
-    assertThat(extractOptionalDatetimeParameter(req, "timeParam")).isAbsent();
+    assertThat(extractOptionalDatetimeParameter(req, "timeParam")).isEmpty();
   }
 
   @Test
   public void testExtractRequiredDatetimeParameter_noValue_throwsBadRequest() throws Exception {
-    thrown.expect(BadRequestException.class, "timeParam");
-    extractRequiredDatetimeParameter(req, "timeParam");
+    BadRequestException thrown =
+        expectThrows(
+            BadRequestException.class, () -> extractRequiredDatetimeParameter(req, "timeParam"));
+    assertThat(thrown).hasMessageThat().contains("timeParam");
   }
 }

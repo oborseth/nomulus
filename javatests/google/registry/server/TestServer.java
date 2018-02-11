@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,22 +15,24 @@
 package google.registry.server;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Throwables.throwIfUnchecked;
+import static com.google.common.util.concurrent.Runnables.doNothing;
 import static google.registry.util.NetworkUtils.getCanonicalHostName;
+import static java.util.concurrent.Executors.newCachedThreadPool;
 
-import com.google.common.base.Throwables;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.net.HostAndPort;
-import com.google.common.util.concurrent.Callables;
 import com.google.common.util.concurrent.SimpleTimeLimiter;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.Callable;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.TimeUnit;
-import javax.annotation.Nullable;
+import javax.servlet.Filter;
 import javax.servlet.http.HttpServlet;
 import org.mortbay.jetty.Connector;
 import org.mortbay.jetty.Server;
@@ -60,7 +62,7 @@ import org.mortbay.jetty.servlet.ServletHolder;
  * <p>The reason why this is necessary is because the App Engine local testing services (created by
  * {@code LocalServiceTestHelper}) only apply to a single thread (probably to allow multi-threaded
  * tests). So when Jetty creates random threads to handle requests, they won't have access to the
- * datastore and other stuff.
+ * Datastore and other stuff.
  */
 public final class TestServer {
 
@@ -80,10 +82,14 @@ public final class TestServer {
    * @param runfiles map of server paths to local directories or files, to be served statically
    * @param routes list of servlet endpoints
    */
-  public TestServer(HostAndPort address, Map<String, Path> runfiles, Iterable<Route> routes) {
+  public TestServer(
+      HostAndPort address,
+      ImmutableMap<String, Path> runfiles,
+      ImmutableList<Route> routes,
+      ImmutableList<Class<? extends Filter>> filters) {
     urlAddress = createUrlAddress(address);
     server.addConnector(createConnector(address));
-    server.addHandler(createHandler(runfiles, routes));
+    server.addHandler(createHandler(runfiles, routes, filters));
   }
 
   /** Starts the HTTP server in a new thread and returns once it's online. */
@@ -91,7 +97,8 @@ public final class TestServer {
     try {
       server.start();
     } catch (Exception e) {
-      throw Throwables.propagate(e);
+      throwIfUnchecked(e);
+      throw new RuntimeException(e);
     }
     UrlChecker.waitUntilAvailable(getUrl("/healthz"), STARTUP_TIMEOUT_MS);
   }
@@ -114,22 +121,23 @@ public final class TestServer {
    * main event loop, for post-request processing.
    */
   public void ping() {
-    requestQueue.add(new FutureTask<>(Callables.<Void>returning(null)));
+    requestQueue.add(new FutureTask<>(doNothing(), null));
   }
 
   /** Stops the HTTP server. */
   public void stop() {
     try {
-      new SimpleTimeLimiter().callWithTimeout(new Callable<Void>() {
-        @Nullable
-        @Override
-        public Void call() throws Exception {
-          server.stop();
-          return null;
-        }
-      }, SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS, true);
+      Void unusedReturnValue = SimpleTimeLimiter.create(newCachedThreadPool())
+          .callWithTimeout(
+              () -> {
+                server.stop();
+                return null;
+              },
+              SHUTDOWN_TIMEOUT_MS,
+              TimeUnit.MILLISECONDS);
     } catch (Exception e) {
-      throw Throwables.propagate(e);
+      throwIfUnchecked(e);
+      throw new RuntimeException(e);
     }
   }
 
@@ -143,7 +151,10 @@ public final class TestServer {
     }
   }
 
-  private Context createHandler(Map<String, Path> runfiles, Iterable<Route> routes) {
+  private Context createHandler(
+      Map<String, Path> runfiles,
+      ImmutableList<Route> routes,
+      ImmutableList<Class<? extends Filter>> filters) {
     Context context = new Context(server, CONTEXT_PATH, Context.SESSIONS);
     context.addServlet(new ServletHolder(HealthzServlet.class), "/healthz");
     for (Map.Entry<String, Path> runfile : runfiles.entrySet()) {
@@ -152,7 +163,8 @@ public final class TestServer {
           runfile.getKey());
     }
     for (Route route : routes) {
-      context.addServlet(new ServletHolder(wrapServlet(route.servletClass())), route.path());
+      context.addServlet(
+          new ServletHolder(wrapServlet(route.servletClass(), filters)), route.path());
     }
     ServletHolder holder = new ServletHolder(DefaultServlet.class);
     holder.setInitParameter("aliases", "1");
@@ -160,26 +172,27 @@ public final class TestServer {
     return context;
   }
 
-  private HttpServlet wrapServlet(Class<? extends HttpServlet> servletClass) {
-    return new ServletWrapperDelegatorServlet(servletClass, requestQueue);
+  private HttpServlet wrapServlet(
+      Class<? extends HttpServlet> servletClass, ImmutableList<Class<? extends Filter>> filters) {
+    return new ServletWrapperDelegatorServlet(servletClass, filters, requestQueue);
   }
 
   private static Connector createConnector(HostAndPort address) {
     SocketConnector connector = new SocketConnector();
-    connector.setHost(address.getHostText());
+    connector.setHost(address.getHost());
     connector.setPort(address.getPortOrDefault(DEFAULT_PORT));
     return connector;
   }
 
   /** Converts a bind address into an address that other machines can use to connect here. */
   private static HostAndPort createUrlAddress(HostAndPort address) {
-    if (address.getHostText().equals("::") || address.getHostText().equals("0.0.0.0")) {
+    if (address.getHost().equals("::") || address.getHost().equals("0.0.0.0")) {
       return address.getPortOrDefault(DEFAULT_PORT) == DEFAULT_PORT
           ? HostAndPort.fromHost(getCanonicalHostName())
           : HostAndPort.fromParts(getCanonicalHostName(), address.getPort());
     } else {
       return address.getPortOrDefault(DEFAULT_PORT) == DEFAULT_PORT
-          ? HostAndPort.fromHost(address.getHostText())
+          ? HostAndPort.fromHost(address.getHost())
           : address;
     }
   }

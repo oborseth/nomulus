@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,17 +16,17 @@ package google.registry.model.registry.label;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static google.registry.model.common.EntityGroupRoot.getCrossTldKey;
 import static google.registry.model.registry.Registries.getTlds;
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Optional;
 import com.google.common.cache.CacheLoader.InvalidCacheLoadException;
 import com.google.common.cache.LoadingCache;
+import com.google.common.collect.HashMultiset;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Ordering;
+import com.google.common.collect.Multiset;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.annotation.Id;
@@ -39,6 +39,7 @@ import google.registry.model.registry.label.ReservedList.ReservedListEntry;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import javax.annotation.Nullable;
 import org.joda.time.DateTime;
@@ -82,19 +83,28 @@ public abstract class BaseDomainLabelList<T extends Comparable<?>, R extends Dom
    *
    * @param lines the CSV file, line by line
    */
-  @VisibleForTesting
-  protected ImmutableMap<String, R> parse(Iterable<String> lines) {
+  public ImmutableMap<String, R> parse(Iterable<String> lines) {
     Map<String, R> labelsToEntries = new HashMap<>();
+    Multiset<String> duplicateLabels = HashMultiset.create();
     for (String line : lines) {
       R entry = createFromLine(line);
       if (entry == null) {
         continue;
       }
       String label = entry.getLabel();
-      // Adds the label to the list of all labels if it (a) doesn't already exist, or (b) already
-      // exists, but the new value has higher priority (as determined by sort order).
-      labelsToEntries.put(
-          label, Ordering.natural().nullsFirst().max(labelsToEntries.get(label), entry));
+      // Check if the label was already processed for this list (which is an error), and if so,
+      // accumulate it so that a list of all duplicates can be thrown.
+      if (labelsToEntries.containsKey(label)) {
+        duplicateLabels.add(label, duplicateLabels.contains(label) ? 1 : 2);
+      } else {
+        labelsToEntries.put(label, entry);
+      }
+    }
+    if (!duplicateLabels.isEmpty()) {
+      throw new IllegalStateException(
+          String.format(
+              "List '%s' cannot contain duplicate labels. Dupes (with counts) were: %s",
+              name, duplicateLabels));
     }
     return ImmutableMap.copyOf(labelsToEntries);
   }
@@ -122,19 +132,16 @@ public abstract class BaseDomainLabelList<T extends Comparable<?>, R extends Dom
     } else {
       line = line.trim();
     }
-    return line.isEmpty() ? ImmutableList.<String>of() : ImmutableList.<String>of(line, comment);
+    return line.isEmpty() ? ImmutableList.of() : ImmutableList.of(line, comment);
   }
 
   /** Gets the names of the tlds that reference this list. */
   public final ImmutableSet<String> getReferencingTlds() {
-    ImmutableSet.Builder<String> builder = new ImmutableSet.Builder<>();
     Key<? extends BaseDomainLabelList<?, ?>> key = Key.create(this);
-    for (String tld : getTlds()) {
-      if (refersToKey(Registry.get(tld), key)) {
-        builder.add(tld);
-      }
-    }
-    return builder.build();
+    return getTlds()
+        .stream()
+        .filter((tld) -> refersToKey(Registry.get(tld), key))
+        .collect(toImmutableSet());
   }
 
   protected abstract boolean refersToKey(
@@ -144,7 +151,7 @@ public abstract class BaseDomainLabelList<T extends Comparable<?>, R extends Dom
     try {
       return Optional.of(cache.get(listName));
     } catch (InvalidCacheLoadException e) {
-      return Optional.absent();
+      return Optional.empty();
     } catch (ExecutionException e) {
       throw new UncheckedExecutionException("Could not retrieve list named " + listName, e);
     }

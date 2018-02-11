@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import static google.registry.testing.TaskQueueHelper.assertNoTasksEnqueued;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static org.joda.time.DateTimeZone.UTC;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.google.common.collect.ImmutableMap;
@@ -36,11 +37,10 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link CommitLogCheckpointAction}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class CommitLogCheckpointActionTest {
 
   private static final String QUEUE_NAME = "export-commits";
@@ -51,8 +51,7 @@ public class CommitLogCheckpointActionTest {
       .withTaskQueue()
       .build();
 
-  @Mock
-  CommitLogCheckpointStrategy strategy;
+  CommitLogCheckpointStrategy strategy = mock(CommitLogCheckpointStrategy.class);
 
   DateTime now = DateTime.now(UTC);
   CommitLogCheckpointAction task = new CommitLogCheckpointAction();
@@ -62,8 +61,10 @@ public class CommitLogCheckpointActionTest {
     task.clock = new FakeClock(now);
     task.strategy = strategy;
     task.taskEnqueuer = new TaskEnqueuer(new Retrier(null, 1));
-    when(strategy.computeCheckpoint()).thenReturn(
-        CommitLogCheckpoint.create(now, ImmutableMap.of(1, START_OF_TIME)));
+    when(strategy.computeCheckpoint())
+        .thenReturn(
+            CommitLogCheckpoint.create(
+                now, ImmutableMap.of(1, START_OF_TIME, 2, START_OF_TIME, 3, START_OF_TIME)));
   }
 
   @Test

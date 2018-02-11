@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import static google.registry.request.Action.Method.POST;
 import com.google.common.collect.ImmutableSet;
 import google.registry.model.registry.label.PremiumList;
 import google.registry.request.Action;
+import google.registry.request.auth.Auth;
 import javax.inject.Inject;
 
 /**
@@ -29,7 +30,8 @@ import javax.inject.Inject;
  */
 @Action(
   path = ListPremiumListsAction.PATH,
-  method = {GET, POST}
+  method = {GET, POST},
+  auth = Auth.AUTH_INTERNAL_OR_ADMIN
 )
 public final class ListPremiumListsAction extends ListObjectsAction<PremiumList> {
 

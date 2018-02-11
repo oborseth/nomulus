@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,15 +24,16 @@ import google.registry.model.eppcommon.ProtocolDefinition;
 import google.registry.request.Action;
 import google.registry.request.Action.Method;
 import google.registry.request.Parameter;
+import google.registry.request.auth.Auth;
 import javax.inject.Inject;
 import javax.servlet.http.HttpServletRequest;
 
 /** Runs EPP commands directly without logging in, verifying an XSRF token from the tool. */
 @Action(
-    path = "/_dr/epptool",
-    xsrfProtection = true,
-    xsrfScope = "admin",
-    method = Method.POST)
+  path = "/_dr/epptool",
+  method = Method.POST,
+  auth = Auth.AUTH_INTERNAL_OR_ADMIN
+)
 public class EppToolAction implements Runnable {
 
   @Inject @Parameter("clientId") String clientId;

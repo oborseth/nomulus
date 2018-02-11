@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,8 +19,6 @@ import static google.registry.model.ofy.ObjectifyService.ofy;
 
 import com.google.appengine.api.users.User;
 import com.google.common.base.Splitter;
-import com.googlecode.objectify.VoidWork;
-import com.googlecode.objectify.Work;
 import com.googlecode.objectify.annotation.Entity;
 import com.googlecode.objectify.annotation.Id;
 import google.registry.model.ImmutableObject;
@@ -29,7 +27,7 @@ import google.registry.model.annotations.NotBackedUp.Reason;
 
 /**
  * A helper class to convert email addresses to GAE user ids. It does so by persisting a User
- * object with the email address to datastore, and then immediately reading it back.
+ * object with the email address to Datastore, and then immediately reading it back.
  */
 @Entity
 @NotBackedUp(reason = Reason.TRANSIENT)
@@ -54,24 +52,13 @@ public class GaeUserIdConverter extends ImmutableObject {
     try {
       // Perform these operations in a transactionless context to avoid enlisting in some outer
       // transaction (if any).
-      ofy().doTransactionless(new VoidWork() {
-        @Override
-        public void vrun() {
-          ofy().saveWithoutBackup().entity(gaeUserIdConverter).now();
-        }});
+      ofy().doTransactionless(() -> ofy().saveWithoutBackup().entity(gaeUserIdConverter).now());
 
       // The read must be done in its own transaction to avoid reading from the session cache.
-      return ofy().transactNew(new Work<String>() {
-        @Override
-        public String run() {
-          return ofy().load().entity(gaeUserIdConverter).safe().user.getUserId();
-        }});
+      return ofy()
+          .transactNew(() -> ofy().load().entity(gaeUserIdConverter).safe().user.getUserId());
     } finally {
-      ofy().doTransactionless(new VoidWork() {
-        @Override
-        public void vrun() {
-          ofy().deleteWithoutBackup().entity(gaeUserIdConverter).now();
-        }});
+      ofy().doTransactionless(() -> ofy().deleteWithoutBackup().entity(gaeUserIdConverter).now());
     }
   }
 }

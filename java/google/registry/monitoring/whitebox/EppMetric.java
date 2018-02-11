@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,20 @@
 
 package google.registry.monitoring.whitebox;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static google.registry.bigquery.BigqueryUtils.toBigqueryTimestamp;
 
 import com.google.api.services.bigquery.model.TableFieldSchema;
 import com.google.auto.value.AutoValue;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import google.registry.bigquery.BigqueryUtils.FieldType;
 import google.registry.model.eppoutput.Result.Code;
+import google.registry.model.registry.Registries;
 import google.registry.util.Clock;
+import java.util.Optional;
 import org.joda.time.DateTime;
 
 /**
@@ -42,6 +46,7 @@ public abstract class EppMetric implements BigQueryMetric {
           new TableFieldSchema().setName("endTime").setType(FieldType.TIMESTAMP.name()),
           new TableFieldSchema().setName("commandName").setType(FieldType.STRING.name()),
           new TableFieldSchema().setName("clientId").setType(FieldType.STRING.name()),
+          new TableFieldSchema().setName("tld").setType(FieldType.STRING.name()),
           new TableFieldSchema().setName("privilegeLevel").setType(FieldType.STRING.name()),
           new TableFieldSchema().setName("eppTarget").setType(FieldType.STRING.name()),
           new TableFieldSchema().setName("eppStatus").setType(FieldType.INTEGER.name()),
@@ -56,6 +61,8 @@ public abstract class EppMetric implements BigQueryMetric {
   public abstract Optional<String> getCommandName();
 
   public abstract Optional<String> getClientId();
+
+  public abstract Optional<String> getTld();
 
   public abstract Optional<String> getPrivilegeLevel();
 
@@ -87,6 +94,7 @@ public abstract class EppMetric implements BigQueryMetric {
     // Populate optional values, if present
     addOptional("commandName", getCommandName(), map);
     addOptional("clientId", getClientId(), map);
+    addOptional("tld", getTld(), map);
     addOptional("privilegeLevel", getPrivilegeLevel(), map);
     addOptional("eppTarget", getEppTarget(), map);
     if (getStatus().isPresent()) {
@@ -102,9 +110,7 @@ public abstract class EppMetric implements BigQueryMetric {
    */
   private static <T> void addOptional(
       String key, Optional<T> value, ImmutableMap.Builder<String, String> map) {
-    if (value.isPresent()) {
-      map.put(key, value.get().toString());
-    }
+    value.ifPresent(t -> map.put(key, t.toString()));
   }
 
   /** Create an {@link EppMetric.Builder}. */
@@ -141,11 +147,49 @@ public abstract class EppMetric implements BigQueryMetric {
 
     abstract Builder setEndTimestamp(DateTime endTimestamp);
 
-    public abstract Builder setCommandName(String commandName);
+    abstract Builder setCommandName(String commandName);
+
+    public Builder setCommandNameFromFlow(String flowSimpleClassName) {
+      checkArgument(
+          flowSimpleClassName.endsWith("Flow"),
+          "Must pass in the simple class name of a flow class");
+      return setCommandName(flowSimpleClassName.replaceFirst("Flow$", ""));
+    }
 
     public abstract Builder setClientId(String clientId);
 
     public abstract Builder setClientId(Optional<String> clientId);
+
+    public abstract Builder setTld(String tld);
+
+    public abstract Builder setTld(Optional<String> tld);
+
+    /**
+     * Sets the single TLD field from a list of TLDs associated with a command.
+     *
+     * <p>Due to cardinality reasons we cannot record combinations of different TLDs as might be
+     * seen in a domain check command, so if this happens we record "_various" instead. We also
+     * record "_invalid" for a TLD that does not exist in our system, as again that could blow up
+     * cardinality. Underscore prefixes are used for these sentinel values so that they cannot be
+     * confused with actual TLDs, which cannot start with underscores.
+     */
+    public Builder setTlds(ImmutableSet<String> tlds) {
+      switch (tlds.size()) {
+        case 0:
+          setTld(Optional.empty());
+          break;
+        case 1:
+          String tld = Iterables.getOnlyElement(tlds);
+          // Only record TLDs that actually exist, otherwise we can blow up cardinality by recording
+          // an arbitrarily large number of strings.
+          setTld(Optional.ofNullable(Registries.getTlds().contains(tld) ? tld : "_invalid"));
+          break;
+        default:
+          setTld("_various");
+          break;
+      }
+      return this;
+    }
 
     public abstract Builder setPrivilegeLevel(String privilegeLevel);
 

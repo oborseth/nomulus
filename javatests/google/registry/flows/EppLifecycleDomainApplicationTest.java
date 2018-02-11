@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -52,7 +52,7 @@ public class EppLifecycleDomainApplicationTest extends EppTestCase {
     DateTime startTime = DateTime.parse("2000-06-01T00:00:00Z");
     assertCommandAndResponse(
         "contact_create_sh8013.xml",
-        ImmutableMap.<String, String>of(),
+        ImmutableMap.of(),
         "contact_create_response_sh8013.xml",
         ImmutableMap.of("CRDATE", "2000-06-01T00:00:00Z"),
         startTime);
@@ -62,11 +62,17 @@ public class EppLifecycleDomainApplicationTest extends EppTestCase {
         startTime.plusMinutes(1));
     assertCommandAndResponse(
         "host_create.xml",
+        ImmutableMap.of("HOSTNAME", "ns1.example.external"),
         "host_create_response.xml",
+        ImmutableMap.of(
+            "HOSTNAME", "ns1.example.external", "CRDATE", startTime.plusMinutes(2).toString()),
         startTime.plusMinutes(2));
     assertCommandAndResponse(
-        "host_create2.xml",
-        "host_create2_response.xml",
+        "host_create.xml",
+        ImmutableMap.of("HOSTNAME", "ns2.example.external"),
+        "host_create_response.xml",
+        ImmutableMap.of(
+            "HOSTNAME", "ns2.example.external", "CRDATE", startTime.plusMinutes(3).toString()),
         startTime.plusMinutes(3));
   }
 
@@ -81,7 +87,11 @@ public class EppLifecycleDomainApplicationTest extends EppTestCase {
         DateTime.parse("2014-01-01T00:00:00Z"));
     assertCommandAndResponse(
         "domain_info_testvalidate.xml",
-        "domain_info_response_testvalidate_doesnt_exist.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of(
+            "MSG", "The domain with given ID (test-validate.example) doesn't exist.",
+            "CODE", "2303"),
         DateTime.parse("2014-01-01T00:01:00Z"));
     assertCommandAndResponse("logout.xml", "logout_response.xml");
   }
@@ -96,11 +106,17 @@ public class EppLifecycleDomainApplicationTest extends EppTestCase {
         DateTime.parse("2014-01-01T00:00:00Z"));
     assertCommandAndResponse(
         "domain_info_testvalidate.xml",
-        "domain_info_response_testvalidate_doesnt_exist.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of(
+            "MSG", "The domain with given ID (test-validate.example) doesn't exist.",
+            "CODE", "2303"),
         DateTime.parse("2014-01-01T00:01:00Z"));
     assertCommandAndResponse(
         "domain_allocate_testvalidate.xml",
-        "domain_allocate_response_testvalidate_only_superuser.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of("MSG", "Only a superuser can allocate domains", "CODE", "2201"),
         START_OF_GA.plusDays(1));
     setIsSuperuser(true);
     assertCommandAndResponse(

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,31 +16,27 @@ package google.registry.testing;
 
 import static com.google.common.truth.Truth.assertAbout;
 
-import com.google.common.base.Optional;
-import com.google.common.truth.AbstractVerb.DelegatedVerb;
-import com.google.common.truth.FailureStrategy;
+import com.google.common.truth.FailureMetadata;
+import com.google.common.truth.SimpleSubjectBuilder;
 import com.google.common.truth.Subject;
 import google.registry.model.domain.Period;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.testing.TruthChainer.And;
 import java.util.Objects;
+import java.util.Optional;
 
 /** Utility methods for asserting things about {@link HistoryEntry} instances. */
 public class HistoryEntrySubject extends Subject<HistoryEntrySubject, HistoryEntry> {
 
   private String customDisplaySubject;
 
-  /** A factory for instances of this subject. */
-  private static class SubjectFactory
-      extends ReflectiveSubjectFactory<HistoryEntry, HistoryEntrySubject>{}
-
-  public HistoryEntrySubject(FailureStrategy strategy, HistoryEntry subject) {
-    super(strategy, subject);
+  public HistoryEntrySubject(FailureMetadata failureMetadata, HistoryEntry subject) {
+    super(failureMetadata, subject);
   }
 
   @Override
   public String actualCustomStringRepresentation() {
-    return Optional.fromNullable(customDisplaySubject).or(super.actualAsString());
+    return Optional.ofNullable(customDisplaySubject).orElse(String.valueOf(actual()));
   }
 
   public HistoryEntrySubject withCustomDisplaySubject(String customDisplaySubject) {
@@ -54,6 +50,10 @@ public class HistoryEntrySubject extends Subject<HistoryEntrySubject, HistoryEnt
 
   public And<HistoryEntrySubject> hasClientId(String clientId) {
     return hasValue(clientId, actual().getClientId(), "has client ID");
+  }
+
+  public And<HistoryEntrySubject> hasOtherClientId(String otherClientId) {
+    return hasValue(otherClientId, actual().getOtherClientId(), "has other client ID");
   }
 
   public And<HistoryEntrySubject> hasPeriod() {
@@ -99,7 +99,8 @@ public class HistoryEntrySubject extends Subject<HistoryEntrySubject, HistoryEnt
     return new And<>(this);
   }
 
-  public static DelegatedVerb<HistoryEntrySubject, HistoryEntry> assertAboutHistoryEntries() {
-    return assertAbout(new SubjectFactory());
+  public static SimpleSubjectBuilder<HistoryEntrySubject, HistoryEntry>
+      assertAboutHistoryEntries() {
+    return assertAbout(HistoryEntrySubject::new);
   }
 }

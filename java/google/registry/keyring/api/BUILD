@@ -1,21 +1,19 @@
 package(
-    default_visibility = ["//java/google/registry:registry_project"],
+    default_visibility = ["//visibility:public"],
 )
 
 licenses(["notice"])  # Apache 2.0
-
 
 java_library(
     name = "api",
     srcs = glob(["*.java"]),
     resources = glob(["*.asc"]),
-    visibility = ["//visibility:public"],
     deps = [
-        "//java/com/google/common/base",
-        "//java/com/google/common/io",
-        "//third_party/java/bouncycastle",
-        "//third_party/java/bouncycastle_bcpg",
-        "//third_party/java/dagger",
-        "//third_party/java/jsr305_annotations",
+        "//java/google/registry/util",
+        "@com_google_code_findbugs_jsr305",
+        "@com_google_dagger",
+        "@com_google_guava",
+        "@org_bouncycastle_bcpg_jdk15on",
+        "@org_bouncycastle_bcpkix_jdk15on",
     ],
 )

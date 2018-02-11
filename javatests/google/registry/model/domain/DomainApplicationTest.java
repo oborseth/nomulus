@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,7 +30,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
 import google.registry.model.EntityTestCase;
-import google.registry.model.billing.BillingEvent;
 import google.registry.model.domain.launch.ApplicationStatus;
 import google.registry.model.domain.launch.LaunchNotice;
 import google.registry.model.domain.launch.LaunchPhase;
@@ -38,37 +37,27 @@ import google.registry.model.domain.secdns.DelegationSignerData;
 import google.registry.model.eppcommon.AuthInfo.PasswordAuth;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.eppcommon.Trid;
-import google.registry.model.host.HostResource;
 import google.registry.model.smd.EncodedSignedMark;
-import google.registry.model.transfer.TransferData;
-import google.registry.model.transfer.TransferData.TransferServerApproveEntity;
-import google.registry.model.transfer.TransferStatus;
-import google.registry.testing.ExceptionRule;
 import org.joda.money.Money;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 
 /** Unit tests for {@link DomainApplication}. */
 public class DomainApplicationTest extends EntityTestCase {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   DomainApplication domainApplication;
 
   @Before
   public void setUp() throws Exception {
     createTld("com");
-    // Set up a new persisted domain entity.
-    domainApplication = cloneAndSetAutoTimestamps(
+    // Set up a new persisted domain application entity.
+    domainApplication = persistResource(cloneAndSetAutoTimestamps(
         new DomainApplication.Builder()
             .setFullyQualifiedDomainName("example.com")
             .setRepoId("1-COM")
             .setCreationClientId("a registrar")
             .setLastEppUpdateTime(clock.nowUtc())
             .setLastEppUpdateClientId("another registrar")
-            .setLastTransferTime(clock.nowUtc())
             .setStatusValues(ImmutableSet.of(
                 StatusValue.CLIENT_DELETE_PROHIBITED,
                 StatusValue.SERVER_DELETE_PROHIBITED,
@@ -82,31 +71,18 @@ public class DomainApplicationTest extends EntityTestCase {
                 Key.create(persistActiveContact("contact_id2")))))
             .setNameservers(
                 ImmutableSet.of(Key.create(persistActiveHost("ns1.example.com"))))
-            .setCurrentSponsorClientId("a third registrar")
+            .setPersistedCurrentSponsorClientId("a third registrar")
             .setAuthInfo(DomainAuthInfo.create(PasswordAuth.create("password")))
             .setDsData(ImmutableSet.of(DelegationSignerData.create(1, 2, 3, new byte[] {0, 1, 2})))
             .setLaunchNotice(
                 LaunchNotice.create("tcnid", "validatorId", START_OF_TIME, START_OF_TIME))
-            .setTransferData(
-                new TransferData.Builder()
-                    .setExtendedRegistrationYears(0)
-                    .setGainingClientId("gaining")
-                    .setLosingClientId("losing")
-                    .setPendingTransferExpirationTime(clock.nowUtc())
-                    .setServerApproveEntities(
-                        ImmutableSet.<Key<? extends TransferServerApproveEntity>>of(
-                            Key.create(BillingEvent.OneTime.class, 1)))
-                    .setTransferRequestTime(clock.nowUtc())
-                    .setTransferStatus(TransferStatus.SERVER_APPROVED)
-                    .setTransferRequestTrid(Trid.create("client trid"))
-                    .build())
-            .setCreationTrid(Trid.create("client creation trid"))
+            .setCreationTrid(Trid.create("client-creation-trid", "server-trid"))
             .setPhase(LaunchPhase.LANDRUSH)
+            .setPeriod(Period.create(5, Period.Unit.YEARS))
             .setEncodedSignedMarks(ImmutableList.of(EncodedSignedMark.create("base64", "abcdefg=")))
             .setApplicationStatus(ApplicationStatus.ALLOCATED)
             .setAuctionPrice(Money.of(USD, 11))
-            .build());
-    persistResource(domainApplication);
+            .build()));
   }
 
   @Test
@@ -117,12 +93,12 @@ public class DomainApplicationTest extends EntityTestCase {
 
   @Test
   public void testIndexing() throws Exception {
+    domainApplication = persistResource(
+        domainApplication.asBuilder().setPeriod(Period.create(5, Period.Unit.YEARS)).build());
     verifyIndexing(
         domainApplication,
-        "allContacts.contactId.linked",
         "allContacts.contact",
         "fullyQualifiedDomainName",
-        "nameservers.linked",
         "nsHosts",
         "deletionTime",
         "currentSponsorClientId",
@@ -135,27 +111,24 @@ public class DomainApplicationTest extends EntityTestCase {
 
   @Test
   public void testEmptyStringsBecomeNull() {
-    assertThat(emptyBuilder().setCurrentSponsorClientId(null).build()
+    assertThat(emptyBuilder().setPersistedCurrentSponsorClientId(null).build()
         .getCurrentSponsorClientId()).isNull();
-    assertThat(emptyBuilder().setCurrentSponsorClientId("").build()
+    assertThat(emptyBuilder().setPersistedCurrentSponsorClientId("").build()
         .getCurrentSponsorClientId()).isNull();
-    assertThat(emptyBuilder().setCurrentSponsorClientId(" ").build()
+    assertThat(emptyBuilder().setPersistedCurrentSponsorClientId(" ").build()
         .getCurrentSponsorClientId()).isNotNull();
   }
 
   @Test
   public void testEmptySetsAndArraysBecomeNull() {
     assertThat(emptyBuilder().setNameservers(null).build().nsHosts).isNull();
-    assertThat(emptyBuilder()
-        .setNameservers(ImmutableSet.<Key<HostResource>>of())
-        .build()
-        .nsHosts)
-            .isNull();
-    assertThat(emptyBuilder()
-        .setNameservers(ImmutableSet.of(Key.create(newHostResource("foo.example.tld"))))
-        .build()
-        .nsHosts)
-            .isNotNull();
+    assertThat(emptyBuilder().setNameservers(ImmutableSet.of()).build().nsHosts).isNull();
+    assertThat(
+            emptyBuilder()
+                .setNameservers(ImmutableSet.of(Key.create(newHostResource("foo.example.tld"))))
+                .build()
+                .nsHosts)
+        .isNotNull();
     // This behavior should also hold true for ImmutableObjects nested in collections.
     assertThat(emptyBuilder()
         .setDsData(ImmutableSet.of(DelegationSignerData.create(1, 1, 1, null)))
@@ -172,14 +145,6 @@ public class DomainApplicationTest extends EntityTestCase {
         .build()
         .getDsData().asList().get(0).getDigest())
             .isNotNull();
-  }
-
-  @Test
-  public void testEmptyTransferDataBecomesNull() throws Exception {
-    DomainApplication withNull = emptyBuilder().setTransferData(null).build();
-    DomainApplication withEmpty = withNull.asBuilder().setTransferData(TransferData.EMPTY).build();
-    assertThat(withNull).isEqualTo(withEmpty);
-    assertThat(withEmpty.hasTransferData()).isFalse();
   }
 
   @Test

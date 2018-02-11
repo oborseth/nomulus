@@ -48,7 +48,7 @@
     <url-pattern>/_dr/loadtest</url-pattern>
   </servlet-mapping>
 
-  <!-- Command line tool uses this endpoint to modify the datastore. -->
+  <!-- The nomulus command line tool uses this endpoint to write to Datastore. -->
   <servlet>
     <display-name>Remote API Servlet</display-name>
     <servlet-name>RemoteApiServlet</servlet-name>
@@ -66,12 +66,11 @@
     <url-pattern>/_dr/epptool</url-pattern>
   </servlet-mapping>
 
-  <!--  Mapreduce to re-save all EppResources. -->
+  <!--  Mapreduce to re-save all HistoryEntries. -->
   <servlet-mapping>
     <servlet-name>tools-servlet</servlet-name>
-    <url-pattern>/_dr/task/resaveAllEppResources</url-pattern>
+    <url-pattern>/_dr/task/resaveAllHistoryEntries</url-pattern>
   </servlet-mapping>
-
 
   <!-- Mapreduce to delete EppResources, children, and indices. -->
   <servlet-mapping>
@@ -83,6 +82,12 @@
   <servlet-mapping>
     <servlet-name>tools-servlet</servlet-name>
     <url-pattern>/_dr/task/killAllCommitLogs</url-pattern>
+  </servlet-mapping>
+
+  <!-- Restores commit logs. -->
+  <servlet-mapping>
+    <servlet-name>tools-servlet</servlet-name>
+    <url-pattern>/_dr/task/restoreCommitLogs</url-pattern>
   </servlet-mapping>
 
   <!-- This path serves up the App Engine results page for mapreduce runs. -->
@@ -108,7 +113,7 @@
   <!-- Refreshes all active domains in DNS -->
   <servlet-mapping>
     <servlet-name>tools-servlet</servlet-name>
-    <url-pattern>/_dr/task/refreshAllDomains</url-pattern>
+    <url-pattern>/_dr/task/refreshDnsForAllDomains</url-pattern>
   </servlet-mapping>
 
   <!-- Registrar detail report publishing action. -->
@@ -122,6 +127,11 @@
     <url-pattern>/_dr/task/generateZoneFiles</url-pattern>
   </servlet-mapping>
 
+
+  <servlet-mapping>
+    <servlet-name>tools-servlet</servlet-name>
+    <url-pattern>/_dr/task/pollMapreduce</url-pattern>
+  </servlet-mapping>
 
   <!-- Security config -->
   <security-constraint>
@@ -140,9 +150,6 @@
 
       <!-- Internal AppEngine endpoints.  The '_ah' is short for app hosting.  -->
       <url-pattern>/_ah/*</url-pattern>
-
-      <!-- Internal registry endpoints.  The '_dr' is short for domain registry. -->
-      <url-pattern>/_dr/*</url-pattern>
 
       <!-- Registrar console (should not be available on non-default module). -->
       <url-pattern>/registrar*</url-pattern>
@@ -194,5 +201,4 @@
     <filter-name>OfyFilter</filter-name>
     <url-pattern>/*</url-pattern>
   </filter-mapping>
-
 </web-app>

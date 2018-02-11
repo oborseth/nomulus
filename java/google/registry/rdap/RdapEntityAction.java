@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,22 +15,24 @@
 package google.registry.rdap;
 
 import static google.registry.model.ofy.ObjectifyService.ofy;
+import static google.registry.rdap.RdapUtils.getRegistrarByIanaIdentifier;
 import static google.registry.request.Action.Method.GET;
 import static google.registry.request.Action.Method.HEAD;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Iterables;
+import com.google.common.primitives.Longs;
 import com.google.re2j.Pattern;
 import com.googlecode.objectify.Key;
 import google.registry.model.contact.ContactResource;
-import google.registry.model.domain.DesignatedContact;
 import google.registry.model.registrar.Registrar;
 import google.registry.rdap.RdapJsonFormatter.OutputDataType;
+import google.registry.rdap.RdapMetrics.EndpointType;
 import google.registry.request.Action;
 import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.NotFoundException;
+import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
+import java.util.Optional;
 import javax.inject.Inject;
 import org.joda.time.DateTime;
 
@@ -44,7 +46,12 @@ import org.joda.time.DateTime;
  * response MUST contain a publicIDs member to identify the IANA Registrar ID from the IANA’s
  * Registrar ID registry. The type value of the publicID object MUST be equal to IANA Registrar ID.
  */
-@Action(path = RdapEntityAction.PATH, method = {GET, HEAD}, isPrefix = true)
+@Action(
+  path = RdapEntityAction.PATH,
+  method = {GET, HEAD},
+  isPrefix = true,
+  auth = Auth.AUTH_PUBLIC
+)
 public class RdapEntityAction extends RdapActionBase {
 
   public static final String PATH = "/rdap/entity/";
@@ -60,13 +67,18 @@ public class RdapEntityAction extends RdapActionBase {
   }
 
   @Override
+  public EndpointType getEndpointType() {
+    return EndpointType.ENTITY;
+  }
+
+  @Override
   public String getActionPath() {
     return PATH;
   }
 
   @Override
   public ImmutableMap<String, Object> getJsonObjectForResource(
-      String pathSearchString, boolean isHeadRequest, String linkBase) {
+      String pathSearchString, boolean isHeadRequest) {
     DateTime now = clock.nowUtc();
     // The query string is not used; the RDAP syntax is /rdap/entity/handle (the handle is the roid
     // for contacts and the client identifier for registrars). Since RDAP's concept of an entity
@@ -78,29 +90,26 @@ public class RdapEntityAction extends RdapActionBase {
       ContactResource contactResource = ofy().load().key(contactKey).now();
       // As per Andy Newton on the regext mailing list, contacts by themselves have no role, since
       // they are global, and might have different roles for different domains.
-      if ((contactResource != null) && now.isBefore(contactResource.getDeletionTime())) {
-        return RdapJsonFormatter.makeRdapJsonForContact(
+      if ((contactResource != null) && shouldBeVisible(contactResource, now)) {
+        return rdapJsonFormatter.makeRdapJsonForContact(
             contactResource,
             true,
-            Optional.<DesignatedContact.Type>absent(),
-            rdapLinkBase,
+            Optional.empty(),
+            fullServletPath,
             rdapWhoisServer,
             now,
-            OutputDataType.FULL);
+            OutputDataType.FULL,
+            getAuthorization());
       }
     }
-    try {
-      Long ianaIdentifier = Long.parseLong(pathSearchString);
+    Long ianaIdentifier = Longs.tryParse(pathSearchString);
+    if (ianaIdentifier != null) {
       wasValidKey = true;
-      Registrar registrar = Iterables.getOnlyElement(
-          Registrar.loadByIanaIdentifierRange(ianaIdentifier, ianaIdentifier + 1, 1), null);
-      if ((registrar != null) && registrar.isActiveAndPubliclyVisible()) {
-        return RdapJsonFormatter.makeRdapJsonForRegistrar(
-            registrar, true, rdapLinkBase, rdapWhoisServer, now, OutputDataType.FULL);
+      Optional<Registrar> registrar = getRegistrarByIanaIdentifier(ianaIdentifier);
+      if (registrar.isPresent() && shouldBeVisible(registrar.get())) {
+        return rdapJsonFormatter.makeRdapJsonForRegistrar(
+            registrar.get(), true, fullServletPath, rdapWhoisServer, now, OutputDataType.FULL);
       }
-    } catch (NumberFormatException e) {
-      // Although the search string was not a valid IANA identifier, it might still have been a
-      // valid ROID.
     }
     // At this point, we have failed to find either a contact or a registrar.
     throw wasValidKey
@@ -108,4 +117,3 @@ public class RdapEntityAction extends RdapActionBase {
         : new BadRequestException(pathSearchString + " is not a valid entity handle");
   }
 }
-

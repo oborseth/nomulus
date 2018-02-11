@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,17 +14,25 @@
 
 package google.registry.flows.domain;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.collect.Sets.symmetricDifference;
+import static com.google.common.collect.Sets.union;
+import static google.registry.flows.FlowUtils.persistEntityChanges;
+import static google.registry.flows.FlowUtils.validateClientIsLoggedIn;
+import static google.registry.flows.ResourceFlowUtils.checkSameValuesNotAddedAndRemoved;
 import static google.registry.flows.ResourceFlowUtils.loadAndVerifyExistence;
+import static google.registry.flows.ResourceFlowUtils.verifyAllStatusesAreClientSettable;
 import static google.registry.flows.ResourceFlowUtils.verifyNoDisallowedStatuses;
-import static google.registry.flows.ResourceFlowUtils.verifyOptionalAuthInfoForResource;
+import static google.registry.flows.ResourceFlowUtils.verifyOptionalAuthInfo;
 import static google.registry.flows.ResourceFlowUtils.verifyResourceOwnership;
 import static google.registry.flows.domain.DomainFlowUtils.checkAllowedAccessToTld;
 import static google.registry.flows.domain.DomainFlowUtils.cloneAndLinkReferences;
 import static google.registry.flows.domain.DomainFlowUtils.updateDsData;
 import static google.registry.flows.domain.DomainFlowUtils.validateContactsHaveTypes;
+import static google.registry.flows.domain.DomainFlowUtils.validateDomainAllowedOnCreateRestrictedTld;
 import static google.registry.flows.domain.DomainFlowUtils.validateDsData;
-import static google.registry.flows.domain.DomainFlowUtils.validateFeeChallenge;
+import static google.registry.flows.domain.DomainFlowUtils.validateFeesAckedIfPresent;
+import static google.registry.flows.domain.DomainFlowUtils.validateNameserversAllowedOnDomain;
 import static google.registry.flows.domain.DomainFlowUtils.validateNameserversAllowedOnTld;
 import static google.registry.flows.domain.DomainFlowUtils.validateNameserversCountForTld;
 import static google.registry.flows.domain.DomainFlowUtils.validateNoDuplicateContacts;
@@ -32,45 +40,47 @@ import static google.registry.flows.domain.DomainFlowUtils.validateRegistrantAll
 import static google.registry.flows.domain.DomainFlowUtils.validateRequiredContactsPresent;
 import static google.registry.flows.domain.DomainFlowUtils.verifyClientUpdateNotProhibited;
 import static google.registry.flows.domain.DomainFlowUtils.verifyNotInPendingDelete;
-import static google.registry.flows.domain.DomainFlowUtils.verifyStatusChangesAreClientSettable;
-import static google.registry.model.domain.fee.Fee.FEE_UPDATE_COMMAND_EXTENSIONS_IN_PREFERENCE_ORDER;
-import static google.registry.model.eppoutput.Result.Code.SUCCESS;
 import static google.registry.model.ofy.ObjectifyService.ofy;
+import static google.registry.util.CollectionUtils.nullToEmpty;
 import static google.registry.util.DateTimeUtils.earliestOf;
 
-import com.google.common.base.Optional;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.net.InternetDomainName;
 import com.googlecode.objectify.Key;
 import google.registry.dns.DnsQueue;
 import google.registry.flows.EppException;
+import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.ClientId;
+import google.registry.flows.FlowModule.Superuser;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.LoggedInFlow;
 import google.registry.flows.TransactionalFlow;
-import google.registry.flows.domain.DomainFlowUtils.FeesRequiredForNonFreeUpdateException;
-import google.registry.flows.domain.TldSpecificLogicProxy.EppCommandOperations;
-import google.registry.flows.exceptions.AddRemoveSameValueEppException;
+import google.registry.flows.annotations.ReportingSpec;
+import google.registry.flows.custom.DomainUpdateFlowCustomLogic;
+import google.registry.flows.custom.DomainUpdateFlowCustomLogic.AfterValidationParameters;
+import google.registry.flows.custom.DomainUpdateFlowCustomLogic.BeforeSaveParameters;
+import google.registry.flows.custom.EntityChanges;
 import google.registry.model.ImmutableObject;
 import google.registry.model.billing.BillingEvent;
 import google.registry.model.billing.BillingEvent.Reason;
 import google.registry.model.domain.DomainCommand.Update;
+import google.registry.model.domain.DomainCommand.Update.AddRemove;
+import google.registry.model.domain.DomainCommand.Update.Change;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.GracePeriod;
-import google.registry.model.domain.fee.FeeTransformCommandExtension;
-import google.registry.model.domain.flags.FlagsUpdateCommandExtension;
+import google.registry.model.domain.fee.FeeUpdateCommandExtension;
 import google.registry.model.domain.metadata.MetadataExtension;
 import google.registry.model.domain.rgp.GracePeriodStatus;
 import google.registry.model.domain.secdns.SecDnsUpdateExtension;
 import google.registry.model.eppcommon.AuthInfo;
 import google.registry.model.eppcommon.StatusValue;
+import google.registry.model.eppinput.EppInput;
 import google.registry.model.eppinput.ResourceCommand;
-import google.registry.model.eppinput.ResourceCommand.AddRemoveSameValueException;
-import google.registry.model.eppoutput.EppOutput;
+import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.registry.Registry;
 import google.registry.model.reporting.HistoryEntry;
+import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
+import java.util.Optional;
 import javax.inject.Inject;
-import org.joda.money.Money;
 import org.joda.time.DateTime;
 
 /**
@@ -90,25 +100,28 @@ import org.joda.time.DateTime;
  * accordingly.
  *
  * @error {@link google.registry.flows.EppException.UnimplementedExtensionException}
+ * @error {@link google.registry.flows.ResourceFlowUtils.AddRemoveSameValueException}
  * @error {@link google.registry.flows.ResourceFlowUtils.ResourceDoesNotExistException}
  * @error {@link google.registry.flows.ResourceFlowUtils.ResourceNotOwnedException}
- * @error {@link google.registry.flows.exceptions.AddRemoveSameValueEppException}
+ * @error {@link google.registry.flows.ResourceFlowUtils.StatusNotClientSettableException}
  * @error {@link google.registry.flows.exceptions.OnlyToolCanPassMetadataException}
  * @error {@link google.registry.flows.exceptions.ResourceHasClientUpdateProhibitedException}
  * @error {@link google.registry.flows.exceptions.ResourceStatusProhibitsOperationException}
- * @error {@link google.registry.flows.exceptions.StatusNotClientSettableException}
  * @error {@link DomainFlowUtils.DuplicateContactForRoleException}
  * @error {@link DomainFlowUtils.EmptySecDnsUpdateException}
  * @error {@link DomainFlowUtils.FeesMismatchException}
- * @error {@link DomainFlowUtils.FeesRequiredForNonFreeUpdateException}
+ * @error {@link DomainFlowUtils.FeesRequiredForNonFreeOperationException}
  * @error {@link DomainFlowUtils.LinkedResourcesDoNotExistException}
  * @error {@link DomainFlowUtils.LinkedResourceInPendingDeleteProhibitsOperationException}
  * @error {@link DomainFlowUtils.MaxSigLifeChangeNotSupportedException}
  * @error {@link DomainFlowUtils.MissingAdminContactException}
  * @error {@link DomainFlowUtils.MissingContactTypeException}
  * @error {@link DomainFlowUtils.MissingTechnicalContactException}
- * @error {@link DomainFlowUtils.NameserversNotAllowedException}
- * @error {@link DomainFlowUtils.NameserversNotSpecifiedException}
+ * @error {@link DomainFlowUtils.NameserversNotAllowedForTldException}
+ * @error {@link DomainFlowUtils.NameserversNotSpecifiedForTldWithNameserverWhitelistException}
+ * @error {@link DomainFlowUtils.NameserversNotAllowedForDomainException}
+ * @error {@link DomainFlowUtils.NameserversNotSpecifiedForNameserverRestrictedDomainException}
+ * @error {@link DomainFlowUtils.DomainNotAllowedForTldWithCreateRestrictionException}
  * @error {@link DomainFlowUtils.NotAuthorizedForTldException}
  * @error {@link DomainFlowUtils.RegistrantNotAllowedException}
  * @error {@link DomainFlowUtils.SecDnsAllUsageException}
@@ -116,102 +129,120 @@ import org.joda.time.DateTime;
  * @error {@link DomainFlowUtils.TooManyNameserversException}
  * @error {@link DomainFlowUtils.UrgentAttributeNotSupportedException}
  */
-public final class DomainUpdateFlow extends LoggedInFlow implements TransactionalFlow {
+@ReportingSpec(ActivityReportField.DOMAIN_UPDATE)
+public final class DomainUpdateFlow implements TransactionalFlow {
 
   /**
-   * Note that CLIENT_UPDATE_PROHIBITED is intentionally not in this list. This is because it
+   * A list of {@link StatusValue}s that prohibit updates.
+   *
+   * <p>Superusers can override these statuses and perform updates anyway.
+   *
+   * <p>Note that CLIENT_UPDATE_PROHIBITED is intentionally not in this list. This is because it
    * requires special checking, since you must be able to clear the status off the object with an
    * update.
    */
-  private static final ImmutableSet<StatusValue> UPDATE_DISALLOWED_STATUSES = ImmutableSet.of(
-      StatusValue.PENDING_DELETE,
-      StatusValue.SERVER_UPDATE_PROHIBITED);
+  private static final ImmutableSet<StatusValue> UPDATE_DISALLOWED_STATUSES =
+      ImmutableSet.of(StatusValue.PENDING_DELETE, StatusValue.SERVER_UPDATE_PROHIBITED);
 
   @Inject ResourceCommand resourceCommand;
+  @Inject ExtensionManager extensionManager;
+  @Inject EppInput eppInput;
   @Inject Optional<AuthInfo> authInfo;
   @Inject @ClientId String clientId;
   @Inject @TargetId String targetId;
+  @Inject @Superuser boolean isSuperuser;
   @Inject HistoryEntry.Builder historyBuilder;
   @Inject DnsQueue dnsQueue;
+  @Inject EppResponse.Builder responseBuilder;
+  @Inject DomainUpdateFlowCustomLogic flowCustomLogic;
+  @Inject DomainPricingLogic pricingLogic;
   @Inject DomainUpdateFlow() {}
 
   @Override
-  protected final void initLoggedInFlow() throws EppException {
-    registerExtensions(FEE_UPDATE_COMMAND_EXTENSIONS_IN_PREFERENCE_ORDER);
-    registerExtensions(
-        MetadataExtension.class, SecDnsUpdateExtension.class, FlagsUpdateCommandExtension.class);
-  }
-
-  @Override
-  public EppOutput run() throws EppException {
+  public EppResponse run() throws EppException {
+    extensionManager.register(
+        FeeUpdateCommandExtension.class,
+        MetadataExtension.class,
+        SecDnsUpdateExtension.class);
+    flowCustomLogic.beforeValidation();
+    extensionManager.validate();
+    validateClientIsLoggedIn(clientId);
+    DateTime now = ofy().getTransactionTime();
     Update command = cloneAndLinkReferences((Update) resourceCommand, now);
     DomainResource existingDomain = loadAndVerifyExistence(DomainResource.class, targetId, now);
-    verifyUpdateAllowed(command, existingDomain);
-    HistoryEntry historyEntry = buildHistoryEntry(existingDomain);
-    DomainResource newDomain = performUpdate(command, existingDomain);
+    verifyUpdateAllowed(command, existingDomain, now);
+    flowCustomLogic.afterValidation(
+        AfterValidationParameters.newBuilder().setExistingDomain(existingDomain).build());
+    HistoryEntry historyEntry = buildHistoryEntry(existingDomain, now);
+    DomainResource newDomain = performUpdate(command, existingDomain, now);
     // If the new domain is in the sunrush add grace period and is now publishable to DNS because we
     // have added nameserver or removed holds, we have to convert it to a standard add grace period.
     if (newDomain.shouldPublishToDns()) {
       for (GracePeriod gracePeriod : newDomain.getGracePeriods()) {
         if (gracePeriod.isSunrushAddGracePeriod()) {
-          newDomain = convertSunrushAddToAdd(newDomain, gracePeriod, historyEntry);
-          break;  // There can only be one sunrush add grace period.
+          newDomain = convertSunrushAddToAdd(newDomain, gracePeriod, historyEntry, now);
+          break; // There can only be one sunrush add grace period.
         }
       }
     }
     validateNewState(newDomain);
     dnsQueue.addDomainRefreshTask(targetId);
-    handleExtraFlowLogic(existingDomain, historyEntry);
-    ImmutableList.Builder<ImmutableObject> entitiesToSave = new ImmutableList.Builder<>();
+    ImmutableSet.Builder<ImmutableObject> entitiesToSave = new ImmutableSet.Builder<>();
     entitiesToSave.add(newDomain, historyEntry);
     Optional<BillingEvent.OneTime> statusUpdateBillingEvent =
-        createBillingEventForStatusUpdates(existingDomain, newDomain, historyEntry);
-    if (statusUpdateBillingEvent.isPresent()) {
-      entitiesToSave.add(statusUpdateBillingEvent.get());
-    }
-    ofy().save().entities(entitiesToSave.build());
-    return createOutput(SUCCESS);
+        createBillingEventForStatusUpdates(existingDomain, newDomain, historyEntry, now);
+    statusUpdateBillingEvent.ifPresent(entitiesToSave::add);
+    EntityChanges entityChanges =
+        flowCustomLogic.beforeSave(
+            BeforeSaveParameters.newBuilder()
+                .setHistoryEntry(historyEntry)
+                .setNewDomain(newDomain)
+                .setExistingDomain(existingDomain)
+                .setEntityChanges(
+                    EntityChanges.newBuilder().setSaves(entitiesToSave.build()).build())
+                .build());
+    persistEntityChanges(entityChanges);
+    return responseBuilder.build();
   }
 
   /** Fail if the object doesn't exist or was deleted. */
-  private void verifyUpdateAllowed(Update command, DomainResource existingDomain)
+  private void verifyUpdateAllowed(Update command, DomainResource existingDomain, DateTime now)
       throws EppException {
-    verifyNoDisallowedStatuses(existingDomain, UPDATE_DISALLOWED_STATUSES);
-    verifyOptionalAuthInfoForResource(authInfo, existingDomain);
+    verifyOptionalAuthInfo(authInfo, existingDomain);
+    AddRemove add = command.getInnerAdd();
+    AddRemove remove = command.getInnerRemove();
+    String tld = existingDomain.getTld();
     if (!isSuperuser) {
+      verifyNoDisallowedStatuses(existingDomain, UPDATE_DISALLOWED_STATUSES);
       verifyResourceOwnership(clientId, existingDomain);
       verifyClientUpdateNotProhibited(command, existingDomain);
-      verifyStatusChangesAreClientSettable(command);
+      verifyAllStatusesAreClientSettable(union(add.getStatusValues(), remove.getStatusValues()));
+      checkAllowedAccessToTld(clientId, tld);
     }
-    String tld = existingDomain.getTld();
-    checkAllowedAccessToTld(getAllowedTlds(), tld);
-    EppCommandOperations commandOperations = TldSpecificLogicProxy.getUpdatePrice(
-        Registry.get(tld), targetId, clientId, now, eppInput);
-
-    FeeTransformCommandExtension feeUpdate =
-        eppInput.getFirstExtensionOfClasses(FEE_UPDATE_COMMAND_EXTENSIONS_IN_PREFERENCE_ORDER);
-    // If the fee extension is present, validate it (even if the cost is zero, to check for price
-    // mismatches). Don't rely on the the validateFeeChallenge check for feeUpdate nullness, because
-    // it throws an error if the name is premium, and we don't want to do that here.
-    Money totalCost = commandOperations.getTotalCost();
-    if (feeUpdate != null) {
-      validateFeeChallenge(targetId, existingDomain.getTld(), now, feeUpdate, totalCost);
-    } else if (!totalCost.isZero()) {
-      // If it's not present but the cost is not zero, throw an exception.
-      throw new FeesRequiredForNonFreeUpdateException();
-    }
+    Registry registry = Registry.get(tld);
+    Optional<FeeUpdateCommandExtension> feeUpdate =
+        eppInput.getSingleExtension(FeeUpdateCommandExtension.class);
+    FeesAndCredits feesAndCredits = pricingLogic.getUpdatePrice(registry, targetId, now);
+    validateFeesAckedIfPresent(feeUpdate, feesAndCredits);
     verifyNotInPendingDelete(
-        command.getInnerAdd().getContacts(),
+        add.getContacts(),
         command.getInnerChange().getRegistrant(),
-        command.getInnerAdd().getNameservers());
-    validateContactsHaveTypes(command.getInnerAdd().getContacts());
-    validateContactsHaveTypes(command.getInnerRemove().getContacts());
+        add.getNameservers());
+    validateContactsHaveTypes(add.getContacts());
+    validateContactsHaveTypes(remove.getContacts());
     validateRegistrantAllowedOnTld(tld, command.getInnerChange().getRegistrantContactId());
     validateNameserversAllowedOnTld(
-        tld, command.getInnerAdd().getNameserverFullyQualifiedHostNames());
+        tld, add.getNameserverFullyQualifiedHostNames());
+    InternetDomainName domainName =
+        InternetDomainName.from(existingDomain.getFullyQualifiedDomainName());
+    if (registry.getDomainCreateRestricted()) {
+      validateDomainAllowedOnCreateRestrictedTld(domainName);
+    }
+    validateNameserversAllowedOnDomain(
+        domainName, nullToEmpty(add.getNameserverFullyQualifiedHostNames()));
   }
 
-  private HistoryEntry buildHistoryEntry(DomainResource existingDomain) {
+  private HistoryEntry buildHistoryEntry(DomainResource existingDomain, DateTime now) {
     return historyBuilder
         .setType(HistoryEntry.Type.DOMAIN_UPDATE)
         .setModificationTime(now)
@@ -219,31 +250,49 @@ public final class DomainUpdateFlow extends LoggedInFlow implements Transactiona
         .build();
   }
 
-  private DomainResource performUpdate(Update command, DomainResource existingDomain)
+  private DomainResource performUpdate(Update command, DomainResource domain, DateTime now)
       throws EppException {
-    DomainResource.Builder builder = existingDomain.asBuilder()
-        .setLastEppUpdateTime(now)
-        .setLastEppUpdateClientId(clientId);
-    try {
-      command.applyTo(builder);
-    } catch (AddRemoveSameValueException e) {
-      throw new AddRemoveSameValueEppException();
+    AddRemove add = command.getInnerAdd();
+    AddRemove remove = command.getInnerRemove();
+    checkSameValuesNotAddedAndRemoved(add.getNameservers(), remove.getNameservers());
+    checkSameValuesNotAddedAndRemoved(add.getContacts(), remove.getContacts());
+    checkSameValuesNotAddedAndRemoved(add.getStatusValues(), remove.getStatusValues());
+    Change change = command.getInnerChange();
+    Optional<SecDnsUpdateExtension> secDnsUpdate =
+        eppInput.getSingleExtension(SecDnsUpdateExtension.class);
+    DomainResource.Builder domainBuilder =
+        domain
+            .asBuilder()
+            // Handle the secDNS extension.
+            .setDsData(
+                secDnsUpdate.isPresent()
+                    ? updateDsData(domain.getDsData(), secDnsUpdate.get())
+                    : domain.getDsData())
+            .setLastEppUpdateTime(now)
+            .setLastEppUpdateClientId(clientId)
+            .addStatusValues(add.getStatusValues())
+            .removeStatusValues(remove.getStatusValues())
+            .addNameservers(add.getNameservers())
+            .removeNameservers(remove.getNameservers())
+            .addContacts(add.getContacts())
+            .removeContacts(remove.getContacts())
+            .setRegistrant(firstNonNull(change.getRegistrant(), domain.getRegistrant()))
+            .setAuthInfo(firstNonNull(change.getAuthInfo(), domain.getAuthInfo()));
+    if (Registry.get(domain.getTld()).getDomainCreateRestricted()) {
+      domainBuilder
+          .addStatusValue(StatusValue.SERVER_TRANSFER_PROHIBITED)
+          .addStatusValue(StatusValue.SERVER_UPDATE_PROHIBITED);
     }
-    // Handle the secDNS extension.
-    SecDnsUpdateExtension secDnsUpdate = eppInput.getSingleExtension(SecDnsUpdateExtension.class);
-    if (secDnsUpdate != null) {
-      builder.setDsData(updateDsData(existingDomain.getDsData(), secDnsUpdate));
-    }
-    return builder.build();
+    return domainBuilder.build();
   }
 
   private DomainResource convertSunrushAddToAdd(
-      DomainResource newDomain, GracePeriod gracePeriod, HistoryEntry historyEntry) {
+      DomainResource newDomain, GracePeriod gracePeriod, HistoryEntry historyEntry, DateTime now) {
     // Cancel the billing event for the sunrush add and replace it with a new billing event.
     BillingEvent.Cancellation billingEventCancellation =
         BillingEvent.Cancellation.forGracePeriod(gracePeriod, historyEntry, targetId);
     BillingEvent.OneTime billingEvent =
-        createBillingEventForSunrushConversion(newDomain, historyEntry, gracePeriod);
+        createBillingEventForSunrushConversion(newDomain, historyEntry, gracePeriod, now);
     ofy().save().entities(billingEvent, billingEventCancellation);
     // Modify the grace periods on the domain.
     return newDomain.asBuilder()
@@ -253,7 +302,10 @@ public final class DomainUpdateFlow extends LoggedInFlow implements Transactiona
   }
 
   private BillingEvent.OneTime createBillingEventForSunrushConversion(
-      DomainResource existingDomain, HistoryEntry historyEntry, GracePeriod sunrushAddGracePeriod) {
+      DomainResource existingDomain,
+      HistoryEntry historyEntry,
+      GracePeriod sunrushAddGracePeriod,
+      DateTime now) {
     // Compute the expiration time of the add grace period. We will not allow it to be after the
     // sunrush add grace period expiration time (i.e. you can't get extra add grace period by
     // setting a nameserver).
@@ -282,14 +334,21 @@ public final class DomainUpdateFlow extends LoggedInFlow implements Transactiona
     validateNoDuplicateContacts(newDomain.getContacts());
     validateRequiredContactsPresent(newDomain.getRegistrant(), newDomain.getContacts());
     validateDsData(newDomain.getDsData());
-    validateNameserversCountForTld(newDomain.getTld(), newDomain.getNameservers().size());
+    validateNameserversCountForTld(
+        newDomain.getTld(),
+        InternetDomainName.from(newDomain.getFullyQualifiedDomainName()),
+        newDomain.getNameservers().size());
   }
 
   /** Some status updates cost money. Bill only once no matter how many of them are changed. */
   private Optional<BillingEvent.OneTime> createBillingEventForStatusUpdates(
-      DomainResource existingDomain, DomainResource newDomain, HistoryEntry historyEntry) {
-    MetadataExtension metadataExtension = eppInput.getSingleExtension(MetadataExtension.class);
-    if (metadataExtension != null && metadataExtension.getRequestedByRegistrar()) {
+      DomainResource existingDomain,
+      DomainResource newDomain,
+      HistoryEntry historyEntry,
+      DateTime now) {
+    Optional<MetadataExtension> metadataExtension =
+        eppInput.getSingleExtension(MetadataExtension.class);
+    if (metadataExtension.isPresent() && metadataExtension.get().getRequestedByRegistrar()) {
       for (StatusValue statusValue
           : symmetricDifference(existingDomain.getStatusValues(), newDomain.getStatusValues())) {
         if (statusValue.isChargedStatus()) {
@@ -306,17 +365,6 @@ public final class DomainUpdateFlow extends LoggedInFlow implements Transactiona
         }
       }
     }
-    return Optional.absent();
-  }
-
-  private void handleExtraFlowLogic(DomainResource existingDomain, HistoryEntry historyEntry)
-      throws EppException {
-    Optional<RegistryExtraFlowLogic> extraFlowLogic =
-        RegistryExtraFlowLogicProxy.newInstanceForDomain(existingDomain);
-    if (extraFlowLogic.isPresent()) {
-      extraFlowLogic.get().performAdditionalDomainUpdateLogic(
-          existingDomain, clientId, now, eppInput, historyEntry);
-      extraFlowLogic.get().commitAdditionalLogicChanges();
-    }
+    return Optional.empty();
   }
 }

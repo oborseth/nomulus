@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,12 +16,13 @@ goog.provide('registry.ResourceComponent');
 
 goog.require('goog.dom');
 goog.require('goog.json');
+goog.require('goog.object');
 goog.require('registry.EditItem');
 goog.require('registry.forms');
 goog.require('registry.util');
 
-goog.forwardDeclare('registry.Resource');
 goog.forwardDeclare('registry.Console');
+goog.forwardDeclare('registry.Resource');
 
 
 
@@ -51,6 +52,15 @@ registry.ResourceComponent = function(
   this.renderSetCb = renderSetCb;
 };
 goog.inherits(registry.ResourceComponent, registry.EditItem);
+
+
+/** @override */
+registry.ResourceComponent.prototype.renderItem = function(rspObj) {
+  // Augment the console parameters with the response object, we'll need both.
+  var params = goog.object.clone(this.console.params);
+  goog.object.extend(params, rspObj);
+  registry.ResourceComponent.base(this, 'renderItem', params);
+};
 
 
 /** @override */
@@ -109,7 +119,7 @@ registry.ResourceComponent.prototype.handleFetchItem = function(id, rsp) {
 /** @override */
 registry.ResourceComponent.prototype.sendUpdate = function() {
   var modelCopy = /** @type {!Object}
-                   */ (goog.json.parse(goog.json.serialize(this.model)));
+                   */ (JSON.parse(goog.json.serialize(this.model)));
   this.prepareUpdate(modelCopy);
   if (this.id) {
     this.resource.update(modelCopy, goog.bind(this.handleUpdateResponse, this));

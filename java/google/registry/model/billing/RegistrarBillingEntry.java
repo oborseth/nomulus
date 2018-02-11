@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ import org.joda.time.DateTime;
  * <p>This is a one-off single-entry bookkeeping system. There is a separate account for each
  * (registrar, currency) pair.
  *
- * <p>You should never update these entities once they've been inserted into datastore. If you need
+ * <p>You should never update these entities once they've been inserted into Datastore. If you need
  * to change something, add a correction entry.
  */
 @Entity
@@ -79,7 +79,7 @@ public class RegistrarBillingEntry extends ImmutableObject implements Jsonifiabl
    * Currency of transaction.
    *
    * <p>This field is identical to {@code amount.getCurrencyUnit()} and is only here so it can be
-   * indexed in datastore.
+   * indexed in Datastore.
    */
   @Index
   CurrencyUnit currency;
@@ -150,8 +150,6 @@ public class RegistrarBillingEntry extends ImmutableObject implements Jsonifiabl
 
     @Nullable
     private RegistrarBillingEntry previous;
-
-    public Builder() {}
 
     public Builder setParent(Registrar parent) {
       getInstance().parent = Key.create(parent);

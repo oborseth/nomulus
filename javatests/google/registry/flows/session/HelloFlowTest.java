@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 
 package google.registry.flows.session;
 
-import static google.registry.testing.TestDataHelper.loadFileWithSubstitutions;
 import static org.joda.time.format.ISODateTimeFormat.dateTimeNoMillis;
 
 import com.google.common.collect.ImmutableMap;
@@ -29,9 +28,7 @@ public class HelloFlowTest extends FlowTestCase<HelloFlow> {
     setEppInput("hello.xml");
     assertTransactionalFlow(false);
     runFlowAssertResponse(
-        loadFileWithSubstitutions(
-            getClass(),
-            "greeting_crr.xml",
-            ImmutableMap.of("DATE", clock.nowUtc().toString(dateTimeNoMillis()))));
+        loadFile(
+            "greeting.xml", ImmutableMap.of("DATE", clock.nowUtc().toString(dateTimeNoMillis()))));
   }
 }

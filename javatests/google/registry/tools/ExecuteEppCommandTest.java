@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,12 @@
 
 package google.registry.tools;
 
-import static google.registry.util.ResourceUtils.readResourceUtf8;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.beust.jcommander.ParameterException;
 import google.registry.testing.InjectRule;
+import google.registry.tools.server.ToolsTestData;
 import java.io.ByteArrayInputStream;
 import org.junit.Before;
 import org.junit.Rule;
@@ -35,26 +36,26 @@ public class ExecuteEppCommandTest extends EppToolCommandTestCase<ExecuteEppComm
 
   @Before
   public void initCommand() throws Exception {
-    xmlInput = readResourceUtf8(ExecuteEppCommandTest.class, "testdata/contact_create.xml");
+    xmlInput = ToolsTestData.loadFile("contact_create.xml");
     eppFile = writeToNamedTmpFile("eppFile", xmlInput);
   }
 
   @Test
   public void testSuccess() throws Exception {
     runCommand("--client=NewRegistrar", "--force", eppFile);
-    eppVerifier().verifySent("contact_create.xml");
+    eppVerifier.verifySent("contact_create.xml");
   }
 
   @Test
   public void testSuccess_dryRun() throws Exception {
     runCommand("--client=NewRegistrar", "--dry_run", eppFile);
-    eppVerifier().asDryRun().verifySent("contact_create.xml");
+    eppVerifier.expectDryRun().verifySent("contact_create.xml");
   }
 
   @Test
   public void testSuccess_withSuperuser() throws Exception {
     runCommand("--client=NewRegistrar", "--superuser", "--force", eppFile);
-    eppVerifier().asSuperuser().verifySent("contact_create.xml");
+    eppVerifier.expectSuperuser().verifySent("contact_create.xml");
   }
 
   @Test
@@ -62,32 +63,35 @@ public class ExecuteEppCommandTest extends EppToolCommandTestCase<ExecuteEppComm
     inject.setStaticField(
         ExecuteEppCommand.class, "stdin", new ByteArrayInputStream(xmlInput.getBytes(UTF_8)));
     runCommand("--client=NewRegistrar", "--force");
-    eppVerifier().verifySent("contact_create.xml");
+    eppVerifier.verifySent("contact_create.xml");
   }
 
   @Test
   public void testSuccess_multipleFiles() throws Exception {
-    String xmlInput2 = readResourceUtf8(ExecuteEppCommandTest.class, "testdata/domain_check.xml");
+    String xmlInput2 = ToolsTestData.loadFile("domain_check.xml");
     String eppFile2 = writeToNamedTmpFile("eppFile2", xmlInput2);
     runCommand("--client=NewRegistrar", "--force", eppFile, eppFile2);
-    eppVerifier().verifySent("contact_create.xml", "domain_check.xml");
+    eppVerifier
+        .verifySent("contact_create.xml")
+        .verifySent("domain_check.xml");
   }
 
   @Test
   public void testFailure_missingClientId() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand("--force", "foo.xml");
+    assertThrows(ParameterException.class, () -> runCommand("--force", "foo.xml"));
   }
 
   @Test
   public void testFailure_forceAndDryRunIncompatible() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand("--client=NewRegistrar", "--force", "--dry_run", eppFile);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> runCommand("--client=NewRegistrar", "--force", "--dry_run", eppFile));
   }
 
   @Test
   public void testFailure_unknownFlag() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand("--client=NewRegistrar", "--unrecognized=foo", "--force", "foo.xml");
+    assertThrows(
+        ParameterException.class,
+        () -> runCommand("--client=NewRegistrar", "--unrecognized=foo", "--force", "foo.xml"));
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,12 +15,12 @@
 package google.registry.tools.params;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.beust.jcommander.ParameterException;
-import google.registry.testing.ExceptionRule;
 import org.joda.time.DateTime;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -28,10 +28,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link DateTimeParameter}. */
 @RunWith(JUnit4.class)
 public class DateTimeParameterTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   private final DateTimeParameter instance = new DateTimeParameter();
 
   @Test
@@ -60,68 +56,59 @@ public class DateTimeParameterTest {
 
   @Test
   public void testConvert_null_throwsException() throws Exception {
-    thrown.expect(NullPointerException.class);
-    instance.convert(null);
+    assertThrows(NullPointerException.class, () -> instance.convert(null));
   }
 
   @Test
   public void testConvert_empty_throwsException() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert(""));
   }
 
   @Test
   public void testConvert_sillyString_throwsException() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("foo");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert("foo"));
   }
 
   @Test
   public void testConvert_partialDate_throwsException() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("2014-01");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert("2014-01"));
   }
 
   @Test
   public void testConvert_onlyDate_throwsException() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("2014-01-01");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert("2014-01-01"));
   }
 
   @Test
   public void testConvert_partialTime_throwsException() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("T01:02");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert("T01:02"));
   }
 
   @Test
   public void testConvert_onlyTime_throwsException() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("T01:02:03");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert("T01:02:03"));
   }
 
   @Test
   public void testConvert_partialDateAndPartialTime_throwsException() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("9T9");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert("9T9"));
   }
 
   @Test
   public void testConvert_dateAndPartialTime_throwsException() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("2014-01-01T01:02");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert("2014-01-01T01:02"));
   }
 
   @Test
   public void testConvert_noTimeZone_throwsException() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("2014-01-01T01:02:03");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert("2014-01-01T01:02:03"));
   }
 
   @Test
   public void testValidate_sillyString_throwsParameterException() throws Exception {
-    thrown.expect(ParameterException.class, "--time=foo not an ISO");
-    instance.validate("--time", "foo");
+    ParameterException thrown =
+        expectThrows(ParameterException.class, () -> instance.validate("--time", "foo"));
+    assertThat(thrown).hasMessageThat().contains("--time=foo not an ISO");
   }
 
   @Test

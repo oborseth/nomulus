@@ -3,6 +3,7 @@
 
   <application>domain-registry</application>
   <version>1</version>
+  <runtime>java8</runtime>
   <module>default</module>
   <threadsafe>true</threadsafe>
   <sessions-enabled>true</sessions-enabled>
@@ -11,7 +12,6 @@
     <max-instances>10</max-instances>
     <idle-timeout>10m</idle-timeout>
   </basic-scaling>
-
 
   <system-properties>
     <property name="java.util.logging.config.file"

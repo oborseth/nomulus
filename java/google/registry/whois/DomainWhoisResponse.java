@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,14 +15,12 @@
 package google.registry.whois;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.collect.Iterables.tryFind;
+import static com.google.common.base.Preconditions.checkState;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.util.CollectionUtils.isNullOrEmpty;
 import static google.registry.xml.UtcDateTimeAdapter.getFormattedString;
 
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
-import com.google.common.base.Predicate;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
 import google.registry.model.contact.ContactPhoneNumber;
@@ -34,8 +32,11 @@ import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.GracePeriod;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.registrar.Registrar;
+import google.registry.model.registrar.RegistrarContact;
 import google.registry.model.translators.EnumToAttributeAdapter.EppEnum;
 import google.registry.util.FormattingLogger;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
 import org.joda.time.DateTime;
@@ -62,63 +63,79 @@ final class DomainWhoisResponse extends WhoisResponseImpl {
   }
 
   @Override
-  public String getPlainTextOutput(final boolean preferUnicode, String disclaimer) {
-    Registrar registrar = getRegistrar(domain.getCurrentSponsorClientId());
-    return new DomainEmitter()
-        .emitField(
-            "Domain Name", maybeFormatHostname(domain.getFullyQualifiedDomainName(), preferUnicode))
-        .emitField("Domain ID", domain.getRepoId())
-        .emitField("WHOIS Server", registrar.getWhoisServer())
-        .emitField("Referral URL", registrar.getReferralUrl())
-        .emitField("Updated Date", getFormattedString(domain.getLastEppUpdateTime()))
-        .emitField("Creation Date", getFormattedString(domain.getCreationTime()))
-        .emitField(
-            "Registry Expiry Date", getFormattedString(domain.getRegistrationExpirationTime()))
-        .emitField("Sponsoring Registrar", registrar.getRegistrarName())
-        .emitField(
-            "Sponsoring Registrar IANA ID",
-            registrar.getIanaIdentifier() == null ? null : registrar.getIanaIdentifier().toString())
-        .emitStatusValues(domain.getStatusValues(), domain.getGracePeriods())
-        .emitContact("Registrant", domain.getRegistrant(), preferUnicode)
-        .emitContact("Admin", getContactReference(Type.ADMIN), preferUnicode)
-        .emitContact("Tech", getContactReference(Type.TECH), preferUnicode)
-        .emitContact("Billing", getContactReference(Type.BILLING), preferUnicode)
-        .emitSet(
-            "Name Server",
-            domain.loadNameserverFullyQualifiedHostNames(),
-            new Function<String, String>() {
-              @Override
-              public String apply(String hostName) {
-                return maybeFormatHostname(hostName, preferUnicode);
-              }
-            })
-        .emitField("DNSSEC", isNullOrEmpty(domain.getDsData()) ? "unsigned" : "signedDelegation")
-        .emitLastUpdated(getTimestamp())
-        .emitAwipMessage()
-        .emitFooter(disclaimer)
-        .toString();
+  public WhoisResponseResults getResponse(final boolean preferUnicode, String disclaimer) {
+    Optional<Registrar> registrarOptional =
+        Registrar.loadByClientIdCached(domain.getCurrentSponsorClientId());
+    checkState(
+        registrarOptional.isPresent(),
+        "Could not load registrar %s",
+        domain.getCurrentSponsorClientId());
+    Registrar registrar = registrarOptional.get();
+    Optional<RegistrarContact> abuseContact =
+        registrar
+            .getContacts()
+            .stream()
+            .filter(RegistrarContact::getVisibleInDomainWhoisAsAbuse)
+            .findFirst();
+    String plaintext =
+        new DomainEmitter()
+            .emitField(
+                "Domain Name",
+                maybeFormatHostname(domain.getFullyQualifiedDomainName(), preferUnicode))
+            .emitField("Registry Domain ID", domain.getRepoId())
+            .emitField("Registrar WHOIS Server", registrar.getWhoisServer())
+            .emitField("Registrar URL", registrar.getReferralUrl())
+            .emitFieldIfDefined("Updated Date", getFormattedString(domain.getLastEppUpdateTime()))
+            .emitField("Creation Date", getFormattedString(domain.getCreationTime()))
+            .emitField(
+                "Registry Expiry Date", getFormattedString(domain.getRegistrationExpirationTime()))
+            .emitField("Registrar", registrar.getRegistrarName())
+            .emitField("Registrar IANA ID", Objects.toString(registrar.getIanaIdentifier(), ""))
+            // Email address is a required field for registrar contacts. Therefore as long as there
+            // is an abuse contact, we can get an email address from it.
+            .emitFieldIfDefined(
+                "Registrar Abuse Contact Email",
+                abuseContact.map(RegistrarContact::getEmailAddress).orElse(null))
+            .emitFieldIfDefined(
+                "Registrar Abuse Contact Phone",
+                abuseContact.map(RegistrarContact::getPhoneNumber).orElse(null))
+            .emitStatusValues(domain.getStatusValues(), domain.getGracePeriods())
+            .emitContact("Registrant", domain.getRegistrant(), preferUnicode)
+            .emitContact("Admin", getContactReference(Type.ADMIN), preferUnicode)
+            .emitContact("Tech", getContactReference(Type.TECH), preferUnicode)
+            .emitContact("Billing", getContactReference(Type.BILLING), preferUnicode)
+            .emitSet(
+                "Name Server",
+                domain.loadNameserverFullyQualifiedHostNames(),
+                hostName -> maybeFormatHostname(hostName, preferUnicode))
+            .emitField(
+                "DNSSEC", isNullOrEmpty(domain.getDsData()) ? "unsigned" : "signedDelegation")
+            .emitWicfLink()
+            .emitLastUpdated(getTimestamp())
+            .emitAwipMessage()
+            .emitFooter(disclaimer)
+            .toString();
+    return WhoisResponseResults.create(plaintext, 1);
   }
 
   /** Returns the contact of the given type, or null if it does not exist. */
   @Nullable
   private Key<ContactResource> getContactReference(final Type type) {
-    Optional<DesignatedContact> contactOfType = tryFind(domain.getContacts(),
-        new Predicate<DesignatedContact>() {
-          @Override
-          public boolean apply(DesignatedContact d) {
-            return d.getType() == type;
-          }});
-    return contactOfType.isPresent() ? contactOfType.get().getContactKey() : null;
+    Optional<DesignatedContact> contactOfType =
+        domain.getContacts().stream().filter(d -> d.getType() == type).findFirst();
+    return contactOfType.map(DesignatedContact::getContactKey).orElse(null);
   }
 
   /** Output emitter with logic for domains. */
   class DomainEmitter extends Emitter<DomainEmitter> {
     DomainEmitter emitPhone(
         String contactType, String title, @Nullable ContactPhoneNumber phoneNumber) {
-      return emitField(
-              contactType, title, phoneNumber != null ? phoneNumber.getPhoneNumber() : null)
-          .emitField(
-              contactType, title, "Ext", phoneNumber != null ? phoneNumber.getExtension() : null);
+      if (phoneNumber == null) {
+        return this;
+      }
+      return emitFieldIfDefined(ImmutableList.of(contactType, title), phoneNumber.getPhoneNumber())
+          .emitFieldIfDefined(
+              ImmutableList.of(contactType, title, "Ext"), phoneNumber.getExtension());
     }
 
     /** Emit the contact entry of the given type. */
@@ -138,19 +155,20 @@ final class DomainWhoisResponse extends WhoisResponseImpl {
             domain.getFullyQualifiedDomainName(), contact);
         return this;
       }
-      emitField(contactType, "ID", contactResource.getContactId());
+      // ICANN Consistent Labeling & Display policy requires that this be the ROID.
+      emitField(ImmutableList.of("Registry", contactType, "ID"), contactResource.getRepoId());
       PostalInfo postalInfo = chooseByUnicodePreference(
           preferUnicode,
           contactResource.getLocalizedPostalInfo(),
           contactResource.getInternationalizedPostalInfo());
       if (postalInfo != null) {
-        emitField(contactType, "Name", postalInfo.getName());
-        emitField(contactType, "Organization", postalInfo.getOrg());
+        emitFieldIfDefined(ImmutableList.of(contactType, "Name"), postalInfo.getName());
+        emitFieldIfDefined(ImmutableList.of(contactType, "Organization"), postalInfo.getOrg());
         emitAddress(contactType, postalInfo.getAddress());
       }
       return emitPhone(contactType, "Phone", contactResource.getVoiceNumber())
           .emitPhone(contactType, "Fax", contactResource.getFaxNumber())
-          .emitField(contactType, "Email", contactResource.getEmailAddress());
+          .emitField(ImmutableList.of(contactType, "Email"), contactResource.getEmailAddress());
     }
 
     /** Emits status values and grace periods as a set, in the AWIP format. */
@@ -164,12 +182,10 @@ final class DomainWhoisResponse extends WhoisResponseImpl {
       return emitSet(
           "Domain Status",
           combinedStatuses.build(),
-          new Function<EppEnum, String>() {
-            @Override
-            public String apply(EppEnum status) {
-              String xmlName = status.getXmlName();
-              return String.format("%s %s%s", xmlName, ICANN_STATUS_URL_PREFIX, xmlName);
-            }});
+          status -> {
+            String xmlName = status.getXmlName();
+            return String.format("%s %s%s", xmlName, ICANN_STATUS_URL_PREFIX, xmlName);
+          });
     }
 
     /** Emits the message that AWIP requires accompany all domain WHOIS responses. */

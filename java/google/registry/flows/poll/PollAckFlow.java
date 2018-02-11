@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,24 +15,24 @@
 package google.registry.flows.poll;
 
 import static com.google.common.base.Preconditions.checkState;
+import static google.registry.flows.FlowUtils.validateClientIsLoggedIn;
 import static google.registry.flows.poll.PollFlowUtils.getPollMessagesQuery;
-import static google.registry.model.eppoutput.Result.Code.SUCCESS;
 import static google.registry.model.eppoutput.Result.Code.SUCCESS_WITH_NO_MESSAGES;
 import static google.registry.model.ofy.ObjectifyService.ofy;
+import static google.registry.model.poll.PollMessageExternalKeyConverter.parsePollMessageExternalId;
 import static google.registry.util.DateTimeUtils.isBeforeOrAt;
 
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.Work;
 import google.registry.flows.EppException;
 import google.registry.flows.EppException.AuthorizationErrorException;
 import google.registry.flows.EppException.ObjectDoesNotExistException;
 import google.registry.flows.EppException.ParameterValueSyntaxErrorException;
 import google.registry.flows.EppException.RequiredParameterMissingException;
+import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.ClientId;
 import google.registry.flows.FlowModule.PollMessageId;
-import google.registry.flows.LoggedInFlow;
 import google.registry.flows.TransactionalFlow;
-import google.registry.model.eppoutput.EppOutput;
+import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.poll.MessageQueueInfo;
 import google.registry.model.poll.PollMessage;
 import google.registry.model.poll.PollMessageExternalKeyConverter;
@@ -53,14 +53,18 @@ import org.joda.time.DateTime;
  * @error {@link PollAckFlow.MissingMessageIdException}
  * @error {@link PollAckFlow.NotAuthorizedToAckMessageException}
  */
-public class PollAckFlow extends LoggedInFlow implements TransactionalFlow {
+public class PollAckFlow implements TransactionalFlow {
 
+  @Inject ExtensionManager extensionManager;
   @Inject @ClientId String clientId;
   @Inject @PollMessageId String messageId;
+  @Inject EppResponse.Builder responseBuilder;
   @Inject PollAckFlow() {}
 
   @Override
-  public final EppOutput run() throws EppException {
+  public final EppResponse run() throws EppException {
+    extensionManager.validate();  // There are no legal extensions for this flow.
+    validateClientIsLoggedIn(clientId);
     if (messageId.isEmpty()) {
       throw new MissingMessageIdException();
     }
@@ -68,10 +72,12 @@ public class PollAckFlow extends LoggedInFlow implements TransactionalFlow {
     Key<PollMessage> pollMessageKey;
     // Try parsing the messageId, and throw an exception if it's invalid.
     try {
-      pollMessageKey = PollMessage.EXTERNAL_KEY_CONVERTER.reverse().convert(messageId);
+      pollMessageKey = parsePollMessageExternalId(messageId);
     } catch (PollMessageExternalKeyParseException e) {
       throw new InvalidMessageIdException(messageId);
     }
+
+    final DateTime now = ofy().getTransactionTime();
 
     // Load the message to be acked. If a message is queued to be delivered in the future, we treat
     // it as if it doesn't exist yet.
@@ -79,6 +85,9 @@ public class PollAckFlow extends LoggedInFlow implements TransactionalFlow {
     if (pollMessage == null || !isBeforeOrAt(pollMessage.getEventTime(), now)) {
       throw new MessageDoesNotExistException(messageId);
     }
+    // TODO(b/68953444): Once the year field on the external poll message ID becomes mandatory, add
+    // a check that the value of the year field is correct, by checking that
+    // makePollMessageExternalId(pollMessage) equals messageId.
 
     // Make sure this client is authorized to ack this message. It could be that the message is
     // supposed to go to a different registrar.
@@ -114,26 +123,19 @@ public class PollAckFlow extends LoggedInFlow implements TransactionalFlow {
     // acked, then we return a special status code indicating that. Note that the query will
     // include the message being acked.
 
-    int messageCount = ofy().doTransactionless(new Work<Integer>() {
-      @Override
-      public Integer run() {
-        return getPollMessagesQuery(clientId, now).count();
-      }});
+    int messageCount = ofy().doTransactionless(() -> getPollMessagesQuery(clientId, now).count());
     if (!includeAckedMessageInCount) {
       messageCount--;
     }
     if (messageCount <= 0) {
-      return createOutput(SUCCESS_WITH_NO_MESSAGES);
+      return responseBuilder.setResultFromCode(SUCCESS_WITH_NO_MESSAGES).build();
     }
-    return createOutput(
-        SUCCESS,
-        null,  // responseData
-        null,  // responseExtensions
-        MessageQueueInfo.create(
-            null,  // eventTime
-            null,  // msg
-            messageCount,
-            messageId));
+    return responseBuilder
+        .setMessageQueueInfo(new MessageQueueInfo.Builder()
+            .setQueueLength(messageCount)
+            .setMessageId(messageId)
+            .build())
+        .build();
   }
 
   /** Registrar is not authorized to ack this message. */

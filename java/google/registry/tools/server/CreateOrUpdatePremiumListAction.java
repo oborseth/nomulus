@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,11 +38,12 @@ public abstract class CreateOrUpdatePremiumListAction implements Runnable {
   public void run() {
     try {
       savePremiumList();
-    } catch (RuntimeException e) {
-      logger.severe(e, e.getMessage());
-      response.setPayload(ImmutableMap.of(
-          "error", e.toString(),
-          "status", "error"));
+    } catch (IllegalArgumentException e) {
+      logger.info(e, "Usage error in attempting to save premium list from nomulus tool command");
+      response.setPayload(ImmutableMap.of("error", e.toString(), "status", "error"));
+    } catch (Exception e) {
+      logger.severe(e, "Unexpected error saving premium list from nomulus tool command");
+      response.setPayload(ImmutableMap.of("error", e.toString(), "status", "error"));
     }
   }
 

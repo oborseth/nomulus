@@ -1,4 +1,4 @@
-
+AllocationToken
 Cancellation
 ContactResource
 Cursor
@@ -11,13 +11,15 @@ ForeignKeyDomainIndex
 ForeignKeyHostIndex
 HistoryEntry
 HostResource
-LogsExportCursor
+KmsSecret
+KmsSecretRevision
 LrpTokenEntity
 Modification
 OneTime
 PollMessage
 PremiumList
 PremiumListEntry
+PremiumListRevision
 RdeRevision
 Recurring
 Registrar

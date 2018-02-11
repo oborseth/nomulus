@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,11 +17,9 @@ package google.registry.flows;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.nullToEmpty;
 
-import com.google.common.base.Optional;
 import com.google.common.base.Strings;
 import dagger.Module;
 import dagger.Provides;
-import google.registry.flows.exceptions.OnlyToolCanPassMetadataException;
 import google.registry.flows.picker.FlowPicker;
 import google.registry.model.domain.launch.ApplicationIdTargetExtension;
 import google.registry.model.domain.metadata.MetadataExtension;
@@ -32,8 +30,11 @@ import google.registry.model.eppinput.EppInput.Poll;
 import google.registry.model.eppinput.EppInput.ResourceCommandWrapper;
 import google.registry.model.eppinput.ResourceCommand;
 import google.registry.model.eppinput.ResourceCommand.SingleResourceCommand;
+import google.registry.model.eppoutput.EppResponse;
+import google.registry.model.eppoutput.Result;
 import google.registry.model.reporting.HistoryEntry;
 import java.lang.annotation.Documented;
+import java.util.Optional;
 import javax.inject.Qualifier;
 
 /** Module to choose and instantiate an EPP flow. */
@@ -153,17 +154,18 @@ public class FlowModule {
 
   @Provides
   @FlowScope
+  Trid provideTrid(EppInput eppInput, ServerTridProvider serverTridProvider) {
+    return Trid.create(
+        eppInput.getCommandWrapper().getClTrid(), serverTridProvider.createServerTrid());
+  }
+
+  @Provides
+  @FlowScope
   @ClientId
   static String provideClientId(SessionMetadata sessionMetadata) {
     // Treat a missing clientId as null so we can always inject a non-null value. All we do with the
     // clientId is log it (as "") or detect its absence, both of which work fine with empty.
     return Strings.nullToEmpty(sessionMetadata.getClientId());
-  }
-
-  @Provides
-  @FlowScope
-  static Trid provideTrid(EppInput eppInput) {
-    return Trid.create(eppInput.getCommandWrapper().getClTrid());
   }
 
   @Provides
@@ -185,8 +187,14 @@ public class FlowModule {
 
   @Provides
   @FlowScope
-  static Optional<AuthInfo> provideAuthInfo(ResourceCommand resourceCommand) {
-    return Optional.fromNullable(((SingleResourceCommand) resourceCommand).getAuthInfo());
+  static AuthInfo provideAuthInfo(ResourceCommand resourceCommand) {
+    return ((SingleResourceCommand) resourceCommand).getAuthInfo();
+  }
+
+  @Provides
+  @FlowScope
+  static Optional<AuthInfo> provideOptionalAuthInfo(ResourceCommand resourceCommand) {
+    return Optional.ofNullable(((SingleResourceCommand) resourceCommand).getAuthInfo());
   }
 
   @Provides
@@ -201,8 +209,12 @@ public class FlowModule {
   @ApplicationId
   static String provideApplicationId(EppInput eppInput) {
     // Treat a missing application id as empty so we can always inject a non-null value.
-    return nullToEmpty(
-        eppInput.getSingleExtension(ApplicationIdTargetExtension.class).getApplicationId());
+    Optional<ApplicationIdTargetExtension> extension =
+        eppInput.getSingleExtension(ApplicationIdTargetExtension.class);
+    checkState(
+        extension.isPresent(),
+        "ApplicationIdTargetExtension must be used to provide the application ID");
+    return nullToEmpty(extension.get().getApplicationId());
   }
 
   @Provides
@@ -224,23 +236,39 @@ public class FlowModule {
       @InputXml byte[] inputXmlBytes,
       @Superuser boolean isSuperuser,
       @ClientId String clientId,
-      EppRequestSource eppRequestSource,
       EppInput eppInput) {
-    HistoryEntry.Builder historyBuilder = new HistoryEntry.Builder()
-        .setTrid(trid)
-        .setXmlBytes(inputXmlBytes)
-        .setBySuperuser(isSuperuser)
-        .setClientId(clientId);
-    MetadataExtension metadataExtension = eppInput.getSingleExtension(MetadataExtension.class);
-    if (metadataExtension != null) {
-      if (!eppRequestSource.equals(EppRequestSource.TOOL)) {
-        throw new EppExceptionInProviderException(new OnlyToolCanPassMetadataException());
-      }
+    HistoryEntry.Builder historyBuilder =
+        new HistoryEntry.Builder()
+            .setTrid(trid)
+            .setXmlBytes(inputXmlBytes)
+            .setBySuperuser(isSuperuser)
+            .setClientId(clientId);
+    Optional<MetadataExtension> metadataExtension =
+        eppInput.getSingleExtension(MetadataExtension.class);
+    if (metadataExtension.isPresent()) {
       historyBuilder
-          .setReason(metadataExtension.getReason())
-          .setRequestedByRegistrar(metadataExtension.getRequestedByRegistrar());
+          .setReason(metadataExtension.get().getReason())
+          .setRequestedByRegistrar(metadataExtension.get().getRequestedByRegistrar());
     }
     return historyBuilder;
+  }
+
+  /**
+   * Provides a partially filled in {@link EppResponse} builder.
+   *
+   * <p>This is not marked with {@link FlowScope} so that each retry gets a fresh one. Otherwise,
+   * the fact that the builder is one-use would cause NPEs.
+   */
+  @Provides
+  static EppResponse.Builder provideEppResponseBuilder(Trid trid) {
+    return new EppResponse.Builder()
+        .setTrid(trid)
+        .setResultFromCode(Result.Code.SUCCESS);  // Default to success.
+  }
+
+  @Provides
+  static FlowMetadata provideFlowMetadata(@Superuser boolean isSuperuser) {
+    return FlowMetadata.newBuilder().setSuperuser(isSuperuser).build();
   }
 
   /** Wrapper class to carry an {@link EppException} to the calling code. */

@@ -13,7 +13,7 @@
         <domain:contact type="admin">sh8013</domain:contact>
         <domain:contact type="tech">sh8013</domain:contact>
         <domain:ns>
-          <domain:hostObj>ns3.fakesite.example</domain:hostObj>
+          <domain:hostObj>ns1.example.external</domain:hostObj>
           <domain:hostObj>ns2.example.external</domain:hostObj>
         </domain:ns>
         <domain:host>ns3.fakesite.example</domain:host>

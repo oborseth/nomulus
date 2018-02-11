@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ import org.joda.time.DateTime;
  * A domain grace period with an expiration time.
  *
  * <p>When a grace period expires, it is lazily removed from the {@link DomainResource} the next
- * time the resource is loaded from the datastore.
+ * time the resource is loaded from Datastore.
  */
 @Embed
 public class GracePeriod extends ImmutableObject {
@@ -120,7 +120,7 @@ public class GracePeriod extends ImmutableObject {
    * Creates a GracePeriod for an (optional) OneTime billing event.
    *
    * <p>Normal callers should always use {@link #forBillingEvent} instead, assuming they do not
-   * need to avoid loading the BillingEvent from datastore.  This method should typically be
+   * need to avoid loading the BillingEvent from Datastore.  This method should typically be
    * called only from test code to explicitly construct GracePeriods.
    */
   public static GracePeriod create(

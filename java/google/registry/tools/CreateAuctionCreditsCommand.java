@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,18 +17,17 @@ package google.registry.tools;
 import static com.google.common.base.CaseFormat.UPPER_CAMEL;
 import static com.google.common.base.CaseFormat.UPPER_UNDERSCORE;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static google.registry.model.registry.Registries.assertTldExists;
-import static java.util.Arrays.asList;
+import static google.registry.util.PreconditionsUtils.checkArgumentPresent;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
-import com.google.common.base.Function;
 import com.google.common.base.Splitter;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Streams;
 import com.google.re2j.Matcher;
 import com.google.re2j.Pattern;
 import google.registry.model.billing.RegistrarCredit;
@@ -43,6 +42,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.function.Function;
+import java.util.stream.Stream;
 import org.joda.money.BigMoney;
 import org.joda.money.CurrencyUnit;
 import org.joda.money.Money;
@@ -68,7 +69,7 @@ import org.joda.time.DateTime;
  * </pre>
  *
  * <p>We only care about three fields: 1) the "Affiliate" field which corresponds to the registrar
- * clientId stored in datastore, and which we use to determine which registrar gets the credit, 2)
+ * clientId stored in Datastore, and which we use to determine which registrar gets the credit, 2)
  * the "Commissions" field which contains the amount of the auction credit (as determined by logic
  * on the auction provider's side, see the Finance Requirements Doc for more information), and 3)
  * the "CurrencyCode" field, which we validate matches the TLD-wide currency for this TLD.
@@ -108,31 +109,25 @@ final class CreateAuctionCreditsCommand extends MutatingCommand {
     CURRENCY_CODE;
 
     public static List<String> getHeaders() {
-      return FluentIterable.from(asList(values()))
-          .transform(new Function<CsvHeader, String>() {
-              @Override
-              public String apply(CsvHeader header) {
-                // Returns the name of the header as it appears in the CSV file.
-                return UPPER_UNDERSCORE.to(UPPER_CAMEL, header.name());
-              }})
-          .toList();
+      return Stream.of(values())
+          .map(header -> UPPER_UNDERSCORE.to(UPPER_CAMEL, header.name()))
+          .collect(toImmutableList());
     }
   }
 
   private static final Pattern QUOTED_STRING = Pattern.compile("\"(.*)\"");
 
   /** Helper function to unwrap a quoted string, failing if the string is not quoted. */
-  private static final Function<String, String> UNQUOTER = new Function<String, String>() {
-    @Override
-    public String apply(String input) {
-      Matcher matcher = QUOTED_STRING.matcher(input);
-      checkArgument(matcher.matches(), "Input not quoted");
-      return matcher.group(1);
-    }};
+  private static final Function<String, String> UNQUOTER =
+      input -> {
+        Matcher matcher = QUOTED_STRING.matcher(input);
+        checkArgument(matcher.matches(), "Input not quoted");
+        return matcher.group(1);
+      };
 
   /** Returns the input string of quoted CSV values split into the list of unquoted values. */
   private static List<String> splitCsvLine(String line) {
-    return FluentIterable.from(Splitter.on(',').split(line)).transform(UNQUOTER).toList();
+    return Streams.stream(Splitter.on(',').split(line)).map(UNQUOTER).collect(toImmutableList());
   }
 
   @Override
@@ -158,13 +153,17 @@ final class CreateAuctionCreditsCommand extends MutatingCommand {
       List<String> fields = splitCsvLine(line);
       checkArgument(CsvHeader.getHeaders().size() == fields.size(), "Wrong number of fields");
       try {
-        String registrarId = fields.get(CsvHeader.AFFILIATE.ordinal());
-        Registrar registrar = checkNotNull(
-            Registrar.loadByClientId(registrarId), "Registrar %s not found", registrarId);
+        String clientId = fields.get(CsvHeader.AFFILIATE.ordinal());
+        Registrar registrar =
+            checkArgumentPresent(
+                Registrar.loadByClientId(clientId), "Registrar %s not found", clientId);
         CurrencyUnit tldCurrency = Registry.get(tld).getCurrency();
         CurrencyUnit currency = CurrencyUnit.of((fields.get(CsvHeader.CURRENCY_CODE.ordinal())));
-        checkArgument(tldCurrency.equals(currency),
-            "Credit in wrong currency (%s should be %s)", currency, tldCurrency);
+        checkArgument(
+            tldCurrency.equals(currency),
+            "Credit in wrong currency (%s should be %s)",
+            currency,
+            tldCurrency);
         // We use BigDecimal and BigMoney to preserve fractional currency units when computing the
         // total amount of each credit (since auction credits are percentages of winning bids).
         BigDecimal creditAmount = new BigDecimal(fields.get(CsvHeader.COMMISSIONS.ordinal()));

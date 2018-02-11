@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,10 +22,10 @@ import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.util.DateTimeUtils.isBeforeOrAt;
 import static google.registry.util.FormattingLogger.getLoggerForCallerClass;
 
-import com.googlecode.objectify.VoidWork;
 import google.registry.model.ofy.CommitLogCheckpoint;
 import google.registry.model.ofy.CommitLogCheckpointRoot;
 import google.registry.request.Action;
+import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
 import google.registry.util.FormattingLogger;
 import google.registry.util.TaskEnqueuer;
@@ -33,7 +33,7 @@ import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /**
- * Action that saves commit log checkpoints to datastore and kicks off a diff export task.
+ * Action that saves commit log checkpoints to Datastore and kicks off a diff export task.
  *
  * <p>We separate computing and saving the checkpoint from exporting it because the export to GCS
  * is retryable but should not require the computation of a new checkpoint. Saving the checkpoint
@@ -43,9 +43,11 @@ import org.joda.time.DateTime;
  * <p>This action's supported method is GET rather than POST because it gets invoked via cron.
  */
 @Action(
-    path = "/_dr/cron/commitLogCheckpoint",
-    method = Action.Method.GET,
-    automaticallyPrintOk = true)
+  path = "/_dr/cron/commitLogCheckpoint",
+  method = Action.Method.GET,
+  automaticallyPrintOk = true,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public final class CommitLogCheckpointAction implements Runnable {
 
   private static final FormattingLogger logger = getLoggerForCallerClass();
@@ -60,24 +62,26 @@ public final class CommitLogCheckpointAction implements Runnable {
   @Override
   public void run() {
     final CommitLogCheckpoint checkpoint = strategy.computeCheckpoint();
-    logger.info("Generated candidate checkpoint for time " + checkpoint.getCheckpointTime());
-    ofy().transact(new VoidWork() {
-      @Override
-      public void vrun() {
-        DateTime lastWrittenTime = CommitLogCheckpointRoot.loadRoot().getLastWrittenTime();
-        if (isBeforeOrAt(checkpoint.getCheckpointTime(), lastWrittenTime)) {
-          logger.info("Newer checkpoint already written at time: " + lastWrittenTime);
-          return;
-        }
-        ofy().saveWithoutBackup().entities(
-            checkpoint,
-            CommitLogCheckpointRoot.create(checkpoint.getCheckpointTime()));
-        // Enqueue a diff task between previous and current checkpoints.
-        taskEnqueuer.enqueue(
-            getQueue(QUEUE_NAME),
-            withUrl(ExportCommitLogDiffAction.PATH)
-                .param(LOWER_CHECKPOINT_TIME_PARAM, lastWrittenTime.toString())
-                .param(UPPER_CHECKPOINT_TIME_PARAM, checkpoint.getCheckpointTime().toString()));
-      }});
+    logger.infofmt("Generated candidate checkpoint for time: %s", checkpoint.getCheckpointTime());
+    ofy()
+        .transact(
+            () -> {
+              DateTime lastWrittenTime = CommitLogCheckpointRoot.loadRoot().getLastWrittenTime();
+              if (isBeforeOrAt(checkpoint.getCheckpointTime(), lastWrittenTime)) {
+                logger.infofmt("Newer checkpoint already written at time: %s", lastWrittenTime);
+                return;
+              }
+              ofy()
+                  .saveWithoutBackup()
+                  .entities(
+                      checkpoint, CommitLogCheckpointRoot.create(checkpoint.getCheckpointTime()));
+              // Enqueue a diff task between previous and current checkpoints.
+              taskEnqueuer.enqueue(
+                  getQueue(QUEUE_NAME),
+                  withUrl(ExportCommitLogDiffAction.PATH)
+                      .param(LOWER_CHECKPOINT_TIME_PARAM, lastWrittenTime.toString())
+                      .param(
+                          UPPER_CHECKPOINT_TIME_PARAM, checkpoint.getCheckpointTime().toString()));
+            });
   }
 }

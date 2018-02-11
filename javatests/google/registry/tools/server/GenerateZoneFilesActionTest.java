@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
 import google.registry.model.domain.secdns.DelegationSignerData;
+import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.host.HostResource;
 import google.registry.testing.FakeClock;
 import google.registry.testing.mapreduce.MapreduceTestCase;
@@ -44,6 +45,7 @@ import java.net.InetAddress;
 import java.util.Map;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
+import org.joda.time.Duration;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -70,6 +72,16 @@ public class GenerateZoneFilesActionTest extends MapreduceTestCase<GenerateZoneF
 
     ImmutableSet<Key<HostResource>> nameservers =
         ImmutableSet.of(Key.create(host1), Key.create(host2));
+    // This domain will have glue records, because it has a subordinate host which is its own
+    // nameserver. None of the other domains should have glue records, because their nameservers are
+    // subordinate to different domains.
+    persistResource(newDomainResource("bar.tld").asBuilder()
+        .addNameservers(nameservers)
+        .addSubordinateHost("ns.bar.tld")
+        .build());
+    persistResource(newDomainResource("foo.tld").asBuilder()
+        .addSubordinateHost("ns.foo.tld")
+        .build());
     persistResource(newDomainResource("ns-and-ds.tld").asBuilder()
         .addNameservers(nameservers)
         .setDsData(ImmutableSet.of(DelegationSignerData.create(1, 2, 3, new byte[] {0, 1, 2})))
@@ -77,12 +89,24 @@ public class GenerateZoneFilesActionTest extends MapreduceTestCase<GenerateZoneF
     persistResource(newDomainResource("ns-only.tld").asBuilder()
         .addNameservers(nameservers)
         .build());
+    persistResource(newDomainResource("ns-only-client-hold.tld").asBuilder()
+        .addNameservers(nameservers)
+        .setStatusValues(ImmutableSet.of(StatusValue.CLIENT_HOLD))
+        .build());
+    persistResource(newDomainResource("ns-only-pending-delete.tld").asBuilder()
+        .addNameservers(nameservers)
+        .setStatusValues(ImmutableSet.of(StatusValue.PENDING_DELETE))
+        .build());
+    persistResource(newDomainResource("ns-only-server-hold.tld").asBuilder()
+        .addNameservers(nameservers)
+        .setStatusValues(ImmutableSet.of(StatusValue.SERVER_HOLD))
+        .build());
+    // These should be ignored; contact and applications aren't in DNS, hosts need to be from the
+    // same tld and have ip addresses, and domains need to be from the same tld and have hosts (even
+    // in the case where domains contain DS data).
     persistResource(newDomainResource("ds-only.tld").asBuilder()
         .setDsData(ImmutableSet.of(DelegationSignerData.create(1, 2, 3, new byte[] {0, 1, 2})))
         .build());
-
-    // These should be ignored; contact and applications aren't in DNS, hosts need to be from the
-    // same tld and have ip addresses, and domains need to be from the same tld and have hosts.
     persistActiveContact("ignored_contact");
     persistActiveDomainApplication("ignored_application.tld");
     persistActiveHost("ignored.host.tld");  // No ips.
@@ -99,6 +123,9 @@ public class GenerateZoneFilesActionTest extends MapreduceTestCase<GenerateZoneF
     action.bucket = "zonefiles-bucket";
     action.gcsBufferSize = 123;
     action.datastoreRetention = standardDays(29);
+    action.dnsDefaultATtl = Duration.standardSeconds(11);
+    action.dnsDefaultNsTtl = Duration.standardSeconds(222);
+    action.dnsDefaultDsTtl = Duration.standardSeconds(3333);
     action.clock = new FakeClock(now.plusMinutes(2));  // Move past the actions' 2 minute check.
 
     Map<String, Object> response = action.handleJsonRequest(ImmutableMap.<String, Object>of(

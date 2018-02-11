@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-{namespace registry.soy.registrar.domain autoescape="strict"}
+{namespace registry.soy.registrar.domain}
 
 
 /**
  * Set view for domains.
  */
 {template .set}
-  <div class="{css set} {css domain}">
+  <div class="{css('set')} {css('domain')}">
     <p>Please enter a query for a single contact in the form "domain/[domain id]".
   </div>
 {/template}
@@ -33,7 +33,7 @@
  */
 {template .item}
   {let $isEdit: isNonnull($item['domain:name']) /}
-  <form name="item" class="{css item} {css domain}">
+  <form name="item" class="{css('item')} {css('domain')}">
     <h1>
       {if $isEdit}
         {$item['domain:name']['keyValue']}
@@ -43,7 +43,7 @@
     </h1>
     <table>
       {if not $isEdit}
-        <tr class="{css section-lead}">
+        <tr class="{css('section-lead')}">
           <th colspan="2"><h2>Domain</h2></th>
         </tr>
         {call registry.soy.forms.inputFieldRow data="all"}
@@ -62,7 +62,7 @@
           {param value: $item['domain:exDate'] /}
         {/call}
       {/if}
-      <tr class="{css section-lead}">
+      <tr class="{css('section-lead')}">
         <th colspan="2"><h2>Authentication</h2></th>
       </tr>
       {call registry.soy.forms.inputFieldRowWithValue data="all"}
@@ -71,11 +71,11 @@
         {param value: isNonnull($item['domain:authInfo']) ?
           $item['domain:authInfo']['domain:pw'] : '' /}
       {/call}
-      <tr class="{css section-lead}">
+      <tr class="{css('section-lead')}">
         <th colspan="2">
           <h3>Contact information</h3>
           <button id="domain-contact-add-button" type="button"
-                  class="{css kd-button} {css reg-add}"
+                  class="{css('kd-button')} {css('reg-add')}"
                   {if $readonly}disabled{/if}>
             Add Contact
           </button>
@@ -102,31 +102,31 @@
         {/call}
       {/if}
       <tr id="domain-contacts-footer"></tr>
-      <tr class="{css section-lead}">
+      <tr class="{css('section-lead')}">
         <th colspan="2">
           <h3>Nameservers</h3>
           <button id="domain-host-add-button" type="button"
-                  class="{css kd-button} {css reg-add}"
+                  class="{css('kd-button')} {css('reg-add')}"
                   {if $readonly}disabled{/if}>
             Add Host
           </button>
         </th>
       </tr>
       {if isNonnull($item['domain:ns'] and isNonnull($item['domain:ns']['domain:hostObj']))}
-        {foreach $hostObj in $item['domain:ns']['domain:hostObj']}
+        {for $hostObj in $item['domain:ns']['domain:hostObj']}
           {let $hostIdx: index($hostObj) /}
           {call registry.soy.forms.inputFieldRowWithValue data="all"}
             {param label: 'Host ' + $hostIdx /}
             {param name: 'domain:ns.domain:hostObj[' + $hostIdx + '].value' /}
             {param value: $hostObj /}
-            {param clazz kind="text"}{css domain-hostObj}{/param}
+            {param clazz kind="text"}{css('domain-hostObj')}{/param}
           {/call}
-        {/foreach}
+        {/for}
       {/if}
       <tr id="domain-hosts-footer"></tr>
 
       {if isNonnull($item['launch:applicationID'])}
-        <tr class="{css section-lead}">
+        <tr class="{css('section-lead')}">
           <th colspan="2"><h2>Sunrise domain application</h2></th>
         </tr>
         {call registry.soy.forms.inputFieldRowWithValue data="all"}
@@ -139,7 +139,7 @@
         <tr>
           <td>Mark Data
             <td>
-              <textarea class="{css reg-domain-mark}" {if $readonly}readonly{/if}>
+              <textarea class="{css('reg-domain-mark')}" {if $readonly}readonly{/if}>
                 {$item['mark:mark']['keyValue']}</textarea>
             </td>
         </tr>
@@ -162,10 +162,10 @@
 
 
 /** Renders an input form row for a specific type of contact. */
-{template .showContact_ private="true"}
+{template .showContact_ visibility="private"}
   {@param contacts: list<map<string, ?>>} /** List of EPP domain:contacts. */
   {@param type: string} /** Type of contact (e.g. admin, tech) */
-  {foreach $contact in $contacts}
+  {for $contact in $contacts}
     {if $type == $contact['@type']}
       {call registry.soy.forms.inputFieldRowWithValue data="all"}
         {param label: $contact['@type'] + ' contact' /}
@@ -177,7 +177,7 @@
              type="hidden"
              value="{$contact['@type']}">
     {/if}
-  {/foreach}
+  {/for}
 {/template}
 
 
@@ -187,10 +187,10 @@
  * @param? item
  */
 {template .update}
-  <form name="item" class="{css item} {css domain}">
+  <form name="item" class="{css('item')} {css('domain')}">
     <h1>{$item['domain:name']['keyValue']}</h1>
     <table>
-      <tr class="{css section-lead}">
+      <tr class="{css('section-lead')}">
         <th colspan="2"><h2>Contact</h2></th>
       </tr>
       {call registry.soy.forms.inputFieldRowWithValue data="all"}
@@ -198,7 +198,7 @@
         {param name: 'domain:registrant' /}
         {param value: $item['domain:registrant'] /}
       {/call}
-      <tr class="{css section-lead}">
+      <tr class="{css('section-lead')}">
         <th colspan="2"><h2>Authentication</h2></th>
       </tr>
       {call registry.soy.forms.inputFieldRowWithValue data="all"}

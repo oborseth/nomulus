@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,10 @@
 
 package google.registry.tools;
 
+import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import com.beust.jcommander.ParameterException;
 import org.junit.Test;
@@ -29,7 +32,7 @@ public class CreateHostCommandTest extends EppToolCommandTestCase<CreateHostComm
         "--client=NewRegistrar",
         "--host=example.tld",
         "--addresses=162.100.102.99,2001:0db8:85a3:0000:0000:8a2e:0370:7334,4.5.6.7");
-    eppVerifier().verifySent("host_create_complete.xml");
+    eppVerifier.verifySent("host_create_complete.xml");
   }
 
   @Test
@@ -38,22 +41,23 @@ public class CreateHostCommandTest extends EppToolCommandTestCase<CreateHostComm
     runCommandForced(
         "--client=NewRegistrar",
         "--host=notours.external");
-    eppVerifier().verifySent("host_create_minimal.xml");
+    eppVerifier.verifySent("host_create_minimal.xml");
   }
 
   @Test
   public void testFailure_missingHost() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--client=NewRegistrar");
+    assertThrows(ParameterException.class, () -> runCommandForced("--client=NewRegistrar"));
   }
 
   @Test
   public void testFailure_invalidIpAddress() throws Exception {
     createTld("tld");
-    thrown.expect(IllegalArgumentException.class, "'a.b.c.d' is not an IP string literal.");
-    runCommandForced(
-        "--client=NewRegistrar",
-        "--host=example.tld",
-        "--addresses=a.b.c.d");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--client=NewRegistrar", "--host=example.tld", "--addresses=a.b.c.d"));
+    assertThat(thrown).hasMessageThat().contains("'a.b.c.d' is not an IP string literal.");
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,27 +16,36 @@ package google.registry.model.billing;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.model.registry.Registries.assertTldExists;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.collect.ComparisonChain;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Ordering;
+import com.google.common.collect.Streams;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.annotation.Entity;
 import com.googlecode.objectify.annotation.Id;
 import com.googlecode.objectify.annotation.Parent;
 import google.registry.model.Buildable;
 import google.registry.model.ImmutableObject;
+import google.registry.model.annotations.ReportedOn;
 import google.registry.model.registrar.Registrar;
 import google.registry.model.registry.Registry;
+import java.util.Optional;
 import org.joda.money.CurrencyUnit;
 import org.joda.time.DateTime;
 
-/** A per-registrar billing credit, applied toward future charges for registrar activity. */
+/**
+ * A per-registrar billing credit, applied toward future charges for registrar activity.
+ *
+ * <p>NOTE: While credits are tracked within the model, there is no built-in support for actually
+ * incorporating these credits into the generated billing data, and the model support for credits
+ * should be considered quasi-deprecated (it may be removed without notice).
+ */
+@ReportedOn
 @Entity
 public final class RegistrarCredit extends ImmutableObject implements Buildable {
 
@@ -55,7 +64,7 @@ public final class RegistrarCredit extends ImmutableObject implements Buildable 
     PROMOTION("Promotional Credit");
 
     /** A descriptive name for a credit of this type. */
-    private String descriptiveName;
+    private final String descriptiveName;
 
     CreditType(String descriptiveName) {
       this.descriptiveName = descriptiveName;
@@ -185,7 +194,7 @@ public final class RegistrarCredit extends ImmutableObject implements Buildable 
           Registry.get(instance.tld).getCurrency().equals(instance.currency),
           "Credits must be in the currency of the assigned TLD");
       instance.description =
-          Optional.fromNullable(instance.description).or(instance.getDefaultDescription());
+          Optional.ofNullable(instance.description).orElse(instance.getDefaultDescription());
       return super.build();
     }
   }
@@ -208,7 +217,8 @@ public final class RegistrarCredit extends ImmutableObject implements Buildable 
    * <p>The resulting list sorts the credits first by type and then by creation time.
    */
   public static ImmutableList<RegistrarCredit> loadAllForRegistrar(Registrar registrar) {
-    return FluentIterable.from(ofy().load().type(RegistrarCredit.class).ancestor(registrar))
-        .toSortedList(CREDIT_PRIORITY_ORDERING);
+    return Streams.stream(ofy().load().type(RegistrarCredit.class).ancestor(registrar))
+        .sorted(CREDIT_PRIORITY_ORDERING)
+        .collect(toImmutableList());
   }
 }

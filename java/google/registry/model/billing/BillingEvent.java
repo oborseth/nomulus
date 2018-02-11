@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,11 +21,9 @@ import static com.google.common.base.Preconditions.checkState;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.util.CollectionUtils.forceEmptyToNull;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
-import static google.registry.util.CollectionUtils.union;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
@@ -34,17 +32,18 @@ import com.googlecode.objectify.annotation.Entity;
 import com.googlecode.objectify.annotation.Id;
 import com.googlecode.objectify.annotation.IgnoreSave;
 import com.googlecode.objectify.annotation.Index;
-import com.googlecode.objectify.annotation.OnLoad;
 import com.googlecode.objectify.annotation.Parent;
 import com.googlecode.objectify.condition.IfNull;
 import google.registry.model.Buildable;
 import google.registry.model.ImmutableObject;
+import google.registry.model.annotations.ReportedOn;
 import google.registry.model.common.TimeOfYear;
 import google.registry.model.domain.GracePeriod;
 import google.registry.model.domain.rgp.GracePeriodStatus;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.model.transfer.TransferData.TransferServerApproveEntity;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
 import org.joda.money.Money;
@@ -56,8 +55,6 @@ public abstract class BillingEvent extends ImmutableObject
 
   /** The reason for the bill, which maps 1:1 to skus in go/registry-billing-skus. */
   public enum Reason {
-    // TODO(b/27777398): Drop Reason.AUTO_RENEW after migration to Flag.AUTO_RENEW.
-    AUTO_RENEW,
     CREATE,
     @Deprecated // TODO(b/31676071): remove this legacy value once old data is cleaned up.
     ERROR,
@@ -192,16 +189,17 @@ public abstract class BillingEvent extends ImmutableObject
     @Override
     public T build() {
       T instance = getInstance();
-      checkNotNull(instance.reason);
-      checkNotNull(instance.clientId);
-      checkNotNull(instance.eventTime);
-      checkNotNull(instance.targetId);
-      checkNotNull(instance.parent);
+      checkNotNull(instance.reason, "Reason must be set");
+      checkNotNull(instance.clientId, "Client ID must be set");
+      checkNotNull(instance.eventTime, "Event time must be set");
+      checkNotNull(instance.targetId, "Target ID must be set");
+      checkNotNull(instance.parent, "Parent must be set");
       return super.build();
     }
   }
 
   /** A one-time billable event. */
+  @ReportedOn
   @Entity
   public static class OneTime extends BillingEvent {
 
@@ -220,7 +218,7 @@ public abstract class BillingEvent extends ImmutableObject
     Integer periodYears = null;
 
     /**
-     * For {@link Flag#SYNTHETIC} events, when this event was persisted to datastore (i.e. the
+     * For {@link Flag#SYNTHETIC} events, when this event was persisted to Datastore (i.e. the
      * cursor position at the time the recurrence expansion job was last run). In the event a job
      * needs to be undone, a query on this field will return the complete set of potentially bad
      * events.
@@ -332,17 +330,9 @@ public abstract class BillingEvent extends ImmutableObject
    * recurring event might change and each time we bill for it we need to bill at the current cost,
    * not the value that was in use at the time the recurrence was created.
    */
+  @ReportedOn
   @Entity
   public static class Recurring extends BillingEvent {
-
-    // TODO(b/27777398): Remove after migration is complete and Reason.AUTO_RENEW is removed.
-    @OnLoad
-    void setAutorenewFlag() {
-      if (Reason.AUTO_RENEW.equals(reason)) {
-        reason = Reason.RENEW;
-        flags = union(getFlags(), Flag.AUTO_RENEW);
-      }
-    }
 
     /**
      * The billing event recurs every year between {@link #eventTime} and this time on the
@@ -401,7 +391,7 @@ public abstract class BillingEvent extends ImmutableObject
         checkNotNull(instance.reason);
         instance.recurrenceTimeOfYear = TimeOfYear.fromDateTime(instance.eventTime);
         instance.recurrenceEndTime =
-            Optional.fromNullable(instance.recurrenceEndTime).or(END_OF_TIME);
+            Optional.ofNullable(instance.recurrenceEndTime).orElse(END_OF_TIME);
         return super.build();
       }
     }
@@ -413,6 +403,7 @@ public abstract class BillingEvent extends ImmutableObject
    * <p>This is implemented as a separate event rather than a bit on BillingEvent in order to
    * preserve the immutability of billing events.
    */
+  @ReportedOn
   @Entity
   public static class Cancellation extends BillingEvent {
 
@@ -511,8 +502,8 @@ public abstract class BillingEvent extends ImmutableObject
       @Override
       public Cancellation build() {
         Cancellation instance = getInstance();
-        checkNotNull(instance.billingTime);
-        checkNotNull(instance.reason);
+        checkNotNull(instance.billingTime, "Must set billing time");
+        checkNotNull(instance.reason, "Must set reason");
         checkState((instance.refOneTime == null) != (instance.refRecurring == null),
             "Cancellations must have exactly one billing event key set");
         return super.build();
@@ -523,6 +514,7 @@ public abstract class BillingEvent extends ImmutableObject
   /**
    * An event representing a modification of an existing one-time billing event.
    */
+  @ReportedOn
   @Entity
   public static class Modification extends BillingEvent {
 

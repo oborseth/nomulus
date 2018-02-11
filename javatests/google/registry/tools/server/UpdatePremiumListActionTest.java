@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,12 +15,15 @@
 package google.registry.tools.server;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
+import static google.registry.model.registry.label.PremiumListUtils.getPremiumPrice;
 import static google.registry.testing.DatastoreHelper.createTlds;
+import static google.registry.testing.DatastoreHelper.loadPremiumListEntries;
 import static javax.servlet.http.HttpServletResponse.SC_OK;
 
+import google.registry.model.registry.Registry;
 import google.registry.model.registry.label.PremiumList;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeJsonResponse;
 import org.joda.money.Money;
 import org.junit.Before;
@@ -39,9 +42,6 @@ public class UpdatePremiumListActionTest {
   public final AppEngineRule appEngine = AppEngineRule.builder()
       .withDatastore()
       .build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   UpdatePremiumListAction action;
   FakeJsonResponse response;
@@ -79,11 +79,11 @@ public class UpdatePremiumListActionTest {
     action.inputData = "rich,USD 75\nricher,USD 5000\npoor, USD 0.99";
     action.run();
     assertThat(response.getStatus()).isEqualTo(SC_OK);
-    PremiumList premiumList = PremiumList.get("foo").get();
-    assertThat(premiumList.getPremiumListEntries()).hasSize(3);
-    assertThat(premiumList.getPremiumPrice("rich")).hasValue(Money.parse("USD 75"));
-    assertThat(premiumList.getPremiumPrice("richer")).hasValue(Money.parse("USD 5000"));
-    assertThat(premiumList.getPremiumPrice("poor")).hasValue(Money.parse("USD 0.99"));
-    assertThat(premiumList.getPremiumPrice("diamond")).isAbsent();
+    Registry registry = Registry.get("foo");
+    assertThat(loadPremiumListEntries(PremiumList.get("foo").get())).hasSize(3);
+    assertThat(getPremiumPrice("rich", registry)).hasValue(Money.parse("USD 75"));
+    assertThat(getPremiumPrice("richer", registry)).hasValue(Money.parse("USD 5000"));
+    assertThat(getPremiumPrice("poor", registry)).hasValue(Money.parse("USD 0.99"));
+    assertThat(getPremiumPrice("diamond", registry)).isEmpty();
   }
 }

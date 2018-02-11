@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,13 +16,13 @@ package google.registry.export;
 
 import static com.google.appengine.tools.cloudstorage.GcsServiceFactory.createGcsService;
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistActiveDomain;
 import static google.registry.testing.DatastoreHelper.persistActiveDomainApplication;
 import static google.registry.testing.DatastoreHelper.persistDeletedDomain;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.GcsTestingUtils.readGcsFile;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.appengine.tools.cloudstorage.GcsFilename;
@@ -90,15 +90,11 @@ public class ExportDomainListsActionTest extends MapreduceTestCase<ExportDomainL
     assertThat(Splitter.on('\n').splitToList(tlds)).containsExactly("onetwo.tld", "rudnitzky.tld");
     // Make sure that the test TLD file wasn't written out.
     GcsFilename nonexistentFile = new GcsFilename("outputbucket", "testtld.txt");
-    try {
-      readGcsFile(gcsService, nonexistentFile);
-      assertWithMessage("Expected FileNotFoundException to be thrown").fail();
-    } catch (FileNotFoundException e) {
-      ListResult ls = gcsService.list("outputbucket", ListOptions.DEFAULT);
-      assertThat(ls.next().getName()).isEqualTo("tld.txt");
-      // Make sure that no other files were written out.
-      assertThat(ls.hasNext()).isFalse();
-    }
+    assertThrows(FileNotFoundException.class, () -> readGcsFile(gcsService, nonexistentFile));
+    ListResult ls = gcsService.list("outputbucket", ListOptions.DEFAULT);
+    assertThat(ls.next().getName()).isEqualTo("tld.txt");
+    // Make sure that no other files were written out.
+    assertThat(ls.hasNext()).isFalse();
   }
 
   @Test

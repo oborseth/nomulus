@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@ package google.registry.whois;
 
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
-import static google.registry.testing.DatastoreHelper.persistResource;
-import static google.registry.whois.WhoisHelper.loadWhoisTestFile;
+import static google.registry.testing.DatastoreHelper.persistNewRegistrar;
+import static google.registry.whois.WhoisTestData.loadFile;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -26,6 +26,7 @@ import google.registry.model.host.HostResource;
 import google.registry.model.registrar.Registrar;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.FakeClock;
+import google.registry.whois.WhoisResponse.WhoisResponseResults;
 import org.joda.time.DateTime;
 import org.junit.Before;
 import org.junit.Rule;
@@ -49,18 +50,12 @@ public class NameserverWhoisResponseTest {
 
   @Before
   public void setUp() {
-    persistResource(new Registrar.Builder()
-        .setClientId("example")
-        .setRegistrarName("Example Registrar, Inc.")
-        .setType(Registrar.Type.REAL)
-        .setIanaIdentifier(8L)
-        .build());
-
+    persistNewRegistrar("example", "Example Registrar, Inc.", Registrar.Type.REAL, 8L);
     createTld("tld");
 
     hostResource1 = new HostResource.Builder()
-        .setFullyQualifiedHostName("NS1.EXAMPLE.tld")
-        .setCurrentSponsorClientId("example")
+        .setFullyQualifiedHostName("ns1.example.tld")
+        .setPersistedCurrentSponsorClientId("example")
         .setInetAddresses(ImmutableSet.of(
             InetAddresses.forString("192.0.2.123"),
             InetAddresses.forString("2001:0DB8::1")))
@@ -68,8 +63,8 @@ public class NameserverWhoisResponseTest {
         .build();
 
     hostResource2 = new HostResource.Builder()
-        .setFullyQualifiedHostName("NS2.EXAMPLE.tld")
-        .setCurrentSponsorClientId("example")
+        .setFullyQualifiedHostName("ns2.example.tld")
+        .setPersistedCurrentSponsorClientId("example")
         .setInetAddresses(ImmutableSet.of(
             InetAddresses.forString("192.0.2.123"),
             InetAddresses.forString("2001:0DB8::1")))
@@ -81,15 +76,22 @@ public class NameserverWhoisResponseTest {
   public void testGetTextOutput() {
     NameserverWhoisResponse nameserverWhoisResponse =
         new NameserverWhoisResponse(hostResource1, clock.nowUtc());
-    assertThat(nameserverWhoisResponse.getPlainTextOutput(false, "Doodle Disclaimer"))
-        .isEqualTo(loadWhoisTestFile("whois_nameserver.txt"));
+    assertThat(
+            nameserverWhoisResponse.getResponse(
+                false,
+                "Doodle Disclaimer\nI exist so that carriage return\nin disclaimer can be tested."))
+        .isEqualTo(WhoisResponseResults.create(loadFile("whois_nameserver.txt"), 1));
   }
 
   @Test
   public void testGetMultipleNameserversResponse() {
     NameserverWhoisResponse nameserverWhoisResponse =
         new NameserverWhoisResponse(ImmutableList.of(hostResource1, hostResource2), clock.nowUtc());
-    assertThat(nameserverWhoisResponse.getPlainTextOutput(false, "Doodle Disclaimer"))
-        .isEqualTo(loadWhoisTestFile("whois_multiple_nameservers.txt"));
+    assertThat(
+            nameserverWhoisResponse.getResponse(
+                false,
+                "Doodle Disclaimer\nI exist so that carriage return\nin disclaimer can be tested."))
+        .isEqualTo(
+            WhoisResponseResults.create(loadFile("whois_multiple_nameservers.txt"), 2));
   }
 }

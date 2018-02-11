@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,23 +14,48 @@
 
 package google.registry.model.domain.fee06;
 
-import com.google.common.base.Optional;
 import google.registry.model.domain.fee.FeeCheckCommandExtensionItem;
-import google.registry.model.domain.fee.FeeCheckResponseExtensionItem;
-import google.registry.model.domain.fee.FeeQueryCommandExtensionItemImpl;
+import google.registry.model.domain.fee.FeeExtensionCommandDescriptor;
+import java.util.Optional;
 import javax.xml.bind.annotation.XmlType;
 import org.joda.money.CurrencyUnit;
 import org.joda.time.DateTime;
 
 /** An individual price check item in version 0.6 of the fee extension on Check commands. */
 @XmlType(propOrder = {"name", "currency", "command", "period"})
-public class FeeCheckCommandExtensionItemV06
-    extends FeeQueryCommandExtensionItemImpl implements FeeCheckCommandExtensionItem {
+public class FeeCheckCommandExtensionItemV06 extends FeeCheckCommandExtensionItem {
 
   /** The fully qualified domain name being checked. */
   String name;
 
   CurrencyUnit currency;
+
+  /** The command being checked.  */
+  FeeExtensionCommandDescriptor command;
+
+  /** The name of the command being checked. */
+  @Override
+  public CommandName getCommandName() {
+    return command.getCommand();
+  }
+
+  /** The command name before being parsed into an enum, for use in error strings. */
+  @Override
+  public String getUnparsedCommandName() {
+    return command.getUnparsedCommandName();
+  }
+
+  /** The phase of the command being checked. */
+  @Override
+  public String getPhase() {
+    return command.getPhase();
+  }
+
+  /** The subphase of the command being checked. */
+  @Override
+  public String getSubphase() {
+    return command.getSubphase();
+  }
 
   @Override
   public boolean isDomainNameSupported() {
@@ -48,12 +73,12 @@ public class FeeCheckCommandExtensionItemV06
   }
 
   @Override
-  public FeeCheckResponseExtensionItem.Builder createResponseBuilder() {
+  public FeeCheckResponseExtensionItemV06.Builder createResponseBuilder() {
     return new FeeCheckResponseExtensionItemV06.Builder();
   }
 
   @Override
   public Optional<DateTime> getEffectiveDate() {
-    return Optional.absent();
+    return Optional.empty();
   }
 }

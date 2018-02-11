@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,19 +19,24 @@ import javax.xml.bind.annotation.XmlAttribute;
 import javax.xml.bind.annotation.XmlValue;
 
 /**
- * EPP-compatible version of XML type for contact identifiers associated with a domain, which can
- * be converted to a storable {@link DesignatedContact}.
+ * EPP-XML-serializable equivalent of {@link DesignatedContact}.
  *
- * @see "http://tools.ietf.org/html/rfc5731#section-2.2"
+ * <p>This type is used on the wire for EPP XML, where only the contact ID (foreign key) is exposed.
+ * This is converted to and from the persisted type, {@link DesignatedContact}, which stores the
+ * Datastore key instead of the foreign key.
+ *
+ * @see <a href="http://tools.ietf.org/html/rfc5731#section-2.2">
+ *     RFC 5731 - EPP Domain Name Mapping - Contact and Client Identifiers</a>
  */
-class ForeignKeyedDesignatedContact extends ImmutableObject {
+public class ForeignKeyedDesignatedContact extends ImmutableObject {
   @XmlAttribute(required = true)
   DesignatedContact.Type type;
 
   @XmlValue
   String contactId;
 
-  static ForeignKeyedDesignatedContact create(DesignatedContact.Type type, String contactId) {
+  public static ForeignKeyedDesignatedContact create(
+      DesignatedContact.Type type, String contactId) {
     ForeignKeyedDesignatedContact instance = new ForeignKeyedDesignatedContact();
     instance.type = type;
     instance.contactId = contactId;

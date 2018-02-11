@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,11 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.base.Verify.verify;
+import static com.google.common.util.concurrent.Futures.transform;
+import static com.google.common.util.concurrent.Futures.transformAsync;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static google.registry.bigquery.BigqueryUtils.toJobReferenceString;
+import static google.registry.config.RegistryConfig.getProjectId;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
@@ -47,11 +51,9 @@ import com.google.api.services.bigquery.model.TableFieldSchema;
 import com.google.api.services.bigquery.model.TableReference;
 import com.google.api.services.bigquery.model.TableRow;
 import com.google.api.services.bigquery.model.ViewDefinition;
-import com.google.common.base.Function;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableTable;
 import com.google.common.io.BaseEncoding;
-import com.google.common.util.concurrent.AsyncFunction;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
@@ -60,7 +62,6 @@ import google.registry.bigquery.BigqueryUtils.DestinationFormat;
 import google.registry.bigquery.BigqueryUtils.SourceFormat;
 import google.registry.bigquery.BigqueryUtils.TableType;
 import google.registry.bigquery.BigqueryUtils.WriteDisposition;
-import google.registry.config.RegistryEnvironment;
 import google.registry.util.FormattingLogger;
 import google.registry.util.NonFinalForTesting;
 import google.registry.util.Sleeper;
@@ -70,7 +71,6 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import javax.annotation.Nullable;
 import org.joda.time.DateTime;
@@ -246,7 +246,7 @@ public class BigqueryConnection implements AutoCloseable {
       }
 
       public DestinationTable build() {
-        tableRef.setProjectId(getEnvironmentProjectId());
+        tableRef.setProjectId(getProjectId());
         table.setTableReference(tableRef);
         checkState(!isNullOrEmpty(table.getTableReference().getDatasetId()));
         checkState(!isNullOrEmpty(table.getTableReference().getTableId()));
@@ -358,33 +358,33 @@ public class BigqueryConnection implements AutoCloseable {
   }
 
   /**
-   * A function that updates the specified Bigquery table to reflect the metadata from the input
-   * DestinationTable, passing the same DestinationTable through as the output.  If the specified
-   * table does not already exist, it will be inserted into the dataset.
+   * Updates the specified Bigquery table to reflect the metadata from the input.
+   *
+   * <p>Returns the input DestinationTable. If the specified table does not already exist, it will
+   * be inserted into the dataset.
    *
    * <p>Clients can call this function directly to update a table on demand, or can pass it to
    * Futures.transform() to update a table produced as the asynchronous result of a load or query
    * job (e.g. to add a description to it).
    */
-  private class UpdateTableFunction implements Function<DestinationTable, DestinationTable> {
-    @Override
-    public DestinationTable apply(final DestinationTable destinationTable) {
-      Table table = destinationTable.getTable();
-      TableReference ref = table.getTableReference();
-      try {
-        if (checkTableExists(ref.getDatasetId(), ref.getTableId())) {
-          bigquery.tables()
-              .update(ref.getProjectId(), ref.getDatasetId(), ref.getTableId(), table)
-              .execute();
-        } else {
-          bigquery.tables()
-              .insert(ref.getProjectId(), ref.getDatasetId(), table)
-              .execute();
-        }
-        return destinationTable;
-      } catch (IOException e) {
-        throw BigqueryJobFailureException.create(e);
+  private DestinationTable updateTable(final DestinationTable destinationTable) {
+    Table table = destinationTable.getTable();
+    TableReference ref = table.getTableReference();
+    try {
+      if (checkTableExists(ref.getDatasetId(), ref.getTableId())) {
+        // Make sure to use patch() rather than update(). The former changes only those properties
+        // which are specified, while the latter would change everything, blanking out unspecified
+        // properties.
+        bigquery
+            .tables()
+            .patch(ref.getProjectId(), ref.getDatasetId(), ref.getTableId(), table)
+            .execute();
+      } else {
+        bigquery.tables().insert(ref.getProjectId(), ref.getDatasetId(), table).execute();
       }
+      return destinationTable;
+    } catch (IOException e) {
+      throw BigqueryJobFailureException.create(e);
     }
   }
 
@@ -404,7 +404,7 @@ public class BigqueryConnection implements AutoCloseable {
                 .setSourceFormat(sourceFormat.toString())
                 .setSourceUris(ImmutableList.copyOf(sourceUris))
                 .setDestinationTable(dest.getTableReference())));
-    return Futures.transform(runJobToCompletion(job, dest), new UpdateTableFunction());
+    return transform(runJobToCompletion(job, dest), this::updateTable, directExecutor());
   }
 
   /**
@@ -417,9 +417,9 @@ public class BigqueryConnection implements AutoCloseable {
       DestinationTable dest) {
     if (dest.type == TableType.VIEW) {
       // Use Futures.transform() rather than calling apply() directly so that any exceptions thrown
-      // by calling UpdateTableFunction will be propagated on the get() call, not from here.
-      return Futures.transform(
-          Futures.immediateFuture(dest.withQuery(querySql)), new UpdateTableFunction());
+      // by calling updateTable will be propagated on the get() call, not from here.
+      return transform(
+          Futures.immediateFuture(dest.withQuery(querySql)), this::updateTable, directExecutor());
     } else {
       Job job = new Job()
           .setConfiguration(new JobConfiguration()
@@ -428,7 +428,7 @@ public class BigqueryConnection implements AutoCloseable {
                   .setDefaultDataset(getDataset())
                   .setWriteDisposition(dest.getWriteDisposition().toString())
                   .setDestinationTable(dest.getTableReference())));
-      return Futures.transform(runJobToCompletion(job, dest), new UpdateTableFunction());
+      return transform(runJobToCompletion(job, dest), this::updateTable, directExecutor());
     }
   }
 
@@ -447,13 +447,26 @@ public class BigqueryConnection implements AutoCloseable {
             .setQuery(new JobConfigurationQuery()
                 .setQuery(querySql)
                 .setDefaultDataset(getDataset())));
-    return Futures.transform(
-        runJobToCompletion(job),
-        new Function<Job, ImmutableTable<Integer, TableFieldSchema, Object>>() {
-          @Override
-          public ImmutableTable<Integer, TableFieldSchema, Object> apply(Job job) {
-            return getQueryResults(job);
-          }});
+    return transform(runJobToCompletion(job), this::getQueryResults, directExecutor());
+  }
+
+  /**
+   * Returns the result of calling queryToLocalTable, but synchronously to avoid spawning new
+   * background threads, which App Engine doesn't support.
+   *
+   * @see <a href="https://cloud.google.com/appengine/docs/standard/java/runtime#Threads">
+   *   App Engine Runtime</a>
+   *
+   * <p>Returns the results of the query in an ImmutableTable on success.
+   */
+  public ImmutableTable<Integer, TableFieldSchema, Object> queryToLocalTableSync(String querySql)
+      throws Exception {
+    Job job = new Job()
+        .setConfiguration(new JobConfiguration()
+            .setQuery(new JobConfigurationQuery()
+                .setQuery(querySql)
+                .setDefaultDataset(getDataset())));
+    return getQueryResults(runJob(job));
   }
 
   /**
@@ -563,13 +576,10 @@ public class BigqueryConnection implements AutoCloseable {
     // we can't rely on that for running the extract job because it may not be fully replicated.
     // Tracking bug for query-to-GCS support is b/13777340.
     DestinationTable tempTable = buildTemporaryTable().build();
-    return Futures.transformAsync(
-        query(querySql, tempTable), new AsyncFunction<DestinationTable, String>() {
-          @Override
-          public ListenableFuture<String> apply(DestinationTable tempTable) {
-            return extractTable(tempTable, destinationUri, destinationFormat, printHeader);
-          }
-        });
+    return transformAsync(
+        query(querySql, tempTable),
+        tempTable1 -> extractTable(tempTable1, destinationUri, destinationFormat, printHeader),
+        directExecutor());
   }
 
   /** @see #runJob(Job, AbstractInputStreamContent) */
@@ -578,7 +588,7 @@ public class BigqueryConnection implements AutoCloseable {
   }
 
   /**
-   * Lanuch a job, wait for it to complete, but <i>do not</i> check for errors.
+   * Launch a job, wait for it to complete, but <i>do not</i> check for errors.
    *
    * @throws BigqueryJobFailureException
    */
@@ -587,7 +597,7 @@ public class BigqueryConnection implements AutoCloseable {
   }
 
   /**
-   * Lanuch a job, but do not wait for it to complete.
+   * Launch a job, but do not wait for it to complete.
    *
    * @throws BigqueryJobFailureException
    */
@@ -635,7 +645,7 @@ public class BigqueryConnection implements AutoCloseable {
       logger.info(summarizeCompletedJob(job));
       if (jobStatus.getErrors() != null) {
         for (ErrorProto error : jobStatus.getErrors()) {
-          logger.warning(String.format("%s: %s", error.getReason(), error.getMessage()));
+          logger.warningfmt("%s: %s", error.getReason(), error.getMessage());
         }
       }
       return job;
@@ -662,20 +672,15 @@ public class BigqueryConnection implements AutoCloseable {
       final Job job,
       final T result,
       @Nullable final AbstractInputStreamContent data) {
-    return service.submit(new Callable<T>() {
-      @Override
-      public T call() {
-        runJob(job, data);
-        return result;
-      }});
+    return service.submit(
+        () -> {
+          runJob(job, data);
+          return result;
+        });
   }
 
   private ListenableFuture<Job> runJobToCompletion(final Job job) {
-    return service.submit(new Callable<Job>() {
-      @Override
-      public Job call() {
-        return runJob(job, null);
-      }});
+    return service.submit(() -> runJob(job, null));
   }
 
   /** Helper that returns true if a dataset with this name exists. */
@@ -702,16 +707,6 @@ public class BigqueryConnection implements AutoCloseable {
       }
       throw e;
     }
-  }
-
-  /** Returns the projectId set by the environment, or {@code null} if none is set. */
-  public static String getEnvironmentProjectId() {
-    return RegistryEnvironment.get().config().getProjectId();
-  }
-
-  /** Returns the projectId associated with this bigquery connection. */
-  public String getProjectId() {
-    return getEnvironmentProjectId();
   }
 
   /** Returns the dataset name that this bigquery connection uses by default. */

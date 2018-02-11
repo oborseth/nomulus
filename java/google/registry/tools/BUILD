@@ -1,9 +1,8 @@
 package(
-    default_visibility = ["//java/google/registry:registry_project"],
+    default_visibility = ["//visibility:public"],
 )
 
 licenses(["notice"])  # Apache 2.0
-
 
 # Restrict visibility to :tools because :remoteapi-internal (and transitively
 # :appengine-api-link) should never be linked into an App Engine deploy jar,
@@ -14,6 +13,7 @@ package_group(
         "//java/google/registry/eclipse",
         "//java/google/registry/testing",
         "//java/google/registry/tools",
+        "//javatests/google/registry/testing",
         "//javatests/google/registry/tools",
     ],
 )
@@ -27,36 +27,37 @@ java_library(
     resources = glob([
         "*.properties",
         "sql/*.sql",
+
+        # These are example client secret files.  You'll need to obtain your
+        # own for every environment you use and install them in this
+        # directory.
+        "resources/client_secret*.json",
     ]),
     visibility = [":allowed-tools"],
     deps = [
-        "//apiserving/discoverydata/bigquery:bigqueryv2",
-        "//java/com/google/api/client/googleapis/auth/oauth2",
-        "//java/com/google/api/client/http",
-        "//java/com/google/api/client/http/javanet",
-        "//java/com/google/api/client/json",
-        "//java/com/google/api/client/json/jackson2",
-        "//java/com/google/common/annotations",
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//java/com/google/common/hash",
-        "//java/com/google/common/io",
-        "//java/com/google/common/net",
-        "//java/com/google/common/util/concurrent",
+        "//java/google/registry/backup",
+        "//java/google/registry/beam",
         "//java/google/registry/bigquery",
         "//java/google/registry/config",
+        "//java/google/registry/dns",
         "//java/google/registry/dns/writer",
         "//java/google/registry/dns/writer/clouddns",
         "//java/google/registry/dns/writer/dnsupdate",
         "//java/google/registry/export",
         "//java/google/registry/flows",
+        "//java/google/registry/gcs",
         "//java/google/registry/keyring/api",
+        "//java/google/registry/keyring/kms",
+        "//java/google/registry/loadtest",
         "//java/google/registry/model",
+        "//java/google/registry/module/backend",
+        "//java/google/registry/module/frontend",
+        "//java/google/registry/module/tools",
         "//java/google/registry/pricing",
         "//java/google/registry/rde",
-        "//java/google/registry/security",
+        "//java/google/registry/request",
         "//java/google/registry/request:modules",
-        "//java/google/registry/tldconfig/idn",
+        "//java/google/registry/security",
         "//java/google/registry/tmch",
         "//java/google/registry/tools/params",
         "//java/google/registry/tools/server",
@@ -65,23 +66,32 @@ java_library(
         "//java/google/registry/whois",
         "//java/google/registry/xjc",
         "//java/google/registry/xml",
-        "//third_party/java/appengine:appengine-api",
-        "//third_party/java/bouncycastle",
-        "//third_party/java/bouncycastle_bcpg",
-        "//third_party/java/dagger",
-        "//third_party/java/jcommander",
-        "//third_party/java/joda_money",
-        "//third_party/java/joda_time",
-        "//third_party/java/json",
-        "//third_party/java/json_simple",
-        "//third_party/java/jsr305_annotations",
-        "//third_party/java/jsr330_inject",
-        "//third_party/java/objectify:objectify-v4_1",
-        "//third_party/java/re2j",
-
-        "//third_party/java/appengine:appengine-remote-api",
-
+        "//third_party/jaxb",
+        "//third_party/objectify:objectify-v4_1",
+        "@com_beust_jcommander",
+        "@com_google_api_client",
+        "@com_google_apis_google_api_services_bigquery",
+        "@com_google_apis_google_api_services_dns",
+        "@com_google_appengine_api_1_0_sdk",
+        "@com_google_appengine_remote_api",
+        "@com_google_appengine_remote_api//:link",
+        "@com_google_auto_value",
+        "@com_google_code_findbugs_jsr305",
+        "@com_google_dagger",
+        "@com_google_guava",
+        "@com_google_http_client",
+        "@com_google_http_client_jackson2",
+        "@com_google_oauth_client",
+        "@com_google_oauth_client_java6",
+        "@com_google_oauth_client_jetty",
+        "@com_google_re2j",
+        "@com_googlecode_json_simple",
         "@io_bazel_rules_closure//closure/templates",
+        "@joda_time",
+        "@org_bouncycastle_bcpg_jdk15on",
+        "@org_bouncycastle_bcpkix_jdk15on",
+        "@org_joda_money",
+        "@org_json",
     ],
 )
 
@@ -91,8 +101,16 @@ java_binary(
     main_class = "google.registry.tools.RegistryTool",
     runtime_deps = [
         ":tools",
-        "//third_party/java/appengine:appengine-api-link",
-        "//third_party/java/appengine:appengine-remote-api-link",
+        "@com_google_appengine_api_1_0_sdk//:link",
+        "@com_google_appengine_remote_api//:link",
     ],
 )
 
+java_binary(
+    name = "compare_db_backups",
+    create_executable = 1,
+    main_class = "google.registry.tools.CompareDbBackups",
+    runtime_deps = [
+        ":tools",
+    ],
+)

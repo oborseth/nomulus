@@ -1,7 +1,7 @@
 {
   "objectClassName" : "entity",
   "handle" : "%NAME%",
-  "status" : ["active"],
+  "status" : ["%STATUS%"],
   "links" :
   [
     {
@@ -46,4 +46,3 @@
     ]
   ]
 }
-

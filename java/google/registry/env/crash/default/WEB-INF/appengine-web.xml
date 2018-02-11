@@ -3,13 +3,14 @@
 
   <application>domain-registry</application>
   <version>1</version>
+  <runtime>java8</runtime>
   <module>default</module>
   <threadsafe>true</threadsafe>
   <sessions-enabled>true</sessions-enabled>
   <instance-class>B4_1G</instance-class>
   <basic-scaling>
     <max-instances>10</max-instances>
-    <idle-timeout>10m</idle-timeout>
+    <idle-timeout>30m</idle-timeout>
   </basic-scaling>
 
   <system-properties>

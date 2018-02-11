@@ -4,21 +4,10 @@ package(
 
 licenses(["notice"])  # Apache 2.0
 
-
 java_library(
     name = "backend",
     srcs = glob(["*.java"]),
     deps = [
-        "//java/com/google/common/annotations",
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//java/com/google/common/net",
-        "//third_party/java/bouncycastle",
-        "//third_party/java/dagger",
-        "//third_party/java/joda_time",
-        "//third_party/java/jsr305_annotations",
-        "//third_party/java/jsr330_inject",
-        "//third_party/java/servlet/servlet_api",
         "//java/google/registry/backup",
         "//java/google/registry/batch",
         "//java/google/registry/bigquery",
@@ -34,15 +23,28 @@ java_library(
         "//java/google/registry/gcs",
         "//java/google/registry/groups",
         "//java/google/registry/keyring/api",
+        "//java/google/registry/keyring/kms",
         "//java/google/registry/mapreduce",
         "//java/google/registry/model",
-        "//java/google/registry/monitoring/metrics",
         "//java/google/registry/monitoring/whitebox",
         "//java/google/registry/rde",
+        "//java/google/registry/rde/imports",
+        "//java/google/registry/reporting",
+        "//java/google/registry/reporting/billing",
+        "//java/google/registry/reporting/icann",
         "//java/google/registry/request",
         "//java/google/registry/request:modules",
+        "//java/google/registry/request/auth",
         "//java/google/registry/tmch",
         "//java/google/registry/util",
+        "@com_google_appengine_api_1_0_sdk",
+        "@com_google_code_findbugs_jsr305",
+        "@com_google_dagger",
+        "@com_google_guava",
+        "@com_google_monitoring_client_metrics",
+        "@javax_servlet_api",
+        "@joda_time",
+        "@org_bouncycastle_bcpkix_jdk15on",
     ],
 )
 

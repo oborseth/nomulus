@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,8 @@
 
 package google.registry.export;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.request.Action.Method.POST;
 import static google.registry.util.CollectionUtils.nullToEmpty;
@@ -21,25 +23,25 @@ import static google.registry.util.RegistrarUtils.normalizeClientId;
 import static javax.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
 import static javax.servlet.http.HttpServletResponse.SC_OK;
 
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
-import com.google.common.base.Predicate;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Sets;
-import com.googlecode.objectify.VoidWork;
-import google.registry.config.ConfigModule.Config;
+import com.google.common.collect.Streams;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.groups.GroupsConnection;
 import google.registry.groups.GroupsConnection.Role;
 import google.registry.model.registrar.Registrar;
 import google.registry.model.registrar.RegistrarContact;
 import google.registry.request.Action;
 import google.registry.request.Response;
-import google.registry.util.Concurrent;
+import google.registry.request.auth.Auth;
 import google.registry.util.FormattingLogger;
+import google.registry.util.Retrier;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
@@ -49,19 +51,14 @@ import javax.inject.Inject;
  *
  * <p>This uses the <a href="https://developers.google.com/admin-sdk/directory/">Directory API</a>.
  */
-@Action(path = "/_dr/task/syncGroupMembers", method = POST)
+@Action(
+  path = "/_dr/task/syncGroupMembers",
+  method = POST,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public final class SyncGroupMembersAction implements Runnable {
 
-  /**
-   * The number of threads to run simultaneously (one per registrar) while processing group syncs.
-   * This number is purposefully low because App Engine will complain about a large number of
-   * requests per second, so it's better to spread the work out (as we are only running this servlet
-   * once per hour anyway).
-   */
-  private static final int NUM_WORK_THREADS = 2;
-
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
-
 
   private enum Result {
     OK(SC_OK, "Group memberships successfully updated."),
@@ -69,32 +66,31 @@ public final class SyncGroupMembersAction implements Runnable {
     FAILED(SC_INTERNAL_SERVER_ERROR, "Error occurred while updating registrar contacts.") {
       @Override
       protected void log(Throwable cause) {
-        logger.severefmt(cause, "%s", message);
+        logger.severe(cause, message);
       }};
 
     final int statusCode;
     final String message;
 
-    private Result(int statusCode, String message) {
+    Result(int statusCode, String message) {
       this.statusCode = statusCode;
       this.message = message;
     }
 
     /** Log an error message. Results that use log levels other than info should override this. */
     void log(@Nullable Throwable cause) {
-      logger.infofmt(cause, "%s", message);
+      logger.info(cause, message);
     }
   }
 
   @Inject GroupsConnection groupsConnection;
+  @Inject @Config("gSuiteDomainName") String gSuiteDomainName;
   @Inject Response response;
-  @Inject @Config("publicDomainName") String publicDomainName;
+  @Inject Retrier retrier;
   @Inject SyncGroupMembersAction() {}
 
   private void sendResponse(Result result, @Nullable List<Throwable> causes) {
-    for (Throwable cause : nullToEmpty(causes)) {
-      result.log(cause);
-    }
+    nullToEmpty(causes).forEach(result::log);
     response.setStatus(result.statusCode);
     response.setPayload(String.format("%s %s\n", result.name(), result.message));
   }
@@ -104,13 +100,12 @@ public final class SyncGroupMembersAction implements Runnable {
    * RegistrarContact.Type
    */
   public static String getGroupEmailAddressForContactType(
-      String clientId,
-      RegistrarContact.Type type,
-      String publicDomainName) {
+      String clientId, RegistrarContact.Type type, String gSuiteDomainName) {
     // Take the registrar's clientId, make it lowercase, and remove all characters that aren't
     // alphanumeric, hyphens, or underscores.
     return String.format(
-        "%s-%s-contacts@%s", normalizeClientId(clientId), type.getDisplayName(), publicDomainName);
+        "%s-%s-contacts@%s",
+        normalizeClientId(clientId), type.getDisplayName(), gSuiteDomainName);
   }
 
   /**
@@ -119,38 +114,32 @@ public final class SyncGroupMembersAction implements Runnable {
    */
   @Override
   public void run() {
-    List<Registrar> dirtyRegistrars = Registrar
-        .loadAllActive()
-        .filter(new Predicate<Registrar>() {
-          @Override
-          public boolean apply(Registrar registrar) {
-            // Only grab registrars that require syncing and are of the correct type.
-            return registrar.getContactsRequireSyncing()
-                && registrar.getType() == Registrar.Type.REAL;
-          }})
-        .toList();
+    List<Registrar> dirtyRegistrars =
+        Streams.stream(Registrar.loadAllCached())
+            .filter(
+                registrar ->
+                    registrar.isLive()
+                        && registrar.getContactsRequireSyncing()
+                        && registrar.getType() == Registrar.Type.REAL)
+            .collect(toImmutableList());
     if (dirtyRegistrars.isEmpty()) {
       sendResponse(Result.NOT_MODIFIED, null);
       return;
     }
 
-    // Run multiple threads to communicate with Google Groups simultaneously.
-    ImmutableList<Optional<Throwable>> results = Concurrent.transform(
-        dirtyRegistrars,
-        NUM_WORK_THREADS,
-        new Function<Registrar, Optional<Throwable>>() {
-          @Override
-          public Optional<Throwable> apply(final Registrar registrar) {
-            try {
-              syncRegistrarContacts(registrar);
-              return Optional.<Throwable> absent();
-            } catch (Throwable e) {
-              logger.severe(e, e.getMessage());
-              return Optional.of(e);
-            }
-          }});
+    ImmutableMap.Builder<Registrar, Optional<Throwable>> resultsBuilder =
+        new ImmutableMap.Builder<>();
+    for (final Registrar registrar : dirtyRegistrars) {
+      try {
+        retrier.callWithRetry(() -> syncRegistrarContacts(registrar), RuntimeException.class);
+        resultsBuilder.put(registrar, Optional.empty());
+      } catch (Throwable e) {
+        logger.severe(e, e.getMessage());
+        resultsBuilder.put(registrar, Optional.of(e));
+      }
+    }
 
-    List<Throwable> errors = getErrorsAndUpdateFlagsForSuccesses(dirtyRegistrars, results);
+    List<Throwable> errors = getErrorsAndUpdateFlagsForSuccesses(resultsBuilder.build());
     // If there were no errors, return success; otherwise return a failed status and log the errors.
     if (errors.isEmpty()) {
       sendResponse(Result.OK, null);
@@ -163,25 +152,18 @@ public final class SyncGroupMembersAction implements Runnable {
    * Parses the results from Google Groups for each registrar, setting the dirty flag to false in
    * Datastore for the calls that succeeded and accumulating the errors for the calls that failed.
    */
-  private List<Throwable> getErrorsAndUpdateFlagsForSuccesses(
-      List<Registrar> registrars,
-      List<Optional<Throwable>> results) {
+  private static List<Throwable> getErrorsAndUpdateFlagsForSuccesses(
+      ImmutableMap<Registrar, Optional<Throwable>> results) {
     final ImmutableList.Builder<Registrar> registrarsToSave = new ImmutableList.Builder<>();
     List<Throwable> errors = new ArrayList<>();
-    for (int i = 0; i < results.size(); i++) {
-      Optional<Throwable> opt = results.get(i);
-      if (opt.isPresent()) {
-        errors.add(opt.get());
+    for (Map.Entry<Registrar, Optional<Throwable>> result : results.entrySet()) {
+      if (result.getValue().isPresent()) {
+        errors.add(result.getValue().get());
       } else {
-        registrarsToSave.add(
-            registrars.get(i).asBuilder().setContactsRequireSyncing(false).build());
+        registrarsToSave.add(result.getKey().asBuilder().setContactsRequireSyncing(false).build());
       }
     }
-    ofy().transactNew(new VoidWork() {
-      @Override
-      public void vrun() {
-          ofy().save().entities(registrarsToSave.build());
-      }});
+    ofy().transactNew(() -> ofy().save().entities(registrarsToSave.build()));
     return errors;
   }
 
@@ -194,20 +176,14 @@ public final class SyncGroupMembersAction implements Runnable {
       long totalRemoved = 0;
       for (final RegistrarContact.Type type : RegistrarContact.Type.values()) {
         groupKey = getGroupEmailAddressForContactType(
-            registrar.getClientId(), type, publicDomainName);
+            registrar.getClientId(), type, gSuiteDomainName);
         Set<String> currentMembers = groupsConnection.getMembersOfGroup(groupKey);
-        Set<String> desiredMembers = FluentIterable.from(registrarContacts)
-            .filter(new Predicate<RegistrarContact>() {
-              @Override
-              public boolean apply(RegistrarContact contact) {
-                return contact.getTypes().contains(type);
-              }})
-            .transform(new Function<RegistrarContact, String>() {
-              @Override
-              public String apply(RegistrarContact contact) {
-                return contact.getEmailAddress();
-              }})
-            .toSet();
+        Set<String> desiredMembers =
+            registrarContacts
+                .stream()
+                .filter(contact -> contact.getTypes().contains(type))
+                .map(RegistrarContact::getEmailAddress)
+                .collect(toImmutableSet());
         for (String email : Sets.difference(desiredMembers, currentMembers)) {
           groupsConnection.addMemberToGroup(groupKey, email, Role.MEMBER);
           totalAdded++;
@@ -222,10 +198,7 @@ public final class SyncGroupMembersAction implements Runnable {
           totalAdded,
           totalRemoved);
     } catch (IOException e) {
-      // Bail out of the current sync job if an error occurs. This is OK because (a) errors usually
-      // indicate that retrying won't succeed at all, or at least not immediately, and (b) the sync
-      // job will run within an hour anyway and effectively resume where it left off if this was a
-      // transient error.
+      // Package up exception and re-throw with attached additional relevant info.
       String msg = String.format("Couldn't sync contacts for registrar %s to group %s",
           registrar.getClientId(), groupKey);
       throw new RuntimeException(msg, e);

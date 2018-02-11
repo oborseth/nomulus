@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,11 @@
 
 package google.registry.module.backend;
 
-import static java.util.Arrays.asList;
-
-import com.google.common.base.Function;
-import com.google.common.collect.FluentIterable;
-import google.registry.monitoring.metrics.MetricReporter;
-import google.registry.request.RequestHandler;
-import google.registry.request.RequestModule;
+import com.google.appengine.api.LifecycleManager;
+import com.google.monitoring.metrics.MetricReporter;
+import dagger.Lazy;
 import google.registry.util.FormattingLogger;
 import java.io.IOException;
-import java.lang.reflect.Method;
 import java.security.Security;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -36,43 +31,38 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider;
 public final class BackendServlet extends HttpServlet {
 
   private static final BackendComponent component = DaggerBackendComponent.create();
-  private static final MetricReporter metricReporter = component.metricReporter();
+  private static final BackendRequestHandler requestHandler = component.requestHandler();
+  private static final Lazy<MetricReporter> metricReporter = component.metricReporter();
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
-
-  private static final RequestHandler<BackendRequestComponent> requestHandler =
-      RequestHandler.create(BackendRequestComponent.class, FluentIterable
-          .from(asList(BackendRequestComponent.class.getMethods()))
-          .transform(new Function<Method, Method>() {
-            @Override
-            public Method apply(Method method) {
-              method.setAccessible(true);  // Make App Engine's security manager happy.
-              return method;
-            }}));
 
   @Override
   public void init() {
     Security.addProvider(new BouncyCastleProvider());
 
+    // If metric reporter failed to instantiate for any reason (bad keyring, bad json credential,
+    // etc), we log the error but keep the main thread running. Also the shutdown hook will only be
+    // registered if metric reporter starts up correctly.
     try {
-      metricReporter.startAsync().awaitRunning(10, TimeUnit.SECONDS);
+      metricReporter.get().startAsync().awaitRunning(10, TimeUnit.SECONDS);
       logger.info("Started up MetricReporter");
-    } catch (TimeoutException timeoutException) {
-      logger.severefmt("Failed to initialize MetricReporter: %s", timeoutException);
-    }
-  }
-
-  @Override
-  public void destroy() {
-    try {
-      metricReporter.stopAsync().awaitTerminated(10, TimeUnit.SECONDS);
-      logger.info("Shut down MetricReporter");
-    } catch (TimeoutException timeoutException) {
-      logger.severefmt("Failed to stop MetricReporter: %s", timeoutException);
+      LifecycleManager.getInstance()
+          .setShutdownHook(
+              () -> {
+                try {
+                  metricReporter.get().stopAsync().awaitTerminated(10, TimeUnit.SECONDS);
+                  logger.info("Shut down MetricReporter");
+                } catch (TimeoutException timeoutException) {
+                  logger.severefmt("Failed to stop MetricReporter: %s", timeoutException);
+                }
+              });
+    } catch (Exception e) {
+      logger.severefmt(e, "Failed to initialize MetricReporter.");
     }
   }
 
   @Override
   public void service(HttpServletRequest req, HttpServletResponse rsp) throws IOException {
-    requestHandler.handleRequest(req, rsp, component.startRequest(new RequestModule(req, rsp)));
+    logger.info("Received backend request");
+    requestHandler.handleRequest(req, rsp);
   }
 }

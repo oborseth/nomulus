@@ -7,8 +7,9 @@ prices of domain labels (i.e. the part of the domain name without the TLD) by
 checking for their presence on a list of prices in Datastore. `nomulus` is used
 to load and update these lists from flat text files. The format of this list is
 simple: It is a newline-delimited CSV text file with each line containing the
-label and its price (including currency specifier in ISO-4217 format). As an
-example:
+label and its price (including currency specifier in ISO-4217 format). Any
+individual label may not appear more than once in the file. Here's an example of
+the formatting:
 
 ```
 premium,USD 100
@@ -45,7 +46,7 @@ Successfully saved premium list exampletld
 
 `-n` is the name of the list to be created, and `-i` is the input filename. Note
 that the convention of naming premium lists after the TLD they are intended to
-be used for to is enforced unless the override parameter `-o` is passed, which
+be used for is enforced unless the override parameter `-o` is passed, which
 allows premium lists to be created with any name.
 
 ## Updating a premium list
@@ -75,7 +76,7 @@ parameter:
 ```shell
 $ nomulus -e {ENVIRONMENT} update_tld exampletld --premium_list exampletld
 Update Registry@exampletld
-premiumList -> [null, Key<?>(EntityGroupRoot("cross-tld")/PremiumList("exampletld"))]
+premiumList: null -> Key<?>(EntityGroupRoot("cross-tld")/PremiumList("exampletld"))
 
 Perform this command? (y/N): y
 Updated 1 entities.

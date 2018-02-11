@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -50,7 +50,7 @@ final class ExecuteEppCommand extends MutatingEppToolCommand {
           clientId, CharStreams.toString(new InputStreamReader(stdin, UTF_8)));
     } else {
       for (String command : mainParameters) {
-        addXmlCommand(clientId, Files.toString(new File(command), UTF_8));
+        addXmlCommand(clientId, Files.asCharSource(new File(command), UTF_8).read());
       }
     }
   }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-{namespace registry.soy.registrar.contactepp autoescape="strict"}
+{namespace registry.soy.registrar.contactepp}
 
 
 /* XXX: Forces first postalInfo type to be "int" and second "loc" if it is
@@ -22,13 +22,13 @@
  * @param item
  * @param clTrid
  */
-{template .create}
+{template .create stricthtml="false"}
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <create>
       <contact:create xmlns:contact="urn:ietf:params:xml:ns:contact-1.0">
         <contact:id>{$item['contact:id']}</contact:id>
-        {foreach $pi in $item['contact:postalInfo']}
+        {for $pi in $item['contact:postalInfo']}
           <contact:postalInfo type="{if index($pi) == 0}int{else}loc{/if}">
             <contact:name>{$pi['contact:name']}</contact:name>
             <contact:org>{$pi['contact:org']}</contact:org>
@@ -41,7 +41,7 @@
               <contact:cc>{$addr['contact:cc']}</contact:cc>
             </contact:addr>
           </contact:postalInfo>
-        {/foreach}
+        {/for}
         <contact:voice>{$item['contact:voice']}</contact:voice>
         <contact:fax>{$item['contact:fax']}</contact:fax>
         <contact:email>{$item['contact:email']}</contact:email>
@@ -63,14 +63,14 @@
  * @param item
  * @param clTrid
  */
-{template .update}
+{template .update stricthtml="false"}
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <update>
       <contact:update xmlns:contact="urn:ietf:params:xml:ns:contact-1.0">
         <contact:id>{$item['contact:id']}</contact:id>
         <contact:chg>
-          {foreach $pi in $item['contact:postalInfo']}
+          {for $pi in $item['contact:postalInfo']}
             <contact:postalInfo type="{if index($pi) == 0}int{else}loc{/if}">
               <contact:name>{$pi['contact:name']}</contact:name>
               <contact:org>{$pi['contact:org']}</contact:org>
@@ -83,7 +83,7 @@
                 <contact:cc>{$addr['contact:cc']}</contact:cc>
               </contact:addr>
             </contact:postalInfo>
-          {/foreach}
+          {/for}
           <contact:voice>{$item['contact:voice']}</contact:voice>
           <contact:fax>{$item['contact:fax']}</contact:fax>
           <contact:email>{$item['contact:email']}</contact:email>
@@ -104,7 +104,7 @@
  * @param id
  * @param clTrid
  */
-{template .info}
+{template .info stricthtml="false"}
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <info>

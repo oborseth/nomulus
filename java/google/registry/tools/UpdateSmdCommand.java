@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 package google.registry.tools;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static google.registry.flows.domain.DomainFlowUtils.verifyEncodedSignedMark;
 import static google.registry.model.EppResourceUtils.loadDomainApplication;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.tmch.TmchData.readEncodedSignedMark;
@@ -25,8 +24,8 @@ import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.google.common.collect.ImmutableList;
 import com.google.common.net.InternetDomainName;
-import com.googlecode.objectify.VoidWork;
 import google.registry.flows.EppException;
+import google.registry.flows.domain.DomainFlowTmchUtils;
 import google.registry.model.domain.DomainApplication;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.model.smd.EncodedSignedMark;
@@ -34,11 +33,15 @@ import google.registry.tools.Command.RemoteApiCommand;
 import google.registry.tools.params.PathParameter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /** Command to update the SMD on a domain application. */
 @Parameters(separators = " =", commandDescription = "Update the SMD on an application.")
 final class UpdateSmdCommand implements RemoteApiCommand {
+
+  @Inject DomainFlowTmchUtils tmchUtils;
+  @Inject UpdateSmdCommand() {}
 
   @Parameter(
       names = "--id",
@@ -63,18 +66,18 @@ final class UpdateSmdCommand implements RemoteApiCommand {
     final EncodedSignedMark encodedSignedMark =
         readEncodedSignedMark(new String(Files.readAllBytes(smdFile), US_ASCII));
 
-    ofy().transact(new VoidWork() {
-        @Override
-        public void vrun() {
-          try {
-            updateSmd(id, encodedSignedMark, reason);
-          } catch (EppException e) {
-            throw new RuntimeException(e);
-          }
-        }});
+    ofy()
+        .transact(
+            () -> {
+              try {
+                updateSmd(id, encodedSignedMark, reason);
+              } catch (EppException e) {
+                throw new RuntimeException(e);
+              }
+            });
   }
 
-  private static void updateSmd(
+  private void updateSmd(
       String applicationId, EncodedSignedMark encodedSignedMark, String reason)
       throws EppException {
     ofy().assertInTransaction();
@@ -91,7 +94,7 @@ final class UpdateSmdCommand implements RemoteApiCommand {
     // Verify the new SMD.
     String domainLabel = InternetDomainName.from(domainApplication.getFullyQualifiedDomainName())
         .parts().get(0);
-    verifyEncodedSignedMark(encodedSignedMark, domainLabel, now);
+    tmchUtils.verifyEncodedSignedMark(encodedSignedMark, domainLabel, now);
 
     DomainApplication updatedApplication = domainApplication.asBuilder()
         .setEncodedSignedMarks(ImmutableList.of(encodedSignedMark))
@@ -109,7 +112,7 @@ final class UpdateSmdCommand implements RemoteApiCommand {
         .setReason("UpdateSmdCommand" + (reason != null ? ": " + reason : ""))
         .build();
 
-    // Save entities to datastore.
+    // Save entities to Datastore.
     ofy().save().<Object>entities(updatedApplication, newHistoryEntry);
   }
 }

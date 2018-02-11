@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 package google.registry.rde;
 
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.common.Cursor.CursorType.BRDA;
 import static google.registry.model.common.Cursor.CursorType.RDE_STAGING;
@@ -25,6 +26,7 @@ import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.DatastoreHelper.persistResourceWithCommitLog;
 import static google.registry.testing.GcsTestingUtils.readGcsFile;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static google.registry.testing.TaskQueueHelper.assertAtLeastOneTaskIsEnqueued;
 import static google.registry.testing.TaskQueueHelper.assertNoTasksEnqueued;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
@@ -36,10 +38,13 @@ import static java.util.Arrays.asList;
 import com.google.appengine.tools.cloudstorage.GcsFilename;
 import com.google.appengine.tools.cloudstorage.GcsService;
 import com.google.appengine.tools.cloudstorage.GcsServiceFactory;
+import com.google.appengine.tools.cloudstorage.ListItem;
+import com.google.appengine.tools.cloudstorage.ListOptions;
+import com.google.appengine.tools.cloudstorage.ListResult;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.net.InetAddresses;
-import com.googlecode.objectify.VoidWork;
 import google.registry.keyring.api.Keyring;
 import google.registry.keyring.api.PgpHelper;
 import google.registry.model.common.Cursor;
@@ -47,8 +52,11 @@ import google.registry.model.common.Cursor.CursorType;
 import google.registry.model.host.HostResource;
 import google.registry.model.ofy.Ofy;
 import google.registry.model.registry.Registry;
+import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.RequestParameters;
 import google.registry.testing.FakeClock;
+import google.registry.testing.FakeKeyringModule;
+import google.registry.testing.FakeLockHandler;
 import google.registry.testing.FakeResponse;
 import google.registry.testing.InjectRule;
 import google.registry.testing.TaskQueueHelper.TaskMatcher;
@@ -73,6 +81,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import javax.xml.bind.JAXBElement;
 import org.bouncycastle.openpgp.PGPException;
 import org.bouncycastle.openpgp.PGPPrivateKey;
@@ -82,7 +91,6 @@ import org.joda.time.DateTimeConstants;
 import org.joda.time.Duration;
 import org.junit.Before;
 import org.junit.BeforeClass;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -110,7 +118,7 @@ public class RdeStagingActionTest extends MapreduceTestCase<RdeStagingAction> {
 
   @BeforeClass
   public static void beforeClass() {
-    try (Keyring keyring = new RdeKeyringModule().get()) {
+    try (Keyring keyring = new FakeKeyringModule().get()) {
       encryptKey = keyring.getRdeStagingEncryptionKey();
       decryptKey = keyring.getRdeStagingDecryptionKey();
     }
@@ -122,12 +130,16 @@ public class RdeStagingActionTest extends MapreduceTestCase<RdeStagingAction> {
     action = new RdeStagingAction();
     action.clock = clock;
     action.mrRunner = makeDefaultRunner();
-    action.reducer = new RdeStagingReducer();
-    action.reducer.ghostrydeBufferSize = 31337;
-    action.reducer.lockTimeout = Duration.standardHours(1);
-    action.reducer.bucket = "rde-bucket";
-    action.reducer.taskEnqueuer = new TaskEnqueuer(new Retrier(new SystemSleeper(), 1));
-    action.reducer.stagingKeyBytes = PgpHelper.convertPublicKeyToBytes(encryptKey);
+    action.lenient = false;
+    action.reducer = new RdeStagingReducer(
+        new TaskEnqueuer(new Retrier(new SystemSleeper(), 1)), // taskEnqueuer
+        new FakeLockHandler(true),
+        0, // gcsBufferSize
+        "rde-bucket", // bucket
+        31337, // ghostrydeBufferSize
+        Duration.standardHours(1), // lockTimeout
+        PgpHelper.convertPublicKeyToBytes(encryptKey), // stagingKeyBytes
+        false); // lenient
     action.pendingDepositChecker = new PendingDepositChecker();
     action.pendingDepositChecker.brdaDayOfWeek = DateTimeConstants.TUESDAY;
     action.pendingDepositChecker.brdaInterval = Duration.standardDays(7);
@@ -135,6 +147,43 @@ public class RdeStagingActionTest extends MapreduceTestCase<RdeStagingAction> {
     action.pendingDepositChecker.rdeInterval = Duration.standardDays(1);
     action.response = response;
     action.transactionCooldown = Duration.ZERO;
+    action.directory = Optional.empty();
+    action.modeStrings = ImmutableSet.of();
+    action.tlds = ImmutableSet.of();
+    action.watermarks = ImmutableSet.of();
+    action.revision = Optional.empty();
+  }
+
+  @Test
+  public void testRun_modeInNonManualMode_throwsException() throws Exception {
+    createTldWithEscrowEnabled("lol");
+    clock.setTo(DateTime.parse("2000-01-01TZ"));
+    action.modeStrings = ImmutableSet.of("full");
+    assertThrows(BadRequestException.class, action::run);
+  }
+
+  @Test
+  public void testRun_tldInNonManualMode_throwsException() throws Exception {
+    createTldWithEscrowEnabled("lol");
+    clock.setTo(DateTime.parse("2000-01-01TZ"));
+    action.tlds = ImmutableSet.of("tld");
+    assertThrows(BadRequestException.class, action::run);
+  }
+
+  @Test
+  public void testRun_watermarkInNonManualMode_throwsException() throws Exception {
+    createTldWithEscrowEnabled("lol");
+    clock.setTo(DateTime.parse("2000-01-01TZ"));
+    action.watermarks = ImmutableSet.of(clock.nowUtc());
+    assertThrows(BadRequestException.class, action::run);
+  }
+
+  @Test
+  public void testRun_revisionInNonManualMode_throwsException() throws Exception {
+    createTldWithEscrowEnabled("lol");
+    clock.setTo(DateTime.parse("2000-01-01TZ"));
+    action.revision = Optional.of(42);
+    assertThrows(BadRequestException.class, action::run);
   }
 
   @Test
@@ -180,6 +229,94 @@ public class RdeStagingActionTest extends MapreduceTestCase<RdeStagingAction> {
     clock.setTo(DateTime.parse("2000-01-01T00:05:00Z"));
     action.transactionCooldown = Duration.standardMinutes(5);
     action.run();
+    assertAtLeastOneTaskIsEnqueued("mapreduce");
+  }
+
+  @Test
+  public void testManualRun_emptyMode_throwsException() throws Exception {
+    createTldWithEscrowEnabled("lol");
+    clock.setTo(DateTime.parse("2000-01-01TZ"));
+    action.manual = true;
+    action.directory = Optional.of("test/");
+    action.modeStrings = ImmutableSet.of();
+    action.tlds = ImmutableSet.of("lol");
+    action.watermarks = ImmutableSet.of(clock.nowUtc());
+    assertThrows(BadRequestException.class, action::run);
+  }
+
+  @Test
+  public void testManualRun_invalidMode_throwsException() throws Exception {
+    createTldWithEscrowEnabled("lol");
+    clock.setTo(DateTime.parse("2000-01-01TZ"));
+    action.manual = true;
+    action.directory = Optional.of("test/");
+    action.modeStrings = ImmutableSet.of("full", "thing");
+    action.tlds = ImmutableSet.of("lol");
+    action.watermarks = ImmutableSet.of(clock.nowUtc());
+    assertThrows(BadRequestException.class, action::run);
+  }
+
+  @Test
+  public void testManualRun_emptyTld_throwsException() throws Exception {
+    createTldWithEscrowEnabled("lol");
+    clock.setTo(DateTime.parse("2000-01-01TZ"));
+    action.manual = true;
+    action.directory = Optional.of("test/");
+    action.modeStrings = ImmutableSet.of("full");
+    action.tlds = ImmutableSet.of();
+    action.watermarks = ImmutableSet.of(clock.nowUtc());
+    assertThrows(BadRequestException.class, action::run);
+  }
+
+  @Test
+  public void testManualRun_emptyWatermark_throwsException() throws Exception {
+    createTldWithEscrowEnabled("lol");
+    clock.setTo(DateTime.parse("2000-01-01TZ"));
+    action.manual = true;
+    action.directory = Optional.of("test/");
+    action.modeStrings = ImmutableSet.of("full");
+    action.tlds = ImmutableSet.of("lol");
+    action.watermarks = ImmutableSet.of();
+    assertThrows(BadRequestException.class, action::run);
+  }
+
+  @Test
+  public void testManualRun_nonDayStartWatermark_throwsException() throws Exception {
+    createTldWithEscrowEnabled("lol");
+    clock.setTo(DateTime.parse("2000-01-01TZ"));
+    action.manual = true;
+    action.directory = Optional.of("test/");
+    action.modeStrings = ImmutableSet.of("full");
+    action.tlds = ImmutableSet.of("lol");
+    action.watermarks = ImmutableSet.of(DateTime.parse("2001-01-01T01:36:45Z"));
+    assertThrows(BadRequestException.class, action::run);
+  }
+
+  @Test
+  public void testManualRun_invalidRevision_throwsException() throws Exception {
+    createTldWithEscrowEnabled("lol");
+    clock.setTo(DateTime.parse("2000-01-01TZ"));
+    action.manual = true;
+    action.directory = Optional.of("test/");
+    action.modeStrings = ImmutableSet.of("full");
+    action.tlds = ImmutableSet.of("lol");
+    action.watermarks = ImmutableSet.of(DateTime.parse("2001-01-01T00:00:00Z"));
+    action.revision = Optional.of(-1);
+    assertThrows(BadRequestException.class, action::run);
+  }
+
+  @Test
+  public void testManualRun_validParameters_runsMapReduce() throws Exception {
+    createTldWithEscrowEnabled("lol");
+    clock.setTo(DateTime.parse("2000-01-01TZ"));
+    action.manual = true;
+    action.directory = Optional.of("test/");
+    action.modeStrings = ImmutableSet.of("full");
+    action.tlds = ImmutableSet.of("lol");
+    action.watermarks = ImmutableSet.of(DateTime.parse("2001-01-01TZ"));
+    action.run();
+    assertThat(response.getStatus()).isEqualTo(200);
+    assertThat(response.getPayload()).contains("_ah/pipeline/status.html?root=");
     assertAtLeastOneTaskIsEnqueued("mapreduce");
   }
 
@@ -452,7 +589,6 @@ public class RdeStagingActionTest extends MapreduceTestCase<RdeStagingAction> {
   }
 
   @Test
-  @Ignore("TODO(b/23791350): Causes TimestampInversionException")
   public void testMapReduce_twoDomainsDifferentTlds_isolatesDomains() throws Exception {
     clock.setTo(DateTime.parse("1999-12-31TZ"));
     createTldWithEscrowEnabled("boggle");
@@ -474,7 +610,6 @@ public class RdeStagingActionTest extends MapreduceTestCase<RdeStagingAction> {
   }
 
   @Test
-  @Ignore("TODO(b/23791350): Causes TimestampInversionException")
   public void testMapReduce_twoHostsDifferentTlds_includedInBothTldDeposits() throws Exception {
     clock.setTo(DateTime.parse("1999-12-31TZ"));
     createTldWithEscrowEnabled("fop");
@@ -609,6 +744,79 @@ public class RdeStagingActionTest extends MapreduceTestCase<RdeStagingAction> {
         .isEqualTo(DateTime.parse("1984-12-21TZ"));
   }
 
+  private void doManualModeMapReduceTest(int revision, ImmutableSet<String> tlds) throws Exception {
+    clock.setTo(DateTime.parse("1999-12-31TZ"));
+    for (String tld : tlds) {
+      createTldWithEscrowEnabled(tld);
+      makeDomainResource(clock, tld);
+      setCursor(Registry.get(tld), RDE_STAGING, DateTime.parse("1999-01-01TZ"));
+      setCursor(Registry.get(tld), BRDA, DateTime.parse("2001-01-01TZ"));
+    }
+
+    action.manual = true;
+    action.directory = Optional.of("test/");
+    action.modeStrings = ImmutableSet.of("full", "thin");
+    action.tlds = tlds;
+    action.watermarks =
+        ImmutableSet.of(DateTime.parse("2000-01-01TZ"), DateTime.parse("2000-01-02TZ"));
+    action.revision = Optional.of(revision);
+
+    action.run();
+    executeTasksUntilEmpty("mapreduce", clock);
+
+    ListResult listResult =
+        gcsService.list("rde-bucket", new ListOptions.Builder().setPrefix("manual/test").build());
+    ImmutableSet<String> filenames =
+        ImmutableList.copyOf(listResult).stream().map(ListItem::getName).collect(toImmutableSet());
+    for (String tld : tlds) {
+      assertThat(filenames)
+          .containsAllOf(
+              "manual/test/" + tld + "_2000-01-01_full_S1_R" + revision + "-report.xml.ghostryde",
+              "manual/test/" + tld + "_2000-01-01_full_S1_R" + revision + ".xml.ghostryde",
+              "manual/test/" + tld + "_2000-01-01_full_S1_R" + revision + ".xml.length",
+              "manual/test/" + tld + "_2000-01-01_thin_S1_R" + revision + ".xml.ghostryde",
+              "manual/test/" + tld + "_2000-01-01_thin_S1_R" + revision + ".xml.length",
+              "manual/test/" + tld + "_2000-01-02_full_S1_R" + revision + "-report.xml.ghostryde",
+              "manual/test/" + tld + "_2000-01-02_full_S1_R" + revision + ".xml.ghostryde",
+              "manual/test/" + tld + "_2000-01-02_full_S1_R" + revision + ".xml.length",
+              "manual/test/" + tld + "_2000-01-02_thin_S1_R" + revision + ".xml.ghostryde",
+              "manual/test/" + tld + "_2000-01-02_thin_S1_R" + revision + ".xml.length");
+
+      assertThat(
+              ofy()
+                  .load()
+                  .key(Cursor.createKey(RDE_STAGING, Registry.get(tld)))
+                  .now()
+                  .getCursorTime())
+          .isEqualTo(DateTime.parse("1999-01-01TZ"));
+      assertThat(ofy().load().key(Cursor.createKey(BRDA, Registry.get(tld))).now().getCursorTime())
+          .isEqualTo(DateTime.parse("2001-01-01TZ"));
+    }
+  }
+
+  @Test
+  public void testMapReduce_manualMode_generatesCorrectDepositsWithoutAdvancingCursors()
+      throws Exception {
+    doManualModeMapReduceTest(0, ImmutableSet.of("lol"));
+    XmlTestUtils.assertXmlEquals(
+        readResourceUtf8(getClass(), "testdata/testMapReduce_withDomain_producesExpectedXml.xml"),
+        readXml("manual/test/lol_2000-01-01_full_S1_R0.xml.ghostryde"),
+        "deposit.contents.registrar.crDate",
+        "deposit.contents.registrar.upDate");
+    XmlTestUtils.assertXmlEquals(
+        readResourceUtf8(getClass(), "testdata/testMapReduce_withDomain_producesReportXml.xml"),
+        readXml(
+            "manual/test/lol_2000-01-01_full_S1_R0-report.xml.ghostryde"),
+        "deposit.contents.registrar.crDate",
+        "deposit.contents.registrar.upDate");
+  }
+
+  @Test
+  public void testMapReduce_manualMode_nonZeroRevisionAndMultipleTlds()
+      throws Exception {
+    doManualModeMapReduceTest(42, ImmutableSet.of("lol", "slug"));
+  }
+
   private String readXml(String objectName) throws IOException, PGPException {
     GcsFilename file = new GcsFilename("rde-bucket", objectName);
     return new String(Ghostryde.decode(readGcsFile(gcsService, file), decryptKey).getData(), UTF_8);
@@ -642,11 +850,7 @@ public class RdeStagingActionTest extends MapreduceTestCase<RdeStagingAction> {
   private void setCursor(
       final Registry registry, final CursorType cursorType, final DateTime value) {
     clock.advanceOneMilli();
-    ofy().transact(new VoidWork() {
-      @Override
-      public void vrun() {
-        ofy().save().entity(Cursor.create(cursorType, value, registry)).now();
-      }});
+    ofy().transact(() -> ofy().save().entity(Cursor.create(cursorType, value, registry)).now());
   }
 
   public static <T> T unmarshal(Class<T> clazz, byte[] xml) throws XmlException {

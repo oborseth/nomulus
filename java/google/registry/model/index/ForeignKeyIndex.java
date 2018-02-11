@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,23 +16,22 @@ package google.registry.model.index;
 
 import static com.google.common.collect.Maps.filterValues;
 import static google.registry.model.ofy.ObjectifyService.ofy;
-import static google.registry.model.ofy.Ofy.RECOMMENDED_MEMCACHE_EXPIRATION;
 import static google.registry.util.TypeUtils.instantiate;
 
-import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.annotation.Cache;
 import com.googlecode.objectify.annotation.Entity;
 import com.googlecode.objectify.annotation.Id;
 import com.googlecode.objectify.annotation.Index;
 import google.registry.model.BackupGroupRoot;
 import google.registry.model.EppResource;
+import google.registry.model.annotations.ReportedOn;
 import google.registry.model.contact.ContactResource;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.host.HostResource;
 import java.util.Map;
+import javax.annotation.Nullable;
 import org.joda.time.DateTime;
 
 /**
@@ -43,24 +42,24 @@ import org.joda.time.DateTime;
 public abstract class ForeignKeyIndex<E extends EppResource> extends BackupGroupRoot {
 
   /** The {@link ForeignKeyIndex} type for {@link ContactResource} entities. */
-  @Cache(expirationSeconds = RECOMMENDED_MEMCACHE_EXPIRATION)
+  @ReportedOn
   @Entity
   public static class ForeignKeyContactIndex extends ForeignKeyIndex<ContactResource> {}
 
   /** The {@link ForeignKeyIndex} type for {@link DomainResource} entities. */
-  @Cache(expirationSeconds = RECOMMENDED_MEMCACHE_EXPIRATION)
+  @ReportedOn
   @Entity
   public static class ForeignKeyDomainIndex extends ForeignKeyIndex<DomainResource> {}
 
   /** The {@link ForeignKeyIndex} type for {@link HostResource} entities. */
-  @Cache(expirationSeconds = RECOMMENDED_MEMCACHE_EXPIRATION)
+  @ReportedOn
   @Entity
   public static class ForeignKeyHostIndex extends ForeignKeyIndex<HostResource> {}
 
-  private static final Map<
-      Class<? extends EppResource>,
-      Class<? extends ForeignKeyIndex<?>>> RESOURCE_CLASS_TO_FKI_CLASS =
-          ImmutableMap.<Class<? extends EppResource>, Class<? extends ForeignKeyIndex<?>>>of(
+  static final ImmutableMap<
+          Class<? extends EppResource>, Class<? extends ForeignKeyIndex<?>>>
+      RESOURCE_CLASS_TO_FKI_CLASS =
+          ImmutableMap.of(
               ContactResource.class, ForeignKeyContactIndex.class,
               DomainResource.class, ForeignKeyDomainIndex.class,
               HostResource.class, ForeignKeyHostIndex.class);
@@ -97,12 +96,19 @@ public abstract class ForeignKeyIndex<E extends EppResource> extends BackupGroup
     return topReference;
   }
 
-  /**
-   * Create a {@link ForeignKeyIndex} instance for a resource, expiring at a specified time.
-   */
+
+  @SuppressWarnings("unchecked")
+  public static <T extends EppResource> Class<ForeignKeyIndex<T>> mapToFkiClass(
+      Class<T> resourceClass) {
+    return (Class<ForeignKeyIndex<T>>) RESOURCE_CLASS_TO_FKI_CLASS.get(resourceClass);
+  }
+
+  /** Create a {@link ForeignKeyIndex} instance for a resource, expiring at a specified time. */
   public static <E extends EppResource> ForeignKeyIndex<E> create(
       E resource, DateTime deletionTime) {
-    ForeignKeyIndex<E> instance = instantiate(RESOURCE_CLASS_TO_FKI_CLASS.get(resource.getClass()));
+    @SuppressWarnings("unchecked")
+    Class<E> resourceClass = (Class<E>) resource.getClass();
+    ForeignKeyIndex<E> instance = instantiate(mapToFkiClass(resourceClass));
     instance.topReference = Key.create(resource);
     instance.foreignKey = resource.getForeignKey();
     instance.deletionTime = deletionTime;
@@ -110,15 +116,16 @@ public abstract class ForeignKeyIndex<E extends EppResource> extends BackupGroup
   }
 
   /** Create a {@link ForeignKeyIndex} key for a resource. */
-  public static Key<ForeignKeyIndex<?>> createKey(EppResource resource) {
-    return Key.<ForeignKeyIndex<?>>create(
-        RESOURCE_CLASS_TO_FKI_CLASS.get(resource.getClass()), resource.getForeignKey());
+  public static <E extends EppResource> Key<ForeignKeyIndex<E>> createKey(E resource) {
+    @SuppressWarnings("unchecked")
+    Class<E> resourceClass = (Class<E>) resource.getClass();
+    return Key.create(mapToFkiClass(resourceClass), resource.getForeignKey());
   }
 
   /**
-   * Loads a {@link Key} to an {@link EppResource} from the datastore by foreign key.
+   * Loads a {@link Key} to an {@link EppResource} from Datastore by foreign key.
    *
-   * <p>Returns absent if no foreign key index with this foreign key was ever created, or if the
+   * <p>Returns null if no foreign key index with this foreign key was ever created, or if the
    * most recently created foreign key index was deleted before time "now". This method does not
    * actually check that the referenced resource actually exists. However, for normal epp resources,
    * it is safe to assume that the referenced resource exists if the foreign key index does.
@@ -128,6 +135,7 @@ public abstract class ForeignKeyIndex<E extends EppResource> extends BackupGroup
    * @param now the current logical time to use when checking for soft deletion of the foreign key
    *        index
    */
+  @Nullable
   public static <E extends EppResource> Key<E> loadAndGetKey(
       Class<E> clazz, String foreignKey, DateTime now) {
     ForeignKeyIndex<E> index = load(clazz, foreignKey, now);
@@ -140,6 +148,7 @@ public abstract class ForeignKeyIndex<E extends EppResource> extends BackupGroup
    *
    * <p>This will return null if the {@link ForeignKeyIndex} doesn't exist or has been soft deleted.
    */
+  @Nullable
   public static <E extends EppResource> ForeignKeyIndex<E> load(
       Class<E> clazz, String foreignKey, DateTime now) {
     return load(clazz, ImmutableList.of(foreignKey), now).get(foreignKey);
@@ -152,15 +161,10 @@ public abstract class ForeignKeyIndex<E extends EppResource> extends BackupGroup
    * <p>The returned map will omit any keys for which the {@link ForeignKeyIndex} doesn't exist or
    * has been soft deleted.
    */
-  @SuppressWarnings("unchecked")
   public static <E extends EppResource> Map<String, ForeignKeyIndex<E>> load(
       Class<E> clazz, Iterable<String> foreignKeys, final DateTime now) {
-    return (Map<String, ForeignKeyIndex<E>>) filterValues(
-        ofy().load().type(RESOURCE_CLASS_TO_FKI_CLASS.get(clazz)).ids(foreignKeys),
-        new Predicate<ForeignKeyIndex<?>>() {
-          @Override
-          public boolean apply(ForeignKeyIndex<?> fki) {
-            return now.isBefore(fki.deletionTime);
-          }});
+    return filterValues(
+        ofy().load().type(mapToFkiClass(clazz)).ids(foreignKeys),
+        (ForeignKeyIndex<?> fki) -> now.isBefore(fki.deletionTime));
   }
 }

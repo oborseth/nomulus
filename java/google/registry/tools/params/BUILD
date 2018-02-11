@@ -1,26 +1,21 @@
 package(
-    default_visibility = ["//java/google/registry:registry_project"],
+    default_visibility = ["//visibility:public"],
 )
 
 licenses(["notice"])  # Apache 2.0
-
 
 java_library(
     name = "params",
     srcs = glob(["*.java"]),
     visibility = ["//visibility:public"],
     deps = [
-        "//java/com/google/common/annotations",
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//java/com/google/common/net",
-        "//java/com/google/common/primitives",
-        "//third_party/java/jcommander",
-        "//third_party/java/joda_money",
-        "//third_party/java/joda_time",
-        "//third_party/java/jsr305_annotations",
-        "//third_party/java/re2j",
         "//java/google/registry/model",
         "//java/google/registry/util",
+        "@com_beust_jcommander",
+        "@com_google_code_findbugs_jsr305",
+        "@com_google_guava",
+        "@com_google_re2j",
+        "@joda_time",
+        "@org_joda_money",
     ],
 )

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -41,22 +41,19 @@ public class ExportUtilsTest {
     ReservedList rl1 = persistReservedList(
         "tld-reserved1",
         "lol,FULLY_BLOCKED",
-        "cat,FULLY_BLOCKED",
-        "jimmy,UNRESERVED");
+        "cat,FULLY_BLOCKED");
     ReservedList rl2 = persistReservedList(
         "tld-reserved2",
         "lol,NAME_COLLISION",
-        "cat,UNRESERVED",
         "snow,FULLY_BLOCKED");
     ReservedList rl3 = persistReservedList(
         "tld-reserved3",
         false,
-        "tine,FULLY_BLOCKED",
-        "oval,UNRESERVED");
+        "tine,FULLY_BLOCKED");
     createTld("tld");
     persistResource(Registry.get("tld").asBuilder().setReservedLists(rl1, rl2, rl3).build());
     // Should not contain jimmy, tine, or oval.
-    assertThat(ExportUtils.exportReservedTerms(Registry.get("tld")))
+    assertThat(new ExportUtils("This is a disclaimer.\n").exportReservedTerms(Registry.get("tld")))
         .isEqualTo("This is a disclaimer.\ncat\nlol\nsnow\n");
   }
 }

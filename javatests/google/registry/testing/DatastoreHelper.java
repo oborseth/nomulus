@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,14 +17,19 @@ package google.registry.testing;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Suppliers.memoize;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.toArray;
+import static com.google.common.collect.MoreCollectors.onlyElement;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static google.registry.config.RegistryConfig.getContactAndHostRoidSuffix;
+import static google.registry.config.RegistryConfig.getContactAutomaticTransferLength;
 import static google.registry.flows.ResourceFlowUtils.createTransferResponse;
-import static google.registry.model.EppResourceUtils.createContactHostRoid;
-import static google.registry.model.EppResourceUtils.createDomainRoid;
+import static google.registry.model.EppResourceUtils.createDomainRepoId;
+import static google.registry.model.EppResourceUtils.createRepoId;
 import static google.registry.model.domain.launch.ApplicationStatus.VALIDATED;
 import static google.registry.model.ofy.ObjectifyService.ofy;
+import static google.registry.model.registry.label.PremiumListUtils.parentPremiumListEntriesOnRevision;
 import static google.registry.pricing.PricingEngineProxy.getDomainRenewCost;
 import static google.registry.util.CollectionUtils.difference;
 import static google.registry.util.CollectionUtils.union;
@@ -32,26 +37,24 @@ import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static google.registry.util.DomainNameUtils.ACE_PREFIX_REGEX;
 import static google.registry.util.DomainNameUtils.getTldFromDomainName;
+import static google.registry.util.PreconditionsUtils.checkArgumentPresent;
 import static google.registry.util.ResourceUtils.readResourceUtf8;
 import static java.util.Arrays.asList;
 import static org.joda.money.CurrencyUnit.USD;
 
 import com.google.common.base.Ascii;
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
-import com.google.common.base.Predicate;
 import com.google.common.base.Splitter;
 import com.google.common.base.Supplier;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Streams;
+import com.google.common.net.InetAddresses;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.VoidWork;
-import com.googlecode.objectify.Work;
 import com.googlecode.objectify.cmd.Saver;
-import google.registry.config.RegistryEnvironment;
 import google.registry.dns.writer.VoidDnsWriter;
 import google.registry.model.Buildable;
 import google.registry.model.EppResource;
@@ -74,23 +77,31 @@ import google.registry.model.eppcommon.Trid;
 import google.registry.model.host.HostResource;
 import google.registry.model.index.DomainApplicationIndex;
 import google.registry.model.index.EppResourceIndex;
+import google.registry.model.index.EppResourceIndexBucket;
 import google.registry.model.index.ForeignKeyIndex;
 import google.registry.model.ofy.ObjectifyService;
 import google.registry.model.poll.PollMessage;
 import google.registry.model.pricing.StaticPremiumListPricingEngine;
 import google.registry.model.registrar.Registrar;
+import google.registry.model.registrar.RegistrarAddress;
 import google.registry.model.registry.Registry;
 import google.registry.model.registry.Registry.TldState;
+import google.registry.model.registry.Registry.TldType;
 import google.registry.model.registry.label.PremiumList;
+import google.registry.model.registry.label.PremiumList.PremiumListEntry;
+import google.registry.model.registry.label.PremiumList.PremiumListRevision;
 import google.registry.model.registry.label.ReservedList;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.model.smd.EncodedSignedMark;
 import google.registry.model.transfer.TransferData;
 import google.registry.model.transfer.TransferData.Builder;
-import google.registry.model.transfer.TransferData.TransferServerApproveEntity;
 import google.registry.model.transfer.TransferStatus;
 import google.registry.tmch.LordnTask;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
+import java.util.function.Function;
+import javax.annotation.Nullable;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 
@@ -98,19 +109,20 @@ import org.joda.time.DateTime;
 public class DatastoreHelper {
 
   private static final Supplier<String[]> DEFAULT_PREMIUM_LIST_CONTENTS =
-      memoize(new Supplier<String[]>() {
-        @Override
-        public String[] get() {
-          return toArray(
-              Splitter.on('\n').split(
-                  readResourceUtf8(DatastoreHelper.class, "default_premium_list_testdata.csv")),
-              String.class);
-        }});
+      memoize(
+          () ->
+              toArray(
+                  Splitter.on('\n')
+                      .split(
+                          readResourceUtf8(
+                              DatastoreHelper.class, "default_premium_list_testdata.csv")),
+                  String.class));
 
   public static HostResource newHostResource(String hostName) {
     return new HostResource.Builder()
         .setFullyQualifiedHostName(hostName)
-        .setCurrentSponsorClientId("TheRegistrar")
+        .setCreationClientId("TheRegistrar")
+        .setPersistedCurrentSponsorClientId("TheRegistrar")
         .setCreationTimeForTest(START_OF_TIME)
         .setRepoId(generateNewContactHostRoid())
         .build();
@@ -140,7 +152,7 @@ public class DatastoreHelper {
         .setRepoId(repoId)
         .setFullyQualifiedDomainName(domainName)
         .setCreationClientId("TheRegistrar")
-        .setCurrentSponsorClientId("TheRegistrar")
+        .setPersistedCurrentSponsorClientId("TheRegistrar")
         .setCreationTimeForTest(START_OF_TIME)
         .setAuthInfo(DomainAuthInfo.create(PasswordAuth.create("2fooBAR")))
         .setRegistrant(contactKey)
@@ -180,7 +192,7 @@ public class DatastoreHelper {
     return new DomainApplication.Builder()
         .setRepoId(repoId)
         .setFullyQualifiedDomainName(domainName)
-        .setCurrentSponsorClientId("TheRegistrar")
+        .setPersistedCurrentSponsorClientId("TheRegistrar")
         .setAuthInfo(DomainAuthInfo.create(PasswordAuth.create("2fooBAR")))
         .setRegistrant(contactKey)
         .setContacts(ImmutableSet.of(
@@ -216,7 +228,8 @@ public class DatastoreHelper {
     return new ContactResource.Builder()
         .setRepoId(repoId)
         .setContactId(contactId)
-        .setCurrentSponsorClientId("TheRegistrar")
+        .setCreationClientId("TheRegistrar")
+        .setPersistedCurrentSponsorClientId("TheRegistrar")
         .setAuthInfo(ContactAuthInfo.create(PasswordAuth.create("2fooBAR")))
         .setCreationTimeForTest(START_OF_TIME)
         .build();
@@ -229,7 +242,23 @@ public class DatastoreHelper {
 
   public static Registry newRegistry(
       String tld, String roidSuffix, ImmutableSortedMap<DateTime, TldState> tldStates) {
-    return new Registry.Builder()
+    return setupRegistry(new Registry.Builder(), tld, roidSuffix, tldStates);
+  }
+
+  public static Registry newRegistry(
+      String tld,
+      String roidSuffix,
+      ImmutableSortedMap<DateTime, TldState> tldStates,
+      TldType tldType) {
+    return setupRegistry(new Registry.Builder().setTldType(tldType), tld, roidSuffix, tldStates);
+  }
+
+  private static Registry setupRegistry(
+      Registry.Builder registryBuilder,
+      String tld,
+      String roidSuffix,
+      ImmutableSortedMap<DateTime, TldState> tldStates) {
+    return registryBuilder
         .setTldStr(tld)
         .setRoidSuffix(roidSuffix)
         .setTldStateTransitions(tldStates)
@@ -242,7 +271,7 @@ public class DatastoreHelper {
         // Always set a default premium list. Tests that don't want it can delete it.
         .setPremiumList(persistPremiumList(tld, DEFAULT_PREMIUM_LIST_CONTENTS.get()))
         .setPremiumPricingEngine(StaticPremiumListPricingEngine.NAME)
-        .setDnsWriter(VoidDnsWriter.NAME)
+        .setDnsWriters(ImmutableSet.of(VoidDnsWriter.NAME))
         .build();
   }
 
@@ -267,6 +296,8 @@ public class DatastoreHelper {
         newHostResource(hostName)
             .asBuilder()
             .setSuperordinateDomain(Key.create(superordinateDomain))
+            .setInetAddresses(
+                ImmutableSet.of(InetAddresses.forString("1080:0:0:0:8:800:200C:417A")))
             .build());
   }
 
@@ -340,23 +371,27 @@ public class DatastoreHelper {
             .build());
   }
 
+  /**
+   * Persists a premium list and its child entities directly without writing commit logs.
+   *
+   * <p>Avoiding commit logs is important because a simple default premium list is persisted for
+   * each TLD that is created in tests, and clocks would need to be mocked using an auto-
+   * incrementing FakeClock for all tests in order to persist the commit logs properly because of
+   * the requirement to have monotonically increasing timestamps.
+   */
   public static PremiumList persistPremiumList(String listName, String... lines) {
-    Optional<PremiumList> existing = PremiumList.get(listName);
-    return persistPremiumList(
-        (existing.isPresent() ? existing.get().asBuilder() : new PremiumList.Builder())
-            .setName(listName)
-            .setPremiumListMapFromLines(ImmutableList.copyOf(lines))
-            .build());
-  }
-
-  private static PremiumList persistPremiumList(PremiumList premiumList) {
-    // Persist the list and its child entities directly, rather than using its helper method, so
-    // that we can avoid writing commit logs. This would cause issues since many tests replace the
-    // clock in Ofy with a non-advancing FakeClock, and commit logs currently require
-    // monotonically increasing timestamps.
-    ofy().saveWithoutBackup().entity(premiumList).now();
-    ofy().saveWithoutBackup().entities(premiumList.getPremiumListEntries().values()).now();
-    return premiumList;
+    PremiumList premiumList = new PremiumList.Builder().setName(listName).build();
+    ImmutableMap<String, PremiumListEntry> entries = premiumList.parse(asList(lines));
+    PremiumListRevision revision = PremiumListRevision.create(premiumList, entries.keySet());
+    ofy()
+        .saveWithoutBackup()
+        .entities(premiumList.asBuilder().setRevision(Key.create(revision)).build(), revision)
+        .now();
+    ofy()
+        .saveWithoutBackup()
+        .entities(parentPremiumListEntriesOnRevision(entries.values(), Key.create(revision)))
+        .now();
+    return ofy().load().entity(premiumList).now();
   }
 
   /** Creates and persists a tld. */
@@ -380,7 +415,11 @@ public class DatastoreHelper {
   }
 
   public static void createTld(String tld, ImmutableSortedMap<DateTime, TldState> tldStates) {
-    createTld(tld, Ascii.toUpperCase(tld.replaceFirst(ACE_PREFIX_REGEX, "")), tldStates);
+    // Coerce the TLD string into a valid ROID suffix.
+    String roidSuffix =
+        Ascii.toUpperCase(tld.replaceFirst(ACE_PREFIX_REGEX, "").replace('.', '_'))
+            .replace('-', '_');
+    createTld(tld, roidSuffix.length() > 8 ? roidSuffix.substring(0, 8) : roidSuffix, tldStates);
   }
 
   public static void createTld(
@@ -397,13 +436,13 @@ public class DatastoreHelper {
   }
 
   public static void allowRegistrarAccess(String clientId, String tld) {
-    Registrar registrar = Registrar.loadByClientId(clientId);
+    Registrar registrar = loadRegistrar(clientId);
     persistResource(
         registrar.asBuilder().setAllowedTlds(union(registrar.getAllowedTlds(), tld)).build());
   }
 
   private static void disallowRegistrarAccess(String clientId, String tld) {
-    Registrar registrar = Registrar.loadByClientId(clientId);
+    Registrar registrar = loadRegistrar(clientId);
     persistResource(
         registrar.asBuilder().setAllowedTlds(difference(registrar.getAllowedTlds(), tld)).build());
   }
@@ -417,27 +456,23 @@ public class DatastoreHelper {
         .setPendingTransferExpirationTime(expirationTime);
   }
 
-  private static Builder createTransferDataBuilder(
-      DateTime requestTime, DateTime expirationTime, Integer extendedRegistrationYears) {
-    return createTransferDataBuilder(requestTime, expirationTime)
-        .setExtendedRegistrationYears(extendedRegistrationYears);
-  }
-
   public static PollMessage.OneTime createPollMessageForImplicitTransfer(
-      EppResource contact,
+      EppResource resource,
       HistoryEntry historyEntry,
       String clientId,
       DateTime requestTime,
       DateTime expirationTime,
-      DateTime now) {
+      DateTime now,
+      @Nullable DateTime extendedRegistrationExpirationTime) {
+    TransferData transferData =
+        createTransferDataBuilder(requestTime, expirationTime)
+            .setTransferredRegistrationExpirationTime(extendedRegistrationExpirationTime)
+            .build();
     return new PollMessage.OneTime.Builder()
         .setClientId(clientId)
         .setEventTime(expirationTime)
         .setMsg("Transfer server approved.")
-        .setResponseData(ImmutableList.of(
-            createTransferResponse(contact, createTransferDataBuilder(requestTime, expirationTime)
-                .build(),
-            now)))
+        .setResponseData(ImmutableList.of(createTransferResponse(resource, transferData, now)))
         .setParent(historyEntry)
         .build();
   }
@@ -446,8 +481,7 @@ public class DatastoreHelper {
       DomainResource domain,
       HistoryEntry historyEntry,
       DateTime costLookupTime,
-      DateTime eventTime,
-      Integer extendedRegistrationYears) {
+      DateTime eventTime) {
     return new BillingEvent.OneTime.Builder()
         .setReason(Reason.TRANSFER)
         .setTargetId(domain.getFullyQualifiedDomainName())
@@ -455,10 +489,8 @@ public class DatastoreHelper {
         .setBillingTime(
             eventTime.plus(Registry.get(domain.getTld()).getTransferGracePeriodLength()))
         .setClientId("NewRegistrar")
-        .setPeriodYears(extendedRegistrationYears)
-        .setCost(
-            getDomainRenewCost(
-                domain.getFullyQualifiedDomainName(), costLookupTime, extendedRegistrationYears))
+        .setPeriodYears(1)
+        .setCost(getDomainRenewCost(domain.getFullyQualifiedDomainName(), costLookupTime, 1))
         .setParent(historyEntry)
         .build();
   }
@@ -475,13 +507,12 @@ public class DatastoreHelper {
             .build());
     return persistResource(
         contact.asBuilder()
-            .setCurrentSponsorClientId("TheRegistrar")
+            .setPersistedCurrentSponsorClientId("TheRegistrar")
             .addStatusValue(StatusValue.PENDING_TRANSFER)
             .setTransferData(createTransferDataBuilder(requestTime, expirationTime)
-                    .setPendingTransferExpirationTime(now.plus(
-                        RegistryEnvironment.get().config().getContactAutomaticTransferLength()))
+                    .setPendingTransferExpirationTime(now.plus(getContactAutomaticTransferLength()))
                 .setServerApproveEntities(
-                    ImmutableSet.<Key<? extends TransferServerApproveEntity>>of(
+                    ImmutableSet.of(
                     // Pretend it's 3 days since the request
                     Key.create(persistResource(
                         createPollMessageForImplicitTransfer(
@@ -490,7 +521,8 @@ public class DatastoreHelper {
                             "NewRegistrar",
                             requestTime,
                             expirationTime,
-                            now))),
+                            now,
+                            null))),
                     Key.create(persistResource(
                         createPollMessageForImplicitTransfer(
                             contact,
@@ -498,7 +530,8 @@ public class DatastoreHelper {
                             "TheRegistrar",
                             requestTime,
                             expirationTime,
-                            now)))))
+                            now,
+                            null)))))
                 .setTransferRequestTrid(Trid.create("transferClient-trid", "transferServer-trid"))
                 .build())
             .build());
@@ -509,7 +542,6 @@ public class DatastoreHelper {
       DateTime requestTime,
       DateTime expirationTime,
       DateTime extendedRegistrationExpirationTime,
-      int extendedRegistrationYears,
       DateTime now) {
     HistoryEntry historyEntryDomainTransfer = persistResource(
         new HistoryEntry.Builder()
@@ -520,8 +552,7 @@ public class DatastoreHelper {
             domain,
             historyEntryDomainTransfer,
             requestTime,
-            expirationTime,
-            extendedRegistrationYears));
+            expirationTime));
     BillingEvent.Recurring gainingClientAutorenewEvent = persistResource(
         new BillingEvent.Recurring.Builder()
             .setFlags(ImmutableSet.of(Flag.AUTO_RENEW))
@@ -558,17 +589,17 @@ public class DatastoreHelper {
     } else {
       deleteResource(autorenewPollMessage);
     }
-    Builder transferDataBuilder = createTransferDataBuilder(
-        requestTime, expirationTime, extendedRegistrationYears);
+    Builder transferDataBuilder = createTransferDataBuilder(requestTime, expirationTime);
     return persistResource(domain.asBuilder()
-        .setCurrentSponsorClientId("TheRegistrar")
+        .setPersistedCurrentSponsorClientId("TheRegistrar")
         .addStatusValue(StatusValue.PENDING_TRANSFER)
         .setTransferData(transferDataBuilder
             .setPendingTransferExpirationTime(expirationTime)
+            .setTransferredRegistrationExpirationTime(extendedRegistrationExpirationTime)
             .setServerApproveBillingEvent(Key.create(transferBillingEvent))
             .setServerApproveAutorenewEvent(Key.create(gainingClientAutorenewEvent))
             .setServerApproveAutorenewPollMessage(Key.create(gainingClientAutorenewPollMessage))
-            .setServerApproveEntities(ImmutableSet.<Key<? extends TransferServerApproveEntity>>of(
+            .setServerApproveEntities(ImmutableSet.of(
                 Key.create(transferBillingEvent),
                 Key.create(gainingClientAutorenewEvent),
                 Key.create(gainingClientAutorenewPollMessage),
@@ -579,7 +610,8 @@ public class DatastoreHelper {
                         "NewRegistrar",
                         requestTime,
                         expirationTime,
-                        now))),
+                        now,
+                        extendedRegistrationExpirationTime))),
                 Key.create(persistResource(
                     createPollMessageForImplicitTransfer(
                         domain,
@@ -587,50 +619,71 @@ public class DatastoreHelper {
                         "TheRegistrar",
                         requestTime,
                         expirationTime,
-                        now)))))
+                        now,
+                        extendedRegistrationExpirationTime)))))
             .setTransferRequestTrid(Trid.create("transferClient-trid", "transferServer-trid"))
-            .setExtendedRegistrationYears(extendedRegistrationYears)
             .build())
         .build());
   }
 
-  /** Creates a stripped-down {@link Registrar} with the specified clientId and ianaIdentifier */
-  public static Registrar persistNewRegistrar(String clientId, long ianaIdentifier) {
+  /** Persists and returns a {@link Registrar} with the specified attributes. */
+  public static Registrar persistNewRegistrar(
+      String clientId, String registrarName, Registrar.Type type, long ianaIdentifier) {
     return persistSimpleResource(
         new Registrar.Builder()
-          .setClientId(clientId)
-          .setType(Registrar.Type.REAL)
-          .setIanaIdentifier(ianaIdentifier)
-          .build());
+            .setClientId(clientId)
+            .setRegistrarName(registrarName)
+            .setType(type)
+            .setIanaIdentifier(ianaIdentifier)
+            .setLocalizedAddress(
+                new RegistrarAddress.Builder()
+                    .setStreet(ImmutableList.of("123 Fake St"))
+                    .setCity("Fakington")
+                    .setCountryCode("US")
+                    .build())
+            .build());
   }
 
   private static Iterable<BillingEvent> getBillingEvents() {
-    return Iterables.<BillingEvent>concat(
+    return Iterables.concat(
         ofy().load().type(BillingEvent.OneTime.class),
         ofy().load().type(BillingEvent.Recurring.class),
         ofy().load().type(BillingEvent.Cancellation.class));
   }
 
   private static Iterable<BillingEvent> getBillingEvents(EppResource resource) {
-    return Iterables.<BillingEvent>concat(
+    return Iterables.concat(
         ofy().load().type(BillingEvent.OneTime.class).ancestor(resource),
         ofy().load().type(BillingEvent.Recurring.class).ancestor(resource),
         ofy().load().type(BillingEvent.Cancellation.class).ancestor(resource));
   }
 
-
-  /** Assert that the expected billing events are exactly the ones found in the fake datastore. */
-  public static void assertBillingEvents(BillingEvent... expected) throws Exception {
-    assertThat(FluentIterable.from(getBillingEvents()).transform(BILLING_EVENT_ID_STRIPPER))
-        .containsExactlyElementsIn(
-            FluentIterable.from(asList(expected)).transform(BILLING_EVENT_ID_STRIPPER));
+  /** Assert that the actual billing event matches the expected one, ignoring IDs. */
+  public static void assertBillingEventsEqual(BillingEvent actual, BillingEvent expected) {
+    assertThat(stripBillingEventId(actual)).isEqualTo(stripBillingEventId(expected));
   }
 
-  /** Assert that the expected billing events set is exactly the one found in the fake datastore. */
-  public static void assertBillingEvents(ImmutableSet<BillingEvent> expected) throws Exception {
-    assertThat(FluentIterable.from(getBillingEvents()).transform(BILLING_EVENT_ID_STRIPPER))
+  /** Assert that the actual billing events match the expected ones, ignoring IDs and order. */
+  public static void assertBillingEventsEqual(
+      Iterable<BillingEvent> actual, Iterable<BillingEvent> expected) {
+    assertThat(
+            Streams.stream(actual)
+                .map(DatastoreHelper::stripBillingEventId)
+                .collect(toImmutableList()))
         .containsExactlyElementsIn(
-            FluentIterable.from(expected.asList()).transform(BILLING_EVENT_ID_STRIPPER));
+            Streams.stream(expected)
+                .map(DatastoreHelper::stripBillingEventId)
+                .collect(toImmutableList()));
+  }
+
+  /** Assert that the expected billing events are exactly the ones found in the fake Datastore. */
+  public static void assertBillingEvents(BillingEvent... expected) throws Exception {
+    assertBillingEventsEqual(getBillingEvents(), Arrays.asList(expected));
+  }
+
+  /** Assert that the expected billing events set is exactly the one found in the fake Datastore. */
+  public static void assertBillingEvents(Set<BillingEvent> expected) throws Exception {
+    assertBillingEventsEqual(getBillingEvents(), expected);
   }
 
   /**
@@ -638,57 +691,90 @@ public class DatastoreHelper {
    */
   public static void assertBillingEventsForResource(
       EppResource resource, BillingEvent... expected) throws Exception {
-    assertThat(FluentIterable.from(getBillingEvents(resource)).transform(BILLING_EVENT_ID_STRIPPER))
+    assertThat(
+            Streams.stream(getBillingEvents(resource))
+                .map(DatastoreHelper::stripBillingEventId)
+                .collect(toImmutableList()))
         .containsExactlyElementsIn(
-            FluentIterable.from(asList(expected)).transform(BILLING_EVENT_ID_STRIPPER));
+            Arrays.stream(expected)
+                .map(DatastoreHelper::stripBillingEventId)
+                .collect(toImmutableList()));
   }
-
 
   /** Assert that there are no billing events. */
   public static void assertNoBillingEvents() {
     assertThat(getBillingEvents()).isEmpty();
   }
 
-  /** Helper to effectively erase the billing event ID to facilitate comparison. */
-  public static final Function<BillingEvent, BillingEvent> BILLING_EVENT_ID_STRIPPER =
-      new Function<BillingEvent, BillingEvent>() {
-        @Override
-        public BillingEvent apply(BillingEvent billingEvent) {
-          // Can't use id=0 because that causes the builder to generate a new id.
-          return billingEvent.asBuilder().setId(1L).build();
-        }};
+  /** Strips the billing event ID (really, sets it to a constant value) to facilitate comparison. */
+  public static BillingEvent stripBillingEventId(BillingEvent billingEvent) {
+    return billingEvent.asBuilder().setId(1L).build();
+  }
+
+  /** Assert that the actual poll message matches the expected one, ignoring IDs. */
+  public static void assertPollMessagesEqual(PollMessage actual, PollMessage expected) {
+    assertThat(POLL_MESSAGE_ID_STRIPPER.apply(actual))
+        .isEqualTo(POLL_MESSAGE_ID_STRIPPER.apply(expected));
+  }
+
+  /** Assert that the actual poll messages match the expected ones, ignoring IDs and order. */
+  public static void assertPollMessagesEqual(
+      Iterable<PollMessage> actual, Iterable<PollMessage> expected) {
+    assertThat(Streams.stream(actual).map(POLL_MESSAGE_ID_STRIPPER).collect(toImmutableList()))
+        .containsExactlyElementsIn(
+            Streams.stream(expected).map(POLL_MESSAGE_ID_STRIPPER).collect(toImmutableList()));
+  }
+
+  public static void assertPollMessagesForResource(EppResource resource, PollMessage... expected)
+      throws Exception {
+    assertThat(
+            getPollMessages(resource)
+                .stream()
+                .map(POLL_MESSAGE_ID_STRIPPER)
+                .collect(toImmutableList()))
+        .containsExactlyElementsIn(
+            Arrays.stream(expected).map(POLL_MESSAGE_ID_STRIPPER).collect(toImmutableList()));
+  }
+
+  /** Helper to effectively erase the poll message ID to facilitate comparison. */
+  public static final Function<PollMessage, PollMessage> POLL_MESSAGE_ID_STRIPPER =
+      pollMessage -> pollMessage.asBuilder().setId(1L).build();
 
   public static ImmutableList<PollMessage> getPollMessages() {
-    return FluentIterable.from(ofy().load().type(PollMessage.class)).toList();
+    return Streams.stream(ofy().load().type(PollMessage.class)).collect(toImmutableList());
   }
 
   public static ImmutableList<PollMessage> getPollMessages(String clientId) {
-    return FluentIterable
-        .from(ofy().load().type(PollMessage.class).filter("clientId", clientId))
-        .toList();
+    return Streams.stream(ofy().load().type(PollMessage.class).filter("clientId", clientId))
+        .collect(toImmutableList());
+  }
+
+  public static ImmutableList<PollMessage> getPollMessages(EppResource resource) {
+    return Streams.stream(ofy().load().type(PollMessage.class).ancestor(resource))
+        .collect(toImmutableList());
   }
 
   public static ImmutableList<PollMessage> getPollMessages(String clientId, DateTime now) {
-    return FluentIterable
-        .from(ofy()
-            .load()
-            .type(PollMessage.class)
-            .filter("clientId", clientId)
-            .filter("eventTime <=", now.toDate()))
-        .toList();
+    return Streams.stream(
+            ofy()
+                .load()
+                .type(PollMessage.class)
+                .filter("clientId", clientId)
+                .filter("eventTime <=", now.toDate()))
+        .collect(toImmutableList());
   }
 
   /** Gets all PollMessages associated with the given EppResource. */
   public static ImmutableList<PollMessage> getPollMessages(
       EppResource resource, String clientId, DateTime now) {
-    return FluentIterable
-        .from(ofy()
-            .load()
-            .type(PollMessage.class)
-            .ancestor(resource)
-            .filter("clientId", clientId)
-            .filter("eventTime <=", now.toDate()))
-        .toList();
+    return Streams.stream(
+            ofy()
+                .load()
+                .type(PollMessage.class)
+                .ancestor(resource)
+                .filter("clientId", clientId)
+                .filter("eventTime <=", now.toDate()))
+        .collect(toImmutableList());
   }
 
   public static PollMessage getOnlyPollMessage(String clientId) {
@@ -703,7 +789,11 @@ public class DatastoreHelper {
       String clientId,
       DateTime now,
       Class<? extends PollMessage> subType) {
-    return Iterables.getOnlyElement(Iterables.filter(getPollMessages(clientId, now), subType));
+    return getPollMessages(clientId, now)
+        .stream()
+        .filter(subType::isInstance)
+        .map(subType::cast)
+        .collect(onlyElement());
   }
 
   public static PollMessage getOnlyPollMessage(
@@ -711,13 +801,16 @@ public class DatastoreHelper {
       String clientId,
       DateTime now,
       Class<? extends PollMessage> subType) {
-    return Iterables.getOnlyElement(
-        Iterables.filter(getPollMessages(resource, clientId, now), subType));
+    return getPollMessages(resource, clientId, now)
+        .stream()
+        .filter(subType::isInstance)
+        .map(subType::cast)
+        .collect(onlyElement());
   }
 
   /** Returns a newly allocated, globally unique domain repoId of the format HEX-TLD. */
   public static String generateNewDomainRoid(String tld) {
-    return createDomainRoid(ObjectifyService.allocateId(), tld);
+    return createDomainRepoId(ObjectifyService.allocateId(), tld);
   }
 
   /**
@@ -725,7 +818,7 @@ public class DatastoreHelper {
    * HEX_TLD-ROID.
    */
   public static String generateNewContactHostRoid() {
-    return createContactHostRoid(ObjectifyService.allocateId());
+    return createRepoId(ObjectifyService.allocateId(), getContactAndHostRoidSuffix());
   }
 
   /**
@@ -734,7 +827,7 @@ public class DatastoreHelper {
    * <p>Tests should always use this method (or the shortcut persist methods in this class) to
    * persist test data, to avoid potentially subtle bugs related to race conditions and a stale
    * ofy() session cache. Specifically, this method calls .now() on the save to force the write to
-   * actually get sent to datastore (although it does not force it to be applied) and clears the
+   * actually get sent to Datastore (although it does not force it to be applied) and clears the
    * session cache. If necessary, this method also updates the relevant {@link EppResourceIndex},
    * {@link ForeignKeyIndex} and {@link DomainApplicationIndex}.
    *
@@ -750,22 +843,27 @@ public class DatastoreHelper {
     return persistResource(resource, true);
   }
 
-  private static <R> void saveResource(final R resource, final boolean wantBackup) {
+  private static <R> void saveResource(R resource, boolean wantBackup) {
     Saver saver = wantBackup ? ofy().save() : ofy().saveWithoutBackup();
     saver.entity(resource);
     if (resource instanceof EppResource) {
       EppResource eppResource = (EppResource) resource;
-      assertWithMessage("Cannot persist an EppResource with a missing repoId in tests")
-          .that(eppResource.getRepoId()).isNotEmpty();
-      Key<EppResource> eppResourceKey = Key.create(eppResource);
-      saver.entity(EppResourceIndex.create(eppResourceKey));
-      if (resource instanceof ForeignKeyedEppResource) {
-        saver.entity(ForeignKeyIndex.create(eppResource, eppResource.getDeletionTime()));
-      }
-      if (resource instanceof DomainApplication) {
-        saver.entity(
-            DomainApplicationIndex.createUpdatedInstance((DomainApplication) resource));
-      }
+      persistEppResourceExtras(
+          eppResource, EppResourceIndex.create(Key.create(eppResource)), saver);
+    }
+  }
+
+  private static <R extends EppResource> void persistEppResourceExtras(
+      R resource, EppResourceIndex index, Saver saver) {
+    assertWithMessage("Cannot persist an EppResource with a missing repoId in tests")
+        .that(resource.getRepoId())
+        .isNotEmpty();
+    saver.entity(index);
+    if (resource instanceof ForeignKeyedEppResource) {
+      saver.entity(ForeignKeyIndex.create(resource, resource.getDeletionTime()));
+    }
+    if (resource instanceof DomainApplication) {
+      saver.entity(DomainApplicationIndex.createUpdatedInstance((DomainApplication) resource));
     }
   }
 
@@ -778,8 +876,25 @@ public class DatastoreHelper {
       public void vrun() {
         saveResource(resource, wantBackup);
       }});
-    // Force the session to be cleared so that when we read it back, we read from the datastore
-    // and not from the transaction cache or memcache.
+    // Force the session cache to be cleared so that when we read the resource back, we read from
+    // Datastore and not from the session cache. This is needed to trigger Objectify's load process
+    // (unmarshalling entity protos to POJOs, nulling out empty collections, calling @OnLoad
+    // methods, etc.) which is bypassed for entities loaded from the session cache.
+    ofy().clearSessionCache();
+    return ofy().load().entity(resource).now();
+  }
+
+  /** Persists an EPP resource with the {@link EppResourceIndex} always going into bucket one. */
+  public static <R extends EppResource> R persistEppResourceInFirstBucket(final R resource) {
+    final EppResourceIndex eppResourceIndex =
+        EppResourceIndex.create(Key.create(EppResourceIndexBucket.class, 1), Key.create(resource));
+    ofy().transact(new VoidWork() {
+      @Override
+      public void vrun() {
+        Saver saver = ofy().save();
+        saver.entity(resource);
+        persistEppResourceExtras(resource, eppResourceIndex, saver);
+      }});
     ofy().clearSessionCache();
     return ofy().load().entity(resource).now();
   }
@@ -804,8 +919,8 @@ public class DatastoreHelper {
           }
         }});
     }
-    // Force the session to be cleared so that when we read it back, we read from the datastore
-    // and not from the transaction cache or memcache.
+    // Force the session to be cleared so that when we read it back, we read from Datastore
+    // and not from the transaction's session cache.
     ofy().clearSessionCache();
     for (R resource : resources) {
       ofy().load().entity(resource).now();
@@ -855,13 +970,10 @@ public class DatastoreHelper {
    */
   public static List<HistoryEntry> getHistoryEntriesOfType(
       EppResource resource, final HistoryEntry.Type type) {
-    return FluentIterable.from(getHistoryEntries(resource))
-        .filter(new Predicate<HistoryEntry>() {
-          @Override
-          public boolean apply(HistoryEntry entry) {
-            return entry.getType() == type;
-          }})
-        .toList();
+    return getHistoryEntries(resource)
+        .stream()
+        .filter(entry -> entry.getType() == type)
+        .collect(toImmutableList());
   }
 
   /**
@@ -909,8 +1021,6 @@ public class DatastoreHelper {
   /**
    * Like persistResource but for multiple entities, with no helper for saving
    * ForeignKeyedEppResources.
-   *
-   * @see "http://docs.objectify-appengine.googlecode.com/git/apidocs/com/googlecode/objectify/cmd/Loader.htmls#entities(java.lang.Iterable)"
    */
   public static <R> ImmutableList<R> persistSimpleResources(final Iterable<R> resources) {
     ofy().transact(new VoidWork(){
@@ -918,26 +1028,48 @@ public class DatastoreHelper {
       public void vrun() {
         ofy().saveWithoutBackup().entities(resources);
       }});
-    // Force the session to be cleared so that when we read it back, we read from the datastore
-    // and not from the transaction cache or memcache.
+    // Force the session to be cleared so that when we read it back, we read from Datastore
+    // and not from the transaction's session cache.
     ofy().clearSessionCache();
     return ImmutableList.copyOf(ofy().load().entities(resources).values());
   }
 
   public static void deleteResource(final Object resource) {
     ofy().deleteWithoutBackup().entity(resource).now();
-    // Force the session to be cleared so that when we read it back, we read from the datastore and
-    // not from the transaction cache or memcache.
+    // Force the session to be cleared so that when we read it back, we read from Datastore and
+    // not from the transaction's session cache.
     ofy().clearSessionCache();
   }
 
   /** Force the create and update timestamps to get written into the resource. **/
   public static <R> R cloneAndSetAutoTimestamps(final R resource) {
-    return ofy().transact(new Work<R>() {
-      @Override
-      public R run() {
-        return ofy().load().fromEntity(ofy().save().toEntity(resource));
-      }});
+    return ofy().transact(() -> ofy().load().fromEntity(ofy().save().toEntity(resource)));
+  }
+
+  /** Returns the entire map of {@link PremiumListEntry}s for the given {@link PremiumList}. */
+  public static ImmutableMap<String, PremiumListEntry> loadPremiumListEntries(
+      PremiumList premiumList) {
+    try {
+      ImmutableMap.Builder<String, PremiumListEntry> entriesMap = new ImmutableMap.Builder<>();
+      if (premiumList.getRevisionKey() != null) {
+        for (PremiumListEntry entry :
+            ofy().load().type(PremiumListEntry.class).ancestor(premiumList.getRevisionKey())) {
+          entriesMap.put(entry.getLabel(), entry);
+        }
+      }
+      return entriesMap.build();
+    } catch (Exception e) {
+      throw new RuntimeException(
+          "Could not retrieve entries for premium list " + premiumList.getName(), e);
+    }
+  }
+
+  /** Loads and returns the registrar with the given client ID, or throws IAE if not present. */
+  public static Registrar loadRegistrar(String clientId) {
+    return checkArgumentPresent(
+        Registrar.loadByClientId(clientId),
+        "Error in tests: Registrar %s does not exist",
+        clientId);
   }
 
   private DatastoreHelper() {}

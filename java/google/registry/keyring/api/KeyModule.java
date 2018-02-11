@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,10 +16,10 @@ package google.registry.keyring.api;
 
 import static com.google.common.base.Strings.emptyToNull;
 
-import com.google.common.base.Optional;
 import dagger.Module;
 import dagger.Provides;
 import java.lang.annotation.Documented;
+import java.util.Optional;
 import javax.inject.Qualifier;
 import org.bouncycastle.openpgp.PGPKeyPair;
 import org.bouncycastle.openpgp.PGPPrivateKey;
@@ -32,7 +32,7 @@ public final class KeyModule {
   /** Dagger qualifier for keys from {@link Keyring}. */
   @Qualifier
   @Documented
-  public static @interface Key {
+  public @interface Key {
     String value();
   }
 
@@ -57,19 +57,19 @@ public final class KeyModule {
   @Provides
   @Key("marksdbDnlLogin")
   static Optional<String> provideMarksdbDnlLogin(Keyring keyring) {
-    return Optional.fromNullable(emptyToNull(keyring.getMarksdbDnlLogin()));
+    return Optional.ofNullable(emptyToNull(keyring.getMarksdbDnlLogin()));
   }
 
   @Provides
   @Key("marksdbLordnPassword")
   static Optional<String> provideMarksdbLordnPassword(Keyring keyring) {
-    return Optional.fromNullable(emptyToNull(keyring.getMarksdbLordnPassword()));
+    return Optional.ofNullable(emptyToNull(keyring.getMarksdbLordnPassword()));
   }
 
   @Provides
   @Key("marksdbSmdrlLogin")
   static Optional<String> provideMarksdbSmdrlLogin(Keyring keyring) {
-    return Optional.fromNullable(emptyToNull(keyring.getMarksdbSmdrlLogin()));
+    return Optional.ofNullable(emptyToNull(keyring.getMarksdbSmdrlLogin()));
   }
 
   @Provides

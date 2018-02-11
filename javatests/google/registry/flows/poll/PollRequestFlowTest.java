@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,8 +20,11 @@ import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.persistActiveContact;
 import static google.registry.testing.DatastoreHelper.persistActiveHost;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import com.google.common.collect.ImmutableList;
+import google.registry.flows.EppException;
 import google.registry.flows.FlowTestCase;
 import google.registry.flows.poll.PollRequestFlow.UnexpectedMessageIdException;
 import google.registry.model.contact.ContactResource;
@@ -64,7 +67,7 @@ public class PollRequestFlowTest extends FlowTestCase<PollRequestFlow> {
             .setEventTime(clock.nowUtc().minusDays(1))
             .setMsg("Transfer approved.")
             .setResponseData(ImmutableList.of(new DomainTransferResponse.Builder()
-                .setFullyQualifiedDomainNameName("test.example")
+                .setFullyQualifiedDomainName("test.example")
                 .setTransferStatus(TransferStatus.SERVER_APPROVED)
                 .setGainingClientId(getClientIdForFlow())
                 .setTransferRequestTime(clock.nowUtc().minusDays(5))
@@ -75,7 +78,7 @@ public class PollRequestFlowTest extends FlowTestCase<PollRequestFlow> {
             .setParent(createHistoryEntryForEppResource(domain))
             .build());
     assertTransactionalFlow(false);
-    runFlowAssertResponse(readFile("poll_response_domain_transfer.xml"));
+    runFlowAssertResponse(loadFile("poll_response_domain_transfer.xml"));
   }
 
   @Test
@@ -99,7 +102,7 @@ public class PollRequestFlowTest extends FlowTestCase<PollRequestFlow> {
             .setParent(createHistoryEntryForEppResource(contact))
             .build());
     assertTransactionalFlow(false);
-    runFlowAssertResponse(readFile("poll_response_contact_transfer.xml"));
+    runFlowAssertResponse(loadFile("poll_response_contact_transfer.xml"));
   }
 
   @Test
@@ -114,7 +117,7 @@ public class PollRequestFlowTest extends FlowTestCase<PollRequestFlow> {
             .setParent(createHistoryEntryForEppResource(domain))
             .build());
     assertTransactionalFlow(false);
-    runFlowAssertResponse(readFile("poll_response_domain_pending_notification.xml"));
+    runFlowAssertResponse(loadFile("poll_response_domain_pending_notification.xml"));
   }
 
   @Test
@@ -128,12 +131,12 @@ public class PollRequestFlowTest extends FlowTestCase<PollRequestFlow> {
             .setParent(createHistoryEntryForEppResource(domain))
             .build());
     assertTransactionalFlow(false);
-    runFlowAssertResponse(readFile("poll_response_autorenew.xml"));
+    runFlowAssertResponse(loadFile("poll_response_autorenew.xml"));
   }
 
   @Test
   public void testSuccess_empty() throws Exception {
-    runFlowAssertResponse(readFile("poll_response_empty.xml"));
+    runFlowAssertResponse(loadFile("poll_response_empty.xml"));
   }
 
   @Test
@@ -145,7 +148,7 @@ public class PollRequestFlowTest extends FlowTestCase<PollRequestFlow> {
             .setMsg("Poll message")
             .setParent(createHistoryEntryForEppResource(domain))
             .build());
-    runFlowAssertResponse(readFile("poll_response_empty.xml"));
+    runFlowAssertResponse(loadFile("poll_response_empty.xml"));
   }
 
   @Test
@@ -157,7 +160,7 @@ public class PollRequestFlowTest extends FlowTestCase<PollRequestFlow> {
             .setMsg("Poll message")
             .setParent(createHistoryEntryForEppResource(domain))
             .build());
-    runFlowAssertResponse(readFile("poll_response_empty.xml"));
+    runFlowAssertResponse(loadFile("poll_response_empty.xml"));
   }
 
   @Test
@@ -171,7 +174,7 @@ public class PollRequestFlowTest extends FlowTestCase<PollRequestFlow> {
             .setParent(createHistoryEntryForEppResource(domain))
             .build());
     assertTransactionalFlow(false);
-    runFlowAssertResponse(readFile("poll_response_empty.xml"));
+    runFlowAssertResponse(loadFile("poll_response_empty.xml"));
   }
 
   @Test
@@ -192,7 +195,7 @@ public class PollRequestFlowTest extends FlowTestCase<PollRequestFlow> {
             .setEventTime(clock.nowUtc().minusDays(1))
             .build());
     assertTransactionalFlow(false);
-    runFlowAssertResponse(readFile("poll_response_contact_delete.xml"));
+    runFlowAssertResponse(loadFile("poll_response_contact_delete.xml"));
   }
 
   @Test
@@ -213,14 +216,14 @@ public class PollRequestFlowTest extends FlowTestCase<PollRequestFlow> {
             .setEventTime(clock.nowUtc().minusDays(1))
             .build());
     assertTransactionalFlow(false);
-    runFlowAssertResponse(readFile("poll_response_host_delete.xml"));
+    runFlowAssertResponse(loadFile("poll_response_host_delete.xml"));
   }
 
   @Test
   public void testFailure_messageIdProvided() throws Exception {
     setEppInput("poll_with_id.xml");
     assertTransactionalFlow(false);
-    thrown.expect(UnexpectedMessageIdException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnexpectedMessageIdException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 }

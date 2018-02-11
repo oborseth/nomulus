@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.HostResourceSubject.assertAboutHosts;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.net.InetAddresses;
@@ -30,70 +31,63 @@ import google.registry.model.billing.BillingEvent;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.eppcommon.Trid;
-import google.registry.model.reporting.HistoryEntry;
 import google.registry.model.transfer.TransferData;
-import google.registry.model.transfer.TransferData.TransferServerApproveEntity;
 import google.registry.model.transfer.TransferStatus;
-import google.registry.testing.ExceptionRule;
-import java.net.InetAddress;
-import javax.annotation.Nullable;
-import org.joda.money.Money;
 import org.joda.time.DateTime;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 
 /** Unit tests for {@link HostResource}. */
 public class HostResourceTest extends EntityTestCase {
+  final DateTime day3 = clock.nowUtc();
+  final DateTime day2 = day3.minusDays(1);
+  final DateTime day1 = day2.minusDays(1);
 
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  HostResource hostResource;
+  DomainResource domain;
+  HostResource host;
 
   @Before
   public void setUp() throws Exception {
     createTld("com");
     // Set up a new persisted registrar entity.
-    persistResource(
-        newDomainResource("example.com").asBuilder()
-            .setRepoId("1-COM")
-            .setTransferData(new TransferData.Builder()
-                .setExtendedRegistrationYears(0)
-                .setGainingClientId("gaining")
-                .setLosingClientId("losing")
-                .setPendingTransferExpirationTime(clock.nowUtc())
-                .setServerApproveEntities(
-                    ImmutableSet.<Key<? extends TransferServerApproveEntity>>of(
-                        Key.create(BillingEvent.OneTime.class, 1)))
-                .setTransferRequestTime(clock.nowUtc())
-                .setTransferStatus(TransferStatus.SERVER_APPROVED)
-                .setTransferRequestTrid(Trid.create("client trid"))
-                .build())
-            .build());
-    hostResource =
-        cloneAndSetAutoTimestamps(
-            new HostResource.Builder()
-                .setRepoId("DEADBEEF-COM")
-                .setFullyQualifiedHostName("ns1.example.com")
-                .setCreationClientId("a registrar")
-                .setLastEppUpdateTime(clock.nowUtc())
-                .setLastEppUpdateClientId("another registrar")
-                .setLastTransferTime(clock.nowUtc())
-                .setInetAddresses(ImmutableSet.of(InetAddresses.forString("127.0.0.1")))
-                .setStatusValues(ImmutableSet.of(StatusValue.OK))
-                .setSuperordinateDomain(
-                    Key.create(
-                        loadByForeignKey(DomainResource.class, "example.com", clock.nowUtc())))
+    domain =
+        persistResource(
+            newDomainResource("example.com")
+                .asBuilder()
+                .setRepoId("1-COM")
+                .setTransferData(
+                    new TransferData.Builder()
+                        .setGainingClientId("gaining")
+                        .setLosingClientId("losing")
+                        .setPendingTransferExpirationTime(clock.nowUtc())
+                        .setServerApproveEntities(
+                            ImmutableSet.of(Key.create(BillingEvent.OneTime.class, 1)))
+                        .setTransferRequestTime(clock.nowUtc())
+                        .setTransferStatus(TransferStatus.SERVER_APPROVED)
+                        .setTransferRequestTrid(Trid.create("client-trid", "server-trid"))
+                        .build())
                 .build());
-    persistResource(hostResource);
+    host =
+        persistResource(
+            cloneAndSetAutoTimestamps(
+                new HostResource.Builder()
+                    .setRepoId("DEADBEEF-COM")
+                    .setFullyQualifiedHostName("ns1.example.com")
+                    .setCreationClientId("a registrar")
+                    .setLastEppUpdateTime(clock.nowUtc())
+                    .setLastEppUpdateClientId("another registrar")
+                    .setLastTransferTime(clock.nowUtc())
+                    .setInetAddresses(ImmutableSet.of(InetAddresses.forString("127.0.0.1")))
+                    .setStatusValues(ImmutableSet.of(StatusValue.OK))
+                    .setSuperordinateDomain(Key.create(domain))
+                    .build()));
   }
 
   @Test
   public void testPersistence() throws Exception {
     assertThat(loadByForeignKey(
-        HostResource.class, hostResource.getForeignKey(), clock.nowUtc()))
-        .isEqualTo(hostResource.cloneProjectedAtTime(clock.nowUtc()));
+        HostResource.class, host.getForeignKey(), clock.nowUtc()))
+            .isEqualTo(host);
   }
 
   @Test
@@ -101,7 +95,7 @@ public class HostResourceTest extends EntityTestCase {
     // Clone it and save it before running the indexing test so that its transferData fields are
     // populated from the superordinate domain.
     verifyIndexing(
-        persistResource(hostResource.cloneProjectedAtTime(clock.nowUtc())),
+        persistResource(host),
         "deletionTime",
         "fullyQualifiedHostName",
         "inetAddresses",
@@ -111,36 +105,22 @@ public class HostResourceTest extends EntityTestCase {
 
   @Test
   public void testEmptyStringsBecomeNull() {
-    assertThat(new HostResource.Builder().setCurrentSponsorClientId(null).build()
-        .getCurrentSponsorClientId())
+    assertThat(new HostResource.Builder().setPersistedCurrentSponsorClientId(null).build()
+        .getPersistedCurrentSponsorClientId())
             .isNull();
-    assertThat(new HostResource.Builder().setCurrentSponsorClientId("").build()
-        .getCurrentSponsorClientId())
+    assertThat(new HostResource.Builder().setPersistedCurrentSponsorClientId("").build()
+        .getPersistedCurrentSponsorClientId())
             .isNull();
-    assertThat(new HostResource.Builder().setCurrentSponsorClientId(" ").build()
-        .getCurrentSponsorClientId())
+    assertThat(new HostResource.Builder().setPersistedCurrentSponsorClientId(" ").build()
+        .getPersistedCurrentSponsorClientId())
             .isNotNull();
-  }
-
-  @Test
-  public void testCurrentSponsorClientId_comesFromSuperordinateDomain() {
-    assertThat(hostResource.getCurrentSponsorClientId()).isNull();
-    HostResource projectedHost =
-        loadByForeignKey(HostResource.class, hostResource.getForeignKey(), clock.nowUtc());
-    assertThat(projectedHost.getCurrentSponsorClientId())
-        .isEqualTo(loadByForeignKey(
-            DomainResource.class,
-            "example.com",
-            clock.nowUtc())
-            .getCurrentSponsorClientId());
   }
 
   @Test
   public void testEmptySetsBecomeNull() throws Exception {
     assertThat(new HostResource.Builder().setInetAddresses(null).build().inetAddresses).isNull();
-    assertThat(new HostResource.Builder()
-        .setInetAddresses(ImmutableSet.<InetAddress>of()).build().inetAddresses)
-            .isNull();
+    assertThat(new HostResource.Builder().setInetAddresses(ImmutableSet.of()).build().inetAddresses)
+        .isNull();
     assertThat(
             new HostResource.Builder()
                 .setInetAddresses(ImmutableSet.of(InetAddresses.forString("127.0.0.1")))
@@ -150,144 +130,135 @@ public class HostResourceTest extends EntityTestCase {
   }
 
   @Test
-  public void testEmptyTransferDataBecomesNull() throws Exception {
-    HostResource withNull = new HostResource.Builder().setTransferData(null).build();
-    HostResource withEmpty = withNull.asBuilder().setTransferData(TransferData.EMPTY).build();
-    assertThat(withNull).isEqualTo(withEmpty);
-    assertThat(withEmpty.hasTransferData()).isFalse();
-  }
-
-  @Test
   public void testImplicitStatusValues() {
     // OK is implicit if there's no other statuses.
-    StatusValue[] statuses = {StatusValue.OK};
     assertAboutHosts()
         .that(new HostResource.Builder().build())
-        .hasExactlyStatusValues(statuses);
-    StatusValue[] statuses1 = {StatusValue.OK, StatusValue.LINKED};
-    // OK is also implicit if the only other status is LINKED.
-    assertAboutHosts()
-        .that(new HostResource.Builder()
-            .setStatusValues(ImmutableSet.of(StatusValue.LINKED)).build())
-        .hasExactlyStatusValues(statuses1);
-    StatusValue[] statuses2 = {StatusValue.CLIENT_HOLD};
+        .hasExactlyStatusValues(StatusValue.OK);
     // If there are other status values, OK should be suppressed.
     assertAboutHosts()
         .that(new HostResource.Builder()
             .setStatusValues(ImmutableSet.of(StatusValue.CLIENT_HOLD))
             .build())
-        .hasExactlyStatusValues(statuses2);
-    StatusValue[] statuses3 = {StatusValue.LINKED, StatusValue.CLIENT_HOLD};
-    assertAboutHosts()
-        .that(new HostResource.Builder()
-            .setStatusValues(ImmutableSet.of(StatusValue.LINKED, StatusValue.CLIENT_HOLD))
-            .build())
-        .hasExactlyStatusValues(statuses3);
-    StatusValue[] statuses4 = {StatusValue.CLIENT_HOLD};
+        .hasExactlyStatusValues(StatusValue.CLIENT_HOLD);
     // When OK is suppressed, it should be removed even if it was originally there.
     assertAboutHosts()
         .that(new HostResource.Builder()
             .setStatusValues(ImmutableSet.of(StatusValue.OK, StatusValue.CLIENT_HOLD))
             .build())
-        .hasExactlyStatusValues(statuses4);
-  }
-
-  @Nullable
-  private DateTime runCloneProjectedAtTimeTest(
-      @Nullable DateTime domainTransferTime,
-      @Nullable DateTime hostTransferTime,
-      @Nullable DateTime superordinateChangeTime) {
-    DomainResource domain = loadByForeignKey(
-        DomainResource.class, "example.com", clock.nowUtc());
-    persistResource(
-        domain.asBuilder().setTransferData(null).setLastTransferTime(domainTransferTime).build());
-    hostResource = persistResource(
-        hostResource.asBuilder()
-            .setLastSuperordinateChange(superordinateChangeTime)
-            .setLastTransferTime(hostTransferTime)
-            .setTransferData(null)
-            .build());
-    return hostResource.cloneProjectedAtTime(clock.nowUtc()).getLastTransferTime();
-  }
-
-  @Test
-  public void testCloneProjectedAtTime_lastTransferTimeComesOffHostWhenTransferredMoreRecently() {
-    assertThat(runCloneProjectedAtTimeTest(
-        clock.nowUtc().minusDays(10), clock.nowUtc().minusDays(2), clock.nowUtc().minusDays(1)))
-            .isEqualTo(clock.nowUtc().minusDays(2));
-  }
-
-  @Test
-  public void testCloneProjectedAtTime_lastTransferTimeNullWhenAllTransfersAreNull() {
-    assertThat(runCloneProjectedAtTimeTest(null, null, null)).isNull();
-  }
-
-  @Test
-  public void testCloneProjectedAtTime_lastTransferTimeComesOffHostWhenTimeOnDomainIsNull() {
-    assertThat(runCloneProjectedAtTimeTest(null, clock.nowUtc().minusDays(30), null))
-        .isEqualTo(clock.nowUtc().minusDays(30));
-  }
-
-  @Test
-  public void testCloneProjectedAtTime_lastTransferTimeIsNullWhenHostMovedAfterDomainTransferred() {
-    assertThat(runCloneProjectedAtTimeTest(
-        clock.nowUtc().minusDays(30), null, clock.nowUtc().minusDays(20)))
-            .isNull();
-  }
-
-  @Test
-  public void testCloneProjectedAtTime_lastTransferTimeComesOffDomainWhenTimeOnHostIsNull() {
-    assertThat(runCloneProjectedAtTimeTest(clock.nowUtc().minusDays(5), null, null))
-        .isEqualTo(clock.nowUtc().minusDays(5));
-  }
-
-  @Test
-  public void testCloneProjectedAtTime_lastTransferTimeComesOffDomainWhenLastMoveIsntNull() {
-    assertThat(runCloneProjectedAtTimeTest(
-        clock.nowUtc().minusDays(5), null, clock.nowUtc().minusDays(10)))
-            .isEqualTo(clock.nowUtc().minusDays(5));
-  }
-
-  @Test
-  public void testCloneProjectedAtTime_lastTransferTimeComesOffDomainWhenThatIsMostRecent() {
-    assertThat(runCloneProjectedAtTimeTest(
-        clock.nowUtc().minusDays(5), clock.nowUtc().minusDays(20), clock.nowUtc().minusDays(10)))
-            .isEqualTo(clock.nowUtc().minusDays(5));
-  }
-
-  @Test
-  public void testExpiredTransfer_subordinateHost() {
-    DomainResource domain = loadByForeignKey(
-        DomainResource.class, "example.com", clock.nowUtc());
-    persistResource(domain.asBuilder()
-        .setTransferData(domain.getTransferData().asBuilder()
-            .setTransferStatus(TransferStatus.PENDING)
-            .setPendingTransferExpirationTime(clock.nowUtc().plusDays(1))
-            .setGainingClientId("winner")
-            .setExtendedRegistrationYears(2)
-            .setServerApproveBillingEvent(Key.create(
-                new BillingEvent.OneTime.Builder()
-                    .setParent(new HistoryEntry.Builder().setParent(domain).build())
-                    .setCost(Money.parse("USD 100"))
-                    .setBillingTime(clock.nowUtc().plusYears(2))
-                    .setReason(BillingEvent.Reason.TRANSFER)
-                    .setClientId("TheRegistrar")
-                    .setTargetId("example.com")
-                    .setEventTime(clock.nowUtc().plusYears(2))
-                    .setPeriodYears(2)
-                    .build()))
-            .build())
-        .build());
-    HostResource afterTransfer = hostResource.cloneProjectedAtTime(clock.nowUtc().plusDays(1));
-    assertThat(afterTransfer.getTransferData().getTransferStatus())
-        .isEqualTo(TransferStatus.SERVER_APPROVED);
-    assertThat(afterTransfer.getCurrentSponsorClientId()).isEqualTo("winner");
-    assertThat(afterTransfer.getLastTransferTime()).isEqualTo(clock.nowUtc().plusDays(1));
+        .hasExactlyStatusValues(StatusValue.CLIENT_HOLD);
   }
 
   @Test
   public void testToHydratedString_notCircular() {
     // If there are circular references, this will overflow the stack.
-    hostResource.toHydratedString();
+    host.toHydratedString();
+  }
+
+  @Test
+  public void testFailure_uppercaseHostName() {
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> host.asBuilder().setFullyQualifiedHostName("AAA.BBB.CCC"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Host name must be in puny-coded, lower-case form");
+  }
+
+  @Test
+  public void testFailure_utf8HostName() {
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> host.asBuilder().setFullyQualifiedHostName("みんな.みんな.みんな"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Host name must be in puny-coded, lower-case form");
+  }
+
+  @Test
+  public void testComputeLastTransferTime_hostNeverSwitchedDomains_domainWasNeverTransferred() {
+    domain = domain.asBuilder().setLastTransferTime(null).build();
+    host = host.asBuilder()
+        .setLastTransferTime(null)
+        .setLastSuperordinateChange(null)
+        .build();
+    assertThat(host.computeLastTransferTime(domain)).isNull();
+  }
+
+  @Test
+  public void testComputeLastTransferTime_hostNeverSwitchedDomains_domainWasTransferred() {
+    // Host was created on Day 1.
+    // Domain was transferred on Day 2.
+    // Host was always subordinate to domain (and was created before the transfer).
+    domain = domain.asBuilder().setLastTransferTime(day2).build();
+    host = host.asBuilder()
+        .setCreationTimeForTest(day1)
+        .setLastTransferTime(null)
+        .setLastSuperordinateChange(null)
+        .build();
+    assertThat(host.computeLastTransferTime(domain)).isEqualTo(day2);
+  }
+
+  @Test
+  public void testComputeLastTransferTime_hostCreatedAfterDomainWasTransferred() {
+    // Domain was transferred on Day 1.
+    // Host was created subordinate to domain on Day 2.
+    domain = domain.asBuilder().setLastTransferTime(day1).build();
+    host =
+        persistResource(
+            cloneAndSetAutoTimestamps(
+                new HostResource.Builder()
+                    .setCreationTime(day2)
+                    .setRepoId("DEADBEEF-COM")
+                    .setFullyQualifiedHostName("ns1.example.com")
+                    .setCreationClientId("a registrar")
+                    .setLastEppUpdateTime(clock.nowUtc())
+                    .setLastEppUpdateClientId("another registrar")
+                    .setInetAddresses(ImmutableSet.of(InetAddresses.forString("127.0.0.1")))
+                    .setStatusValues(ImmutableSet.of(StatusValue.OK))
+                    .setSuperordinateDomain(Key.create(domain))
+                    .build()));
+    assertThat(host.computeLastTransferTime(domain)).isNull();
+  }
+
+  @Test
+  public void testComputeLastTransferTime_hostWasTransferred_domainWasNeverTransferred() {
+    // Host was transferred on Day 1.
+    // Host was made subordinate to domain on Day 2.
+    // Domain was never transferred.
+    domain = domain.asBuilder().setLastTransferTime(null).build();
+    host = host.asBuilder()
+        .setLastTransferTime(day1)
+        .setLastSuperordinateChange(day2)
+        .build();
+    assertThat(host.computeLastTransferTime(domain)).isEqualTo(day1);
+  }
+
+  @Test
+  public void testComputeLastTransferTime_domainWasTransferredBeforeHostBecameSubordinate() {
+    // Host was transferred on Day 1.
+    // Domain was transferred on Day 2.
+    // Host was made subordinate to domain on Day 3.
+    domain = domain.asBuilder().setLastTransferTime(day2).build();
+    host = host.asBuilder()
+        .setLastTransferTime(day1)
+        .setLastSuperordinateChange(day3)
+        .build();
+    assertThat(host.computeLastTransferTime(domain)).isEqualTo(day1);
+  }
+
+  @Test
+  public void testComputeLastTransferTime_domainWasTransferredAfterHostBecameSubordinate() {
+    // Host was transferred on Day 1.
+    // Host was made subordinate to domain on Day 2.
+    // Domain was transferred on Day 3.
+    domain = domain.asBuilder().setLastTransferTime(day3).build();
+    host = host.asBuilder()
+        .setLastTransferTime(day1)
+        .setLastSuperordinateChange(day2)
+        .build();
+    assertThat(host.computeLastTransferTime(domain)).isEqualTo(day3);
   }
 }

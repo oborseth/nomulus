@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,12 +16,15 @@ package google.registry.groups;
 
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.groups.DirectoryGroupsConnection.getDefaultGroupPermissions;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static javax.servlet.http.HttpServletResponse.SC_CONFLICT;
 import static javax.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
 import static javax.servlet.http.HttpServletResponse.SC_NOT_FOUND;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -46,57 +49,30 @@ import com.google.api.services.groupssettings.model.Groups;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import google.registry.groups.GroupsConnection.Role;
-import google.registry.testing.ExceptionRule;
 import java.io.IOException;
 import java.util.Set;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /**
  * Unit tests for {@link DirectoryGroupsConnection}.
  */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class DirectoryGroupsConnectionTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Mock
-  private Directory directory;
-
-  @Mock
-  private Groupssettings groupsSettings;
-
-  @Mock
-  private Directory.Members members;
-
-  @Mock
-  private Directory.Groups directoryGroups;
-
-  @Mock
-  private Groupssettings.Groups settingsGroups;
-
-  @Mock
-  private Directory.Members.Insert membersInsert;
-
-  @Mock
-  private Directory.Groups.Insert groupsInsert;
-
-  @Mock
-  private Directory.Groups.Get groupsGet;
-
-  @Mock
-  private Directory.Members.Get membersGet;
-
-  @Mock
-  private Directory.Members.List membersList;
-
-  @Mock
-  private Groupssettings.Groups.Patch groupsSettingsPatch;
+  private final Directory directory = mock(Directory.class);
+  private final Groupssettings groupsSettings = mock(Groupssettings.class);
+  private final Directory.Members members = mock(Directory.Members.class);
+  private final Directory.Groups directoryGroups = mock(Directory.Groups.class);
+  private final Groupssettings.Groups settingsGroups = mock(Groupssettings.Groups.class);
+  private final Directory.Members.Insert membersInsert = mock(Directory.Members.Insert.class);
+  private final Directory.Groups.Insert groupsInsert = mock(Directory.Groups.Insert.class);
+  private final Directory.Groups.Get groupsGet = mock(Directory.Groups.Get.class);
+  private final Directory.Members.Get membersGet = mock(Directory.Members.Get.class);
+  private final Directory.Members.List membersList = mock(Directory.Members.List.class);
+  private final Groupssettings.Groups.Patch groupsSettingsPatch =
+      mock(Groupssettings.Groups.Patch.class);
 
   private DirectoryGroupsConnection connection;
   private Member expectedOwner = new Member();
@@ -114,7 +90,7 @@ public class DirectoryGroupsConnectionTest {
     connection = new DirectoryGroupsConnection();
     connection.directory = directory;
     connection.groupsSettings = groupsSettings;
-    connection.googleAppsAdminEmailAddress = "admin@domain-registry.example";
+    connection.gSuiteAdminAccountEmailAddress = "admin@domain-registry.example";
     expectedOwner.setEmail("admin@domain-registry.example");
     expectedOwner.setRole("OWNER");
   }
@@ -138,18 +114,22 @@ public class DirectoryGroupsConnectionTest {
   public void test_addMemberToGroup_handlesExceptionThrownByDirectoryService() throws Exception {
     when(membersInsert.execute()).thenThrow(
         makeResponseException(SC_INTERNAL_SERVER_ERROR, "Could not contact Directory server."));
-    thrown.expect(GoogleJsonResponseException.class);
-    runAddMemberTest();
+    assertThrows(GoogleJsonResponseException.class, this::runAddMemberTest);
   }
 
   @Test
   public void test_addMemberToGroup_handlesMemberKeyNotFoundException() throws Exception {
     when(membersInsert.execute()).thenThrow(
         makeResponseException(SC_NOT_FOUND, "Resource Not Found: memberKey"));
-    thrown.expect(RuntimeException.class,
-        "Adding member jim@example.com to group spam@example.com "
-            + "failed because the member wasn't found.");
-    connection.addMemberToGroup("spam@example.com", "jim@example.com", Role.MEMBER);
+    RuntimeException thrown =
+        expectThrows(
+            RuntimeException.class,
+            () -> connection.addMemberToGroup("spam@example.com", "jim@example.com", Role.MEMBER));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains(
+            "Adding member jim@example.com to group spam@example.com "
+                + "failed because the member wasn't found.");
   }
 
   @Test
@@ -198,8 +178,7 @@ public class DirectoryGroupsConnectionTest {
   public void test_createGroup_handlesExceptionThrownByDirectoryService() throws Exception {
     when(groupsInsert.execute()).thenThrow(
         makeResponseException(SC_INTERNAL_SERVER_ERROR, "Could not contact Directory server."));
-    thrown.expect(GoogleJsonResponseException.class);
-    runCreateGroupTest();
+    assertThrows(GoogleJsonResponseException.class, this::runCreateGroupTest);
   }
 
   @Test

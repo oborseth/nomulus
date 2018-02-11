@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ import google.registry.model.Buildable.GenericBuilder;
 import google.registry.model.ImmutableObject;
 
 /**
- * Represents a label entry parsed from a line in a Reserved List txt file.
+ * Represents a label entry parsed from a line in a reserved/premium list txt file.
  *
  * @param <T> The type of the value stored for the domain label, e.g. {@link ReservationType}.
  */

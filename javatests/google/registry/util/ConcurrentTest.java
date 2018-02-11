@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,14 +15,13 @@
 package google.registry.util;
 
 import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.fail;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
-import com.google.common.base.Function;
-import com.google.common.base.Functions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.testing.NullPointerTester;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import google.registry.testing.AppEngineRule;
+import java.util.function.Function;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -39,38 +38,34 @@ public class ConcurrentTest {
 
   @Test
   public void testTransform_emptyList_returnsEmptyList() throws Exception {
-    assertThat(Concurrent.transform(ImmutableList.of(), Functions.identity())).isEmpty();
+    assertThat(Concurrent.transform(ImmutableList.of(), x -> x)).isEmpty();
   }
 
   @Test
   public void testTransform_addIntegers() throws Exception {
-    assertThat(Concurrent.transform(ImmutableList.of(1, 2, 3), new Function<Integer, Integer>() {
-      @Override
-      public Integer apply(Integer input) {
-        return input + 1;
-      }})).containsExactly(2, 3, 4).inOrder();
+    assertThat(Concurrent.transform(ImmutableList.of(1, 2, 3), input -> input + 1))
+        .containsExactly(2, 3, 4)
+        .inOrder();
   }
 
   @Test
   public void testTransform_throwsException_isSinglyWrappedByUee() throws Exception {
-    try {
-      Concurrent.transform(ImmutableList.of(1, 2, 3), new Function<Integer, Integer>() {
-        @Override
-        public Integer apply(Integer input) {
-          throw new RuntimeException("hello");
-        }});
-      fail("Didn't throw!");
-    } catch (UncheckedExecutionException e) {
-      // We can't use ExpectedException because root cause must be one level of indirection away.
-      assertThat(e.getCause()).isInstanceOf(RuntimeException.class);
-      assertThat(e.getCause()).hasMessage("hello");
-    }
+    UncheckedExecutionException e =
+        expectThrows(
+            UncheckedExecutionException.class,
+            () ->
+                Concurrent.transform(
+                    ImmutableList.of(1, 2, 3),
+                    input -> {
+                      throw new RuntimeException("hello");
+                    }));
+    assertThat(e).hasCauseThat().isInstanceOf(RuntimeException.class);
+    assertThat(e).hasCauseThat().hasMessageThat().isEqualTo("hello");
   }
 
   @Test
   public void testNullness() throws Exception {
-    NullPointerTester tester = new NullPointerTester()
-        .setDefault(Function.class, Functions.identity());
+    NullPointerTester tester = new NullPointerTester().setDefault(Function.class, x -> x);
     tester.testAllPublicStaticMethods(Concurrent.class);
   }
 }

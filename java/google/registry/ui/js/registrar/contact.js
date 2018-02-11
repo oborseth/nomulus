@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ goog.forwardDeclare('registry.registrar.Console');
 
 
 /**
- * The {@code Contact} class respresents a registry contact object and
+ * The `Contact` class respresents a registry contact object and
  * binds UI CRUD operations to it.
  * @param {!registry.registrar.Console} console the
  *     console singleton.

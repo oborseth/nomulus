@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,21 +15,13 @@
 package google.registry.util;
 
 import com.google.appengine.api.datastore.Key;
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
+import java.util.Optional;
 
-/** Utility methods for working with the AppEngine datastore service. */
+/** Utility methods for working with the App Engine Datastore service. */
 public class DatastoreServiceUtils {
-
-  /** Helper function that extracts the kind from a regular datastore entity key. */
-  public static final Function<Key, String> KEY_TO_KIND_FUNCTION = new Function<Key, String>() {
-      @Override
-      public String apply(Key key) {
-        return key.getKind();
-      }};
 
   /** Returns the name or id of a key, which may be a string or a long. */
   public static Object getNameOrId(Key key) {
-    return Optional.<Object>fromNullable(key.getName()).or(key.getId());
+    return Optional.<Object>ofNullable(key.getName()).orElse(key.getId());
   }
 }

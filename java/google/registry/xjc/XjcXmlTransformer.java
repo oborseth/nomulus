@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import static google.registry.xml.ValidationMode.LENIENT;
 import static google.registry.xml.ValidationMode.STRICT;
 
 import com.google.common.collect.ImmutableMap;
+import google.registry.xml.ValidationMode;
 import google.registry.xml.XmlException;
 import google.registry.xml.XmlTransformer;
 import java.io.InputStream;
@@ -81,5 +82,11 @@ public class XjcXmlTransformer {
   public static void marshalStrict(Object root, OutputStream out, Charset charset)
       throws XmlException {
     INSTANCE.marshal(root, out, charset, STRICT);
+  }
+
+  public static void marshal(
+      Object root, OutputStream out, Charset charset, ValidationMode validationMode)
+      throws XmlException {
+    INSTANCE.marshal(root, out, charset, validationMode);
   }
 }

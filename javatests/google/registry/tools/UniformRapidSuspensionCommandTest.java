@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,10 +14,13 @@
 
 package google.registry.tools;
 
+import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.persistActiveDomain;
 import static google.registry.testing.DatastoreHelper.persistActiveHost;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import com.beust.jcommander.ParameterException;
 import com.google.common.collect.ImmutableSet;
@@ -25,7 +28,6 @@ import com.googlecode.objectify.Key;
 import google.registry.model.domain.secdns.DelegationSignerData;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.host.HostResource;
-import google.registry.model.registrar.Registrar;
 import javax.xml.bind.annotation.adapters.HexBinaryAdapter;
 import org.junit.Before;
 import org.junit.Test;
@@ -42,9 +44,8 @@ public class UniformRapidSuspensionCommandTest
   @Before
   public void initResources() {
     // Since the command's history client ID must be CharlestonRoad, resave TheRegistrar that way.
-    persistResource(Registrar.loadByClientId("TheRegistrar").asBuilder()
-        .setClientId("CharlestonRoad")
-        .build());
+    persistResource(
+        loadRegistrar("TheRegistrar").asBuilder().setClientId("CharlestonRoad").build());
     ns1 = persistActiveHost("ns1.example.com");
     ns2 = persistActiveHost("ns2.example.com");
     urs1 = persistActiveHost("urs1.example.com");
@@ -71,9 +72,9 @@ public class UniformRapidSuspensionCommandTest
         "--domain_name=evil.tld",
         "--hosts=urs1.example.com,urs2.example.com",
         "--dsdata={\"keyTag\":1,\"alg\":1,\"digestType\":1,\"digest\":\"abc\"}");
-    eppVerifier()
-        .withClientId("CharlestonRoad")
-        .asSuperuser()
+    eppVerifier
+        .expectClientId("CharlestonRoad")
+        .expectSuperuser()
         .verifySent("uniform_rapid_suspension.xml");
     assertInStdout("uniform_rapid_suspension --undo");
     assertInStdout("--domain_name evil.tld");
@@ -88,9 +89,9 @@ public class UniformRapidSuspensionCommandTest
   public void testCommand_respectsExistingHost() throws Exception {
     persistDomainWithHosts(urs2, ns1);
     runCommandForced("--domain_name=evil.tld", "--hosts=urs1.example.com,urs2.example.com");
-    eppVerifier()
-        .withClientId("CharlestonRoad")
-        .asSuperuser()
+    eppVerifier
+        .expectClientId("CharlestonRoad")
+        .expectSuperuser()
         .verifySent("uniform_rapid_suspension_existing_host.xml");
     assertInStdout("uniform_rapid_suspension --undo ");
     assertInStdout("--domain_name evil.tld");
@@ -102,6 +103,7 @@ public class UniformRapidSuspensionCommandTest
   public void testCommand_generatesUndoForUndelegatedDomain() throws Exception {
     persistActiveDomain("evil.tld");
     runCommandForced("--domain_name=evil.tld", "--hosts=urs1.example.com,urs2.example.com");
+    eppVerifier.verifySentAny();
     assertInStdout("uniform_rapid_suspension --undo");
     assertInStdout("--domain_name evil.tld");
     assertNotInStdout("--locks_to_preserve");
@@ -114,6 +116,7 @@ public class UniformRapidSuspensionCommandTest
           .addStatusValue(StatusValue.SERVER_DELETE_PROHIBITED)
           .build());
     runCommandForced("--domain_name=evil.tld");
+    eppVerifier.verifySentAny();
     assertInStdout("uniform_rapid_suspension --undo");
     assertInStdout("--domain_name evil.tld");
     assertInStdout("--locks_to_preserve serverDeleteProhibited");
@@ -124,9 +127,9 @@ public class UniformRapidSuspensionCommandTest
     persistDomainWithHosts(urs1, urs2);
     runCommandForced(
         "--domain_name=evil.tld", "--undo", "--hosts=ns1.example.com,ns2.example.com");
-    eppVerifier()
-        .withClientId("CharlestonRoad")
-        .asSuperuser()
+    eppVerifier
+        .expectClientId("CharlestonRoad")
+        .expectSuperuser()
         .verifySent("uniform_rapid_suspension_undo.xml");
     assertNotInStdout("--undo");  // Undo shouldn't print a new undo command.
   }
@@ -139,9 +142,9 @@ public class UniformRapidSuspensionCommandTest
         "--undo",
         "--locks_to_preserve=serverDeleteProhibited",
         "--hosts=ns1.example.com,ns2.example.com");
-    eppVerifier()
-        .withClientId("CharlestonRoad")
-        .asSuperuser()
+    eppVerifier
+        .expectClientId("CharlestonRoad")
+        .expectSuperuser()
         .verifySent("uniform_rapid_suspension_undo_preserve.xml");
     assertNotInStdout("--undo");  // Undo shouldn't print a new undo command.
   }
@@ -149,41 +152,58 @@ public class UniformRapidSuspensionCommandTest
   @Test
   public void testFailure_locksToPreserveWithoutUndo() throws Exception {
     persistActiveDomain("evil.tld");
-    thrown.expect(IllegalArgumentException.class, "--undo");
-    runCommandForced("--domain_name=evil.tld", "--locks_to_preserve=serverDeleteProhibited");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--domain_name=evil.tld", "--locks_to_preserve=serverDeleteProhibited"));
+    assertThat(thrown).hasMessageThat().contains("--undo");
   }
 
   @Test
   public void testFailure_domainNameRequired() throws Exception {
     persistActiveDomain("evil.tld");
-    thrown.expect(ParameterException.class, "--domain_name");
-    runCommandForced("--hosts=urs1.example.com,urs2.example.com");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () -> runCommandForced("--hosts=urs1.example.com,urs2.example.com"));
+    assertThat(thrown).hasMessageThat().contains("--domain_name");
   }
 
   @Test
   public void testFailure_extraFieldInDsData() throws Exception {
     persistActiveDomain("evil.tld");
-    thrown.expect(IllegalArgumentException.class, "Incorrect fields on --dsdata JSON");
-    runCommandForced(
-        "--domain_name=evil.tld",
-        "--dsdata={\"keyTag\":1,\"alg\":1,\"digestType\":1,\"digest\":\"abc\",\"foo\":1}");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--domain_name=evil.tld",
+                    "--dsdata={\"keyTag\":1,\"alg\":1,\"digestType\":1,\"digest\":\"abc\",\"foo\":1}"));
+    assertThat(thrown).hasMessageThat().contains("Incorrect fields on --dsdata JSON");
   }
 
   @Test
   public void testFailure_missingFieldInDsData() throws Exception {
     persistActiveDomain("evil.tld");
-    thrown.expect(IllegalArgumentException.class, "Incorrect fields on --dsdata JSON");
-    runCommandForced(
-        "--domain_name=evil.tld",
-        "--dsdata={\"keyTag\":1,\"alg\":1,\"digestType\":1}");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--domain_name=evil.tld",
+                    "--dsdata={\"keyTag\":1,\"alg\":1,\"digestType\":1}"));
+    assertThat(thrown).hasMessageThat().contains("Incorrect fields on --dsdata JSON");
   }
 
   @Test
   public void testFailure_malformedDsData() throws Exception {
     persistActiveDomain("evil.tld");
-    thrown.expect(IllegalArgumentException.class, "Invalid --dsdata JSON");
-    runCommandForced(
-        "--domain_name=evil.tld",
-        "--dsdata=[1,2,3]");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--domain_name=evil.tld", "--dsdata=[1,2,3]"));
+    assertThat(thrown).hasMessageThat().contains("Invalid --dsdata JSON");
   }
 }

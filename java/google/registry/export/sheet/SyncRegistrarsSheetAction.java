@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,16 +27,16 @@ import com.google.appengine.api.modules.ModulesService;
 import com.google.appengine.api.modules.ModulesServiceFactory;
 import com.google.appengine.api.taskqueue.TaskHandle;
 import com.google.appengine.api.taskqueue.TaskOptions.Method;
-import com.google.common.base.Optional;
-import com.google.gdata.util.ServiceException;
-import google.registry.config.ConfigModule.Config;
-import google.registry.model.server.Lock;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.request.Action;
 import google.registry.request.Parameter;
 import google.registry.request.Response;
+import google.registry.request.auth.Auth;
+import google.registry.request.lock.LockHandler;
 import google.registry.util.FormattingLogger;
 import google.registry.util.NonFinalForTesting;
 import java.io.IOException;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
@@ -60,7 +60,11 @@ import org.joda.time.Duration;
  *
  * @see SyncRegistrarsSheet
  */
-@Action(path = SyncRegistrarsSheetAction.PATH, method = POST)
+@Action(
+  path = SyncRegistrarsSheetAction.PATH,
+  method = POST,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public class SyncRegistrarsSheetAction implements Runnable {
 
   private enum Result {
@@ -70,25 +74,25 @@ public class SyncRegistrarsSheetAction implements Runnable {
     MISSINGNO(SC_BAD_REQUEST, "No sheet ID specified or configured; dropping task.") {
       @Override
       protected void log(Exception cause) {
-        logger.warningfmt(cause, "%s", message);
+        logger.warning(cause, message);
       }},
     FAILED(SC_INTERNAL_SERVER_ERROR, "Spreadsheet synchronization failed") {
       @Override
       protected void log(Exception cause) {
-        logger.severefmt(cause, "%s", message);
+        logger.severe(cause, message);
       }};
 
     private final int statusCode;
     protected final String message;
 
-    private Result(int statusCode, String message) {
+    Result(int statusCode, String message) {
       this.statusCode = statusCode;
       this.message = message;
     }
 
     /** Log an error message. Results that use log levels other than info should override this. */
     protected void log(@Nullable Exception cause) {
-      logger.infofmt(cause, "%s", message);
+      logger.info(cause, message);
     }
 
     private void send(Response response, @Nullable Exception cause) {
@@ -111,39 +115,36 @@ public class SyncRegistrarsSheetAction implements Runnable {
   @Inject SyncRegistrarsSheet syncRegistrarsSheet;
   @Inject @Config("sheetLockTimeout") Duration timeout;
   @Inject @Config("sheetRegistrarId") Optional<String> idConfig;
-  @Inject @Config("sheetRegistrarInterval") Duration interval;
   @Inject @Parameter("id") Optional<String> idParam;
+  @Inject LockHandler lockHandler;
   @Inject SyncRegistrarsSheetAction() {}
 
   @Override
   public void run() {
-    final Optional<String> sheetId = idParam.or(idConfig);
+    final Optional<String> sheetId = Optional.ofNullable(idParam.orElse(idConfig.orElse(null)));
     if (!sheetId.isPresent()) {
       Result.MISSINGNO.send(response, null);
       return;
     }
     if (!idParam.isPresent()) {
-      // TODO(b/19082368): Use a cursor.
-      if (!syncRegistrarsSheet.wasRegistrarsModifiedInLast(interval)) {
+      if (!syncRegistrarsSheet.wereRegistrarsModified()) {
         Result.NOTMODIFIED.send(response, null);
         return;
       }
     }
+
     String sheetLockName = String.format("%s: %s", LOCK_NAME, sheetId.get());
-    Callable<Void> runner = new Callable<Void>() {
-      @Nullable
-      @Override
-      public Void call() throws IOException {
-        try {
-          syncRegistrarsSheet.run(sheetId.get());
-          Result.OK.send(response, null);
-        } catch (IOException | ServiceException e) {
-          Result.FAILED.send(response, e);
-        }
-        return null;
-      }
-    };
-    if (!Lock.executeWithLocks(runner, getClass(), "", timeout, sheetLockName)) {
+    Callable<Void> runner =
+        () -> {
+          try {
+            syncRegistrarsSheet.run(sheetId.get());
+            Result.OK.send(response, null);
+          } catch (IOException e) {
+            Result.FAILED.send(response, e);
+          }
+          return null;
+        };
+    if (!lockHandler.executeWithLocks(runner, null, timeout, sheetLockName)) {
       // If we fail to acquire the lock, it probably means lots of updates are happening at once, in
       // which case it should be safe to not bother. The task queue definition should *not* specify
       // max-concurrent-requests for this very reason.

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,10 @@
 
 package google.registry.module.tools;
 
+import dagger.Module;
 import dagger.Subcomponent;
+import google.registry.backup.BackupModule;
+import google.registry.backup.RestoreCommitLogsAction;
 import google.registry.dns.DnsModule;
 import google.registry.export.PublishDetailReportAction;
 import google.registry.flows.EppToolAction;
@@ -24,6 +27,7 @@ import google.registry.loadtest.LoadTestAction;
 import google.registry.loadtest.LoadTestModule;
 import google.registry.mapreduce.MapreduceModule;
 import google.registry.monitoring.whitebox.WhiteboxModule;
+import google.registry.request.RequestComponentBuilder;
 import google.registry.request.RequestModule;
 import google.registry.request.RequestScope;
 import google.registry.tools.server.CreateGroupsAction;
@@ -38,16 +42,18 @@ import google.registry.tools.server.ListPremiumListsAction;
 import google.registry.tools.server.ListRegistrarsAction;
 import google.registry.tools.server.ListReservedListsAction;
 import google.registry.tools.server.ListTldsAction;
-import google.registry.tools.server.ResaveAllEppResourcesAction;
+import google.registry.tools.server.PollMapreduceAction;
+import google.registry.tools.server.RefreshDnsForAllDomainsAction;
+import google.registry.tools.server.ResaveAllHistoryEntriesAction;
 import google.registry.tools.server.ToolsServerModule;
 import google.registry.tools.server.UpdatePremiumListAction;
 import google.registry.tools.server.VerifyOteAction;
-import google.registry.tools.server.javascrap.RefreshAllDomainsAction;
 
 /** Dagger component with per-request lifetime for "tools" App Engine module. */
 @RequestScope
 @Subcomponent(
     modules = {
+        BackupModule.class,
         DnsModule.class,
         EppToolModule.class,
         LoadTestModule.class,
@@ -72,9 +78,20 @@ interface ToolsRequestComponent {
   ListReservedListsAction listReservedListsAction();
   ListTldsAction listTldsAction();
   LoadTestAction loadTestAction();
+  PollMapreduceAction pollMapReduceAction();
   PublishDetailReportAction publishDetailReportAction();
-  RefreshAllDomainsAction refreshAllDomainsAction();
-  ResaveAllEppResourcesAction resaveAllEppResourcesAction();
+  RefreshDnsForAllDomainsAction refreshDnsForAllDomainsAction();
+  ResaveAllHistoryEntriesAction resaveAllHistoryEntriesAction();
+  RestoreCommitLogsAction restoreCommitLogsAction();
   UpdatePremiumListAction updatePremiumListAction();
   VerifyOteAction verifyOteAction();
+
+  @Subcomponent.Builder
+  abstract class Builder implements RequestComponentBuilder<ToolsRequestComponent> {
+    @Override public abstract Builder requestModule(RequestModule requestModule);
+    @Override public abstract ToolsRequestComponent build();
+  }
+
+  @Module(subcomponents = ToolsRequestComponent.class)
+  class ToolsRequestComponentModule {}
 }

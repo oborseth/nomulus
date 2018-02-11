@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,14 +14,14 @@
 
 package google.registry.tools;
 
-import static google.registry.model.registry.Registries.assertTldExists;
+import static google.registry.model.registry.Registries.assertTldsExist;
 import static org.joda.time.DateTimeZone.UTC;
 import static org.joda.time.Duration.standardMinutes;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.google.common.collect.ImmutableMap;
-import google.registry.tools.params.DateTimeParameter;
+import google.registry.tools.params.DateParameter;
 import google.registry.tools.server.GenerateZoneFilesAction;
 import java.io.IOException;
 import java.util.List;
@@ -33,16 +33,17 @@ import org.joda.time.DateTime;
 final class GenerateZoneFilesCommand implements ServerSideCommand {
 
   @Parameter(
-      description = "A comma-separated list of TLD to generate zone files for",
+      description = "One or more TLDs to generate zone files for",
       required = true)
   private List<String> mainParameters;
 
   // Default to latest midnight that's at least 2 minutes ago.
   @Parameter(
-      names = "--export_time",
-      description = "The (midnight UTC) time to generate the file for (defaults to last midnight).",
-      validateWith = DateTimeParameter.class)
-  private DateTime exportTime = DateTime.now(UTC).minus(standardMinutes(2)).withTimeAtStartOfDay();
+      names = "--export_date",
+      description = "The date to generate the file for (defaults to today, or yesterday if run "
+          + "before 00:02).",
+      validateWith = DateParameter.class)
+  private DateTime exportDate = DateTime.now(UTC).minus(standardMinutes(2)).withTimeAtStartOfDay();
 
   private Connection connection;
 
@@ -53,12 +54,10 @@ final class GenerateZoneFilesCommand implements ServerSideCommand {
 
   @Override
   public void run() throws IOException {
-    for (String tld : mainParameters) {
-      assertTldExists(tld);
-    }
+    assertTldsExist(mainParameters);
     ImmutableMap<String, Object> params = ImmutableMap.of(
         "tlds", mainParameters,
-        "exportTime", exportTime.toString());
+        "exportTime", exportDate.toString());
     Map<String, Object> response = connection.sendJson(GenerateZoneFilesAction.PATH, params);
     System.out.printf(
         "Job started at %s%s\n",

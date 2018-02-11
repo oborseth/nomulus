@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import static google.registry.testing.ContactResourceSubject.assertAboutContacts
 import static google.registry.testing.DatastoreHelper.cloneAndSetAutoTimestamps;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 
 import com.google.common.collect.ImmutableList;
@@ -34,26 +35,19 @@ import google.registry.model.eppcommon.PresenceMarker;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.eppcommon.Trid;
 import google.registry.model.transfer.TransferData;
-import google.registry.model.transfer.TransferData.TransferServerApproveEntity;
 import google.registry.model.transfer.TransferStatus;
-import google.registry.testing.ExceptionRule;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 
 /** Unit tests for {@link ContactResource}. */
 public class ContactResourceTest extends EntityTestCase {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   ContactResource contactResource;
 
   @Before
   public void setUp() throws Exception {
     createTld("foobar");
     // Set up a new persisted ContactResource entity.
-    contactResource = cloneAndSetAutoTimestamps(
+    contactResource = persistResource(cloneAndSetAutoTimestamps(
         new ContactResource.Builder()
             .setContactId("contact_id")
             .setRepoId("1-FOOBAR")
@@ -61,7 +55,7 @@ public class ContactResourceTest extends EntityTestCase {
             .setLastEppUpdateTime(clock.nowUtc())
             .setLastEppUpdateClientId("another registrar")
             .setLastTransferTime(clock.nowUtc())
-            .setCurrentSponsorClientId("a third registrar")
+            .setPersistedCurrentSponsorClientId("a third registrar")
             .setLocalizedPostalInfo(new PostalInfo.Builder()
                 .setType(Type.LOCALIZED)
                 .setAddress(new ContactAddress.Builder()
@@ -102,19 +96,16 @@ public class ContactResourceTest extends EntityTestCase {
                 .build())
             .setStatusValues(ImmutableSet.of(StatusValue.OK))
             .setTransferData(new TransferData.Builder()
-                .setExtendedRegistrationYears(0)
                 .setGainingClientId("gaining")
                 .setLosingClientId("losing")
                 .setPendingTransferExpirationTime(clock.nowUtc())
                 .setServerApproveEntities(
-                    ImmutableSet.<Key<? extends TransferServerApproveEntity>>of(
-                        Key.create(BillingEvent.OneTime.class, 1)))
+                    ImmutableSet.of(Key.create(BillingEvent.OneTime.class, 1)))
                 .setTransferRequestTime(clock.nowUtc())
                 .setTransferStatus(TransferStatus.SERVER_APPROVED)
-                .setTransferRequestTrid(Trid.create("client trid"))
+                .setTransferRequestTrid(Trid.create("client-trid", "server-trid"))
                 .build())
-            .build());
-    persistResource(contactResource);
+            .build()));
   }
 
   @Test
@@ -167,43 +158,27 @@ public class ContactResourceTest extends EntityTestCase {
     ContactResource withNull = new ContactResource.Builder().setTransferData(null).build();
     ContactResource withEmpty = withNull.asBuilder().setTransferData(TransferData.EMPTY).build();
     assertThat(withNull).isEqualTo(withEmpty);
-    assertThat(withEmpty.hasTransferData()).isFalse();
+    assertThat(withEmpty.transferData).isNull();
   }
 
   @Test
   public void testImplicitStatusValues() {
     // OK is implicit if there's no other statuses.
-    StatusValue[] statuses = {StatusValue.OK};
     assertAboutContacts()
         .that(new ContactResource.Builder().build())
-        .hasExactlyStatusValues(statuses);
-    StatusValue[] statuses1 = {StatusValue.OK, StatusValue.LINKED};
-    // OK is also implicit if the only other status is LINKED.
-    assertAboutContacts()
-        .that(new ContactResource.Builder()
-            .setStatusValues(ImmutableSet.of(StatusValue.LINKED))
-            .build())
-        .hasExactlyStatusValues(statuses1);
-    StatusValue[] statuses2 = {StatusValue.CLIENT_HOLD};
+        .hasExactlyStatusValues(StatusValue.OK);
     // If there are other status values, OK should be suppressed.
     assertAboutContacts()
         .that(new ContactResource.Builder()
             .setStatusValues(ImmutableSet.of(StatusValue.CLIENT_HOLD))
             .build())
-        .hasExactlyStatusValues(statuses2);
-    StatusValue[] statuses3 = {StatusValue.LINKED, StatusValue.CLIENT_HOLD};
-    assertAboutContacts()
-        .that(new ContactResource.Builder()
-            .setStatusValues(ImmutableSet.of(StatusValue.LINKED, StatusValue.CLIENT_HOLD))
-            .build())
-        .hasExactlyStatusValues(statuses3);
-    StatusValue[] statuses4 = {StatusValue.CLIENT_HOLD};
+        .hasExactlyStatusValues(StatusValue.CLIENT_HOLD);
     // When OK is suppressed, it should be removed even if it was originally there.
     assertAboutContacts()
         .that(new ContactResource.Builder()
             .setStatusValues(ImmutableSet.of(StatusValue.OK, StatusValue.CLIENT_HOLD))
             .build())
-        .hasExactlyStatusValues(statuses4);
+        .hasExactlyStatusValues(StatusValue.CLIENT_HOLD);
   }
 
   @Test
@@ -224,8 +199,11 @@ public class ContactResourceTest extends EntityTestCase {
 
   @Test
   public void testSetCreationTime_cantBeCalledTwice() {
-    thrown.expect(IllegalStateException.class, "creationTime can only be set once");
-    contactResource.asBuilder().setCreationTime(END_OF_TIME);
+    IllegalStateException thrown =
+        expectThrows(
+            IllegalStateException.class,
+            () -> contactResource.asBuilder().setCreationTime(END_OF_TIME));
+    assertThat(thrown).hasMessageThat().contains("creationTime can only be set once");
   }
 
   @Test

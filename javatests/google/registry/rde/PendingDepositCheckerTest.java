@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,7 +26,6 @@ import static org.joda.time.DateTimeConstants.TUESDAY;
 import static org.joda.time.Duration.standardDays;
 
 import com.google.common.collect.ImmutableSetMultimap;
-import com.googlecode.objectify.VoidWork;
 import google.registry.model.common.Cursor;
 import google.registry.model.common.Cursor.CursorType;
 import google.registry.model.ofy.Ofy;
@@ -36,7 +35,6 @@ import google.registry.testing.FakeClock;
 import google.registry.testing.InjectRule;
 import org.joda.time.DateTime;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -85,7 +83,6 @@ public class PendingDepositCheckerTest {
   }
 
   @Test
-  @Ignore("TODO(b/23791350): Causes TimestampInversionException")
   public void testMethod_firstDepositOnBrdaDay_depositsBothRdeAndBrda() throws Exception {
     clock.setTo(DateTime.parse("2000-01-04T08:00Z"));  // Tuesday
     createTldWithEscrowEnabled("lol");
@@ -151,7 +148,6 @@ public class PendingDepositCheckerTest {
   }
 
   @Test
-  @Ignore("TODO(b/23791350): Causes TimestampInversionException")
   public void testMethod_multipleTldsWithEscrowEnabled_depositsBoth() throws Exception {
     clock.setTo(DateTime.parse("2000-01-01TZ"));  // Saturday
     createTldWithEscrowEnabled("pal");
@@ -168,11 +164,7 @@ public class PendingDepositCheckerTest {
 
   private static void setCursor(
       final Registry registry, final CursorType cursorType, final DateTime value) {
-    ofy().transact(new VoidWork() {
-      @Override
-      public void vrun() {
-        ofy().save().entity(Cursor.create(cursorType, value, registry));
-      }});
+    ofy().transact(() -> ofy().save().entity(Cursor.create(cursorType, value, registry)));
   }
 
   private static void createTldWithEscrowEnabled(final String tld) {

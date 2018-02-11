@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ import static google.registry.util.ResourceUtils.readResourceBytes;
 
 import com.google.common.io.ByteSource;
 import com.google.common.io.Files;
-import google.registry.rde.RdeKeyringModule;
 import google.registry.rde.RdeTestData;
 import google.registry.rde.RydePgpCompressionOutputStreamFactory;
 import google.registry.rde.RydePgpEncryptionOutputStreamFactory;
@@ -27,7 +26,7 @@ import google.registry.rde.RydePgpFileOutputStreamFactory;
 import google.registry.rde.RydePgpSigningOutputStreamFactory;
 import google.registry.rde.RydeTarOutputStreamFactory;
 import google.registry.testing.BouncyCastleProviderRule;
-import google.registry.testing.Providers;
+import google.registry.testing.FakeKeyringModule;
 import java.io.File;
 import org.junit.Before;
 import org.junit.Rule;
@@ -45,13 +44,13 @@ public class EncryptEscrowDepositCommandTest
 
   static EscrowDepositEncryptor createEncryptor() {
     EscrowDepositEncryptor res = new EscrowDepositEncryptor();
-    res.pgpCompressionFactory = new RydePgpCompressionOutputStreamFactory(Providers.of(1024));
-    res.pgpEncryptionFactory = new RydePgpEncryptionOutputStreamFactory(Providers.of(1024));
-    res.pgpFileFactory = new RydePgpFileOutputStreamFactory(Providers.of(1024));
+    res.pgpCompressionFactory = new RydePgpCompressionOutputStreamFactory(() -> 1024);
+    res.pgpEncryptionFactory = new RydePgpEncryptionOutputStreamFactory(() -> 1024);
+    res.pgpFileFactory = new RydePgpFileOutputStreamFactory(() -> 1024);
     res.pgpSigningFactory = new RydePgpSigningOutputStreamFactory();
     res.tarFactory = new RydeTarOutputStreamFactory();
-    res.rdeReceiverKey = new RdeKeyringModule().get().getRdeReceiverKey();
-    res.rdeSigningKey = new RdeKeyringModule().get().getRdeSigningKey();
+    res.rdeReceiverKey = () -> new FakeKeyringModule().get().getRdeReceiverKey();
+    res.rdeSigningKey = () -> new FakeKeyringModule().get().getRdeSigningKey();
     return res;
   }
 

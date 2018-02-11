@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import org.bouncycastle.openpgp.PGPPublicKey;
 import org.bouncycastle.openpgp.PGPUtil;
 import org.bouncycastle.openpgp.bc.BcPGPPublicKeyRing;
 
-/** Helper class for common data loaded from the jar and datastore at runtime. */
+/** Helper class for common data loaded from the jar and Datastore at runtime. */
 public final class TmchData {
 
   private static final String BEGIN_ENCODED_SMD = "-----BEGIN ENCODED SMD-----";

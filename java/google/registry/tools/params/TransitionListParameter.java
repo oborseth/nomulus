@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,56 +16,34 @@ package google.registry.tools.params;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Ordering;
 import google.registry.model.registry.Registry.TldState;
-import java.util.Map;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 
-/**
- * Combined converter and validator class for transition list JCommander argument strings.
- *
- * <p>These strings have the form {@code <DateTime>=<T-str>,[<DateTime>=<T-str>]*} where
- * {@code <T-str>} is a string that can be parsed into an instance of some value type {@code T}, and
- * the entire argument represents a series of timed transitions of some property taking on those
- * values. This class converts such a string into an ImmutableSortedMap mapping DateTime to
- * {@code T}. Validation and conversion share the same logic; validation is just done by attempting
- * conversion and throwing exceptions if need be.
- *
- * <p>Subclasses must implement parseValue() to define how to parse {@code <T-str>} into a
- * {@code T}.
- *
- * @param <T> instance value type
- */
+/** Combined converter and validator class for transition list JCommander argument strings. */
 // TODO(b/19031334): Investigate making this complex generic type work with the factory.
-public abstract class TransitionListParameter<T>
-    extends ParameterConverterValidator<ImmutableSortedMap<DateTime, T>> {
+public abstract class TransitionListParameter<V> extends KeyValueMapParameter<DateTime, V> {
 
   private static final DateTimeParameter DATE_TIME_CONVERTER = new DateTimeParameter();
 
   public TransitionListParameter() {
-    super("Not formatted correctly or has transition times out of order.");
+    // This is not sentence-capitalized like most exception messages because it is appended to the
+    // end of the toString() of the transition map in rendering a full exception message.
+    super("not formatted correctly or has transition times out of order");
   }
 
-  /** Override to define how to parse rawValue into an object of type T. */
-  protected abstract T parseValue(String rawValue);
+  @Override
+  protected final DateTime parseKey(String rawKey) {
+    return DATE_TIME_CONVERTER.convert(rawKey);
+  }
 
   @Override
-  public ImmutableSortedMap<DateTime, T> convert(String transitionListString) {
-    ImmutableMap.Builder<DateTime, T> builder = new ImmutableMap.Builder<>();
-    for (Map.Entry<String, String> entry :
-        Splitter.on(',').withKeyValueSeparator('=').split(transitionListString).entrySet()) {
-      builder.put(
-          DATE_TIME_CONVERTER.convert(entry.getKey()),
-          parseValue(entry.getValue()));
-    }
-    ImmutableMap<DateTime, T> transitionMap = builder.build();
-    checkArgument(Ordering.natural().isOrdered(transitionMap.keySet()),
-        "Transition times out of order.");
-    return ImmutableSortedMap.copyOf(transitionMap);
+  protected final ImmutableSortedMap<DateTime, V> processMap(ImmutableMap<DateTime, V> map) {
+    checkArgument(Ordering.natural().isOrdered(map.keySet()), "Transition times out of order");
+    return ImmutableSortedMap.copyOf(map);
   }
 
   /** Converter-validator for TLD state transitions. */

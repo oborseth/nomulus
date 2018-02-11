@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,9 +22,9 @@ import google.registry.export.DatastoreBackupService;
 import google.registry.tools.Command.RemoteApiCommand;
 
 /**
- * Command to check the status of a datastore backup, or "snapshot".
+ * Command to check the status of a Datastore backup, or "snapshot".
  */
-@Parameters(separators = " =", commandDescription = "Check the status of a datastore snapshot")
+@Parameters(separators = " =", commandDescription = "Check the status of a Datastore snapshot")
 public class CheckSnapshotCommand implements RemoteApiCommand {
 
   @Parameter(

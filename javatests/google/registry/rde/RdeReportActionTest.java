@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,8 @@ import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static google.registry.testing.GcsTestingUtils.writeGcsFile;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static javax.servlet.http.HttpServletResponse.SC_BAD_REQUEST;
 import static javax.servlet.http.HttpServletResponse.SC_OK;
 import static org.joda.time.DateTimeZone.UTC;
@@ -42,8 +44,6 @@ import com.google.appengine.tools.cloudstorage.GcsServiceFactory;
 import com.google.common.base.Ascii;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.io.ByteSource;
-import google.registry.config.RegistryConfig;
-import google.registry.config.RegistryEnvironment;
 import google.registry.gcs.GcsUtils;
 import google.registry.model.common.Cursor;
 import google.registry.model.common.Cursor.CursorType;
@@ -51,12 +51,16 @@ import google.registry.model.registry.Registry;
 import google.registry.request.HttpException.InternalServerErrorException;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.BouncyCastleProviderRule;
-import google.registry.testing.ExceptionRule;
+import google.registry.testing.FakeClock;
+import google.registry.testing.FakeKeyringModule;
 import google.registry.testing.FakeResponse;
+import google.registry.testing.FakeSleeper;
+import google.registry.util.Retrier;
 import google.registry.xjc.XjcXmlTransformer;
 import google.registry.xjc.rdereport.XjcRdeReportReport;
 import google.registry.xml.XmlException;
 import java.io.ByteArrayInputStream;
+import java.net.SocketTimeoutException;
 import java.util.Map;
 import org.bouncycastle.openpgp.PGPPublicKey;
 import org.joda.time.DateTime;
@@ -71,13 +75,9 @@ import org.mockito.ArgumentCaptor;
 @RunWith(JUnit4.class)
 public class RdeReportActionTest {
 
-  private static final ByteSource REPORT_XML = RdeTestData.get("report.xml");
-  private static final ByteSource IIRDEA_BAD_XML = RdeTestData.get("iirdea_bad.xml");
-  private static final ByteSource IIRDEA_GOOD_XML = RdeTestData.get("iirdea_good.xml");
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
+  private static final ByteSource REPORT_XML = RdeTestData.loadBytes("report.xml");
+  private static final ByteSource IIRDEA_BAD_XML = RdeTestData.loadBytes("iirdea_bad.xml");
+  private static final ByteSource IIRDEA_GOOD_XML = RdeTestData.loadBytes("iirdea_good.xml");
   @Rule
   public final BouncyCastleProviderRule bouncy = new BouncyCastleProviderRule();
 
@@ -93,16 +93,15 @@ public class RdeReportActionTest {
   private final HTTPResponse httpResponse = mock(HTTPResponse.class);
 
   private final GcsService gcsService = GcsServiceFactory.createGcsService();
-  private final RegistryConfig config = RegistryEnvironment.get().config();
   private final GcsFilename reportFile =
       new GcsFilename("tub", "test_2006-06-06_full_S1_R0-report.xml.ghostryde");
 
   private RdeReportAction createAction() {
     RdeReporter reporter = new RdeReporter();
-    reporter.config = config;
     reporter.reportUrlPrefix = "https://rde-report.example";
     reporter.urlFetchService = urlFetchService;
     reporter.password = "foo";
+    reporter.retrier = new Retrier(new FakeSleeper(new FakeClock()), 3);
     RdeReportAction action = new RdeReportAction();
     action.gcsUtils = new GcsUtils(gcsService, 1024);
     action.ghostryde = new Ghostryde(1024);
@@ -112,14 +111,14 @@ public class RdeReportActionTest {
     action.interval = standardDays(1);
     action.reporter = reporter;
     action.timeout = standardSeconds(30);
-    action.stagingDecryptionKey = new RdeKeyringModule().get().getRdeStagingDecryptionKey();
+    action.stagingDecryptionKey = new FakeKeyringModule().get().getRdeStagingDecryptionKey();
     action.runner = runner;
     return action;
   }
 
   @Before
   public void before() throws Exception {
-    PGPPublicKey encryptKey = new RdeKeyringModule().get().getRdeStagingEncryptionKey();
+    PGPPublicKey encryptKey = new FakeKeyringModule().get().getRdeStagingEncryptionKey();
     createTld("test");
     persistResource(
         Cursor.create(CursorType.RDE_REPORT, DateTime.parse("2006-06-06TZ"), Registry.get("test")));
@@ -173,16 +172,32 @@ public class RdeReportActionTest {
     when(httpResponse.getResponseCode()).thenReturn(SC_BAD_REQUEST);
     when(httpResponse.getContent()).thenReturn(IIRDEA_BAD_XML.read());
     when(urlFetchService.fetch(request.capture())).thenReturn(httpResponse);
-    thrown.expect(InternalServerErrorException.class, "The structure of the report is invalid.");
-    createAction().runWithLock(loadRdeReportCursor());
+    InternalServerErrorException thrown =
+        expectThrows(
+            InternalServerErrorException.class,
+            () -> createAction().runWithLock(loadRdeReportCursor()));
+    assertThat(thrown).hasMessageThat().contains("The structure of the report is invalid.");
   }
 
   @Test
   public void testRunWithLock_fetchFailed_throwsRuntimeException() throws Exception {
-    class ExpectedException extends RuntimeException {}
-    when(urlFetchService.fetch(any(HTTPRequest.class))).thenThrow(new ExpectedException());
-    thrown.expect(ExpectedException.class);
+    class ExpectedThrownException extends RuntimeException {}
+    when(urlFetchService.fetch(any(HTTPRequest.class))).thenThrow(new ExpectedThrownException());
+    assertThrows(
+        ExpectedThrownException.class, () -> createAction().runWithLock(loadRdeReportCursor()));
+  }
+
+  @Test
+  public void testRunWithLock_socketTimeout_doesRetry() throws Exception {
+    when(httpResponse.getResponseCode()).thenReturn(SC_OK);
+    when(httpResponse.getContent()).thenReturn(IIRDEA_GOOD_XML.read());
+    when(urlFetchService.fetch(request.capture()))
+        .thenThrow(new SocketTimeoutException())
+        .thenReturn(httpResponse);
     createAction().runWithLock(loadRdeReportCursor());
+    assertThat(response.getStatus()).isEqualTo(200);
+    assertThat(response.getContentType()).isEqualTo(PLAIN_TEXT_UTF_8);
+    assertThat(response.getPayload()).isEqualTo("OK test 2006-06-06T00:00:00.000Z\n");
   }
 
   private DateTime loadRdeReportCursor() {

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,13 @@
 
 package google.registry.util;
 
-import google.registry.testing.ExceptionRule;
+import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.expectThrows;
+
 import google.registry.testing.FakeClock;
 import google.registry.testing.FakeSleeper;
+import google.registry.util.Retrier.FailureReporter;
 import java.util.concurrent.Callable;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -27,39 +29,111 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class RetrierTest {
 
-  @Rule
-  public ExceptionRule thrown = new ExceptionRule();
-
   Retrier retrier = new Retrier(new FakeSleeper(new FakeClock()), 3);
 
   /** An exception to throw from {@link CountingThrower}. */
-  class CountingException extends RuntimeException {
+  static class CountingException extends RuntimeException {
     CountingException(int count) {
       super("" + count);
     }
   }
 
   /** Test object that always throws an exception with the current count. */
-  class CountingThrower implements Callable<Object> {
+  static class CountingThrower implements Callable<Integer> {
 
     int count = 0;
 
+    final int numThrows;
+
+    CountingThrower(int numThrows) {
+      this.numThrows = numThrows;
+    }
+
     @Override
-    public Object call() {
+    public Integer call() {
+      if (count == numThrows) {
+        return numThrows;
+      }
       count++;
       throw new CountingException(count);
     }
   }
 
+  static class TestReporter implements FailureReporter {
+    int numBeforeRetry = 0;
+    int numOnFinalFailure = 0;
+
+    @Override
+    public void beforeRetry(Throwable e, int failures, int maxAttempts) {
+      numBeforeRetry++;
+      assertThat(failures).isEqualTo(numBeforeRetry);
+    }
+
+    @Override
+    public void afterFinalFailure(Throwable e, int failures) {
+      numOnFinalFailure++;
+    }
+
+    void assertNumbers(int expectedBeforeRetry, int expectedOnFinalFailure) {
+      assertThat(numBeforeRetry).isEqualTo(expectedBeforeRetry);
+      assertThat(numOnFinalFailure).isEqualTo(expectedOnFinalFailure);
+    }
+  }
+
   @Test
   public void testRetryableException() throws Exception {
-    thrown.expect(CountingException.class, "3");
-    retrier.callWithRetry(new CountingThrower(), CountingException.class);
+    CountingException thrown =
+        expectThrows(
+            CountingException.class,
+            () -> retrier.callWithRetry(new CountingThrower(3), CountingException.class));
+    assertThat(thrown).hasMessageThat().contains("3");
   }
 
   @Test
   public void testUnretryableException() throws Exception {
-    thrown.expect(CountingException.class, "1");
-    retrier.callWithRetry(new CountingThrower(), IllegalArgumentException.class);
+    CountingException thrown =
+        expectThrows(
+            CountingException.class,
+            () -> retrier.callWithRetry(new CountingThrower(5), IllegalArgumentException.class));
+    assertThat(thrown).hasMessageThat().contains("1");
+  }
+
+  @Test
+  public void testRetrySucceeded() throws Exception {
+    assertThat(retrier.callWithRetry(new CountingThrower(2), CountingException.class))
+        .isEqualTo(2);
+  }
+
+  @Test
+  public void testRetryFailed_withReporter() throws Exception {
+    CountingException thrown =
+        expectThrows(
+            CountingException.class,
+            () -> {
+              TestReporter reporter = new TestReporter();
+              try {
+                retrier.callWithRetry(new CountingThrower(3), reporter, CountingException.class);
+              } catch (CountingException expected) {
+                reporter.assertNumbers(2, 1);
+                throw expected;
+              }
+            });
+    assertThat(thrown).hasMessageThat().contains("3");
+  }
+
+  @Test
+  public void testRetrySucceeded_withReporter() throws Exception {
+    TestReporter reporter = new TestReporter();
+    assertThat(retrier.callWithRetry(new CountingThrower(2), reporter, CountingException.class))
+        .isEqualTo(2);
+    reporter.assertNumbers(2, 0);
+  }
+
+  @Test
+  public void testFirstTrySucceeded_withReporter() throws Exception {
+    TestReporter reporter = new TestReporter();
+    assertThat(retrier.callWithRetry(new CountingThrower(0), reporter, CountingException.class))
+        .isEqualTo(0);
+    reporter.assertNumbers(0, 0);
   }
 }

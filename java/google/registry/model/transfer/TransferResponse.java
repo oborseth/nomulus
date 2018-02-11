@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -65,7 +65,7 @@ public abstract class TransferResponse extends BaseTransferObject implements Res
     /** Builder for {@link DomainTransferResponse}. */
     public static class Builder
         extends BaseTransferObject.Builder<DomainTransferResponse, Builder> {
-      public Builder setFullyQualifiedDomainNameName(String fullyQualifiedDomainName) {
+      public Builder setFullyQualifiedDomainName(String fullyQualifiedDomainName) {
         getInstance().fullyQualifiedDomainName = fullyQualifiedDomainName;
         return this;
       }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,10 +21,8 @@ import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.DateTimeUtils.earliestOf;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Function;
 import com.google.common.collect.ImmutableMap;
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.Work;
 import google.registry.model.ofy.CommitLogBucket;
 import google.registry.model.ofy.CommitLogCheckpoint;
 import google.registry.model.ofy.CommitLogManifest;
@@ -40,7 +38,7 @@ import org.joda.time.DateTime;
  *
  * <p>This algorithm examines the recently written commit log data and uses a dual-read approach
  * to determine a point-in-time consistent set of checkpoint times for the commit log buckets.  By
- * "consistent" we mean, generally speaking, that if the datastore were restored by replaying all
+ * "consistent" we mean, generally speaking, that if the Datastore were restored by replaying all
  * the commit logs up to the checkpoint times of the buckets, the result would be transactionally
  * correct; there must be no "holes" where restored state depends on non-restored state.
  *
@@ -116,16 +114,15 @@ class CommitLogCheckpointStrategy {
    */
   @VisibleForTesting
   ImmutableMap<Integer, DateTime> readBucketTimestamps() {
-    // Use a fresh session cache so that we get the latest data from datastore.
-    return ofy.doWithFreshSessionCache(new Work<ImmutableMap<Integer, DateTime>>() {
-      @Override
-      public ImmutableMap<Integer, DateTime> run() {
-        ImmutableMap.Builder<Integer, DateTime> results = new ImmutableMap.Builder<>();
-        for (CommitLogBucket bucket : CommitLogBucket.loadAllBuckets()) {
-          results.put(bucket.getBucketNum(), bucket.getLastWrittenTime());
-        }
-        return results.build();
-      }});
+    // Use a fresh session cache so that we get the latest data from Datastore.
+    return ofy.doWithFreshSessionCache(
+        () -> {
+          ImmutableMap.Builder<Integer, DateTime> results = new ImmutableMap.Builder<>();
+          for (CommitLogBucket bucket : CommitLogBucket.loadAllBuckets()) {
+            results.put(bucket.getBucketNum(), bucket.getLastWrittenTime());
+          }
+          return results.build();
+        });
   }
 
   /**
@@ -167,10 +164,7 @@ class CommitLogCheckpointStrategy {
   ImmutableMap<Integer, DateTime> computeBucketCheckpointTimes(
       ImmutableMap<Integer, DateTime> firstPassTimes,
       final DateTime threshold) {
-    return ImmutableMap.copyOf(transformValues(firstPassTimes, new Function<DateTime, DateTime>() {
-        @Override
-        public DateTime apply(DateTime firstPassTime) {
-          return earliestOf(firstPassTime, threshold);
-        }}));
+    return ImmutableMap.copyOf(
+        transformValues(firstPassTimes, firstPassTime -> earliestOf(firstPassTime, threshold)));
   }
 }

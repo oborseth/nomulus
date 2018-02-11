@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,14 +21,17 @@ import static google.registry.util.DomainNameUtils.canonicalizeDomainName;
 import static javax.servlet.http.HttpServletResponse.SC_BAD_REQUEST;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.io.CharStreams;
 import com.google.common.net.InetAddresses;
 import com.google.common.net.InternetDomainName;
+import google.registry.config.RegistryConfig.Config;
+import google.registry.util.FormattingLogger;
 import java.io.IOException;
 import java.io.Reader;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /**
@@ -60,6 +63,8 @@ import org.joda.time.DateTime;
  */
 class WhoisReader {
 
+  static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
+
   /**
    * These are strings that will always trigger a specific query type when they are sent at
    * the beginning of a command.
@@ -68,13 +73,12 @@ class WhoisReader {
   static final String NAMESERVER_LOOKUP_COMMAND = "nameserver";
   static final String REGISTRAR_LOOKUP_COMMAND = "registrar";
 
-  private final Reader reader;
-  private final DateTime now;
+  private final WhoisCommandFactory commandFactory;
 
   /** Creates a new WhoisReader that extracts its command from the specified Reader. */
-  WhoisReader(Reader reader, DateTime now) {
-    this.reader = checkNotNull(reader, "reader");
-    this.now = checkNotNull(now, "now");
+  @Inject
+  WhoisReader(@Config("whoisCommandFactory") WhoisCommandFactory commandFactory) {
+    this.commandFactory = commandFactory;
   }
 
   /**
@@ -84,18 +88,17 @@ class WhoisReader {
    * @throws IOException If the command could not be read from the reader.
    * @throws WhoisException If the command could not be parsed as a WhoisCommand.
    */
-  WhoisCommand readCommand() throws IOException, WhoisException {
-    return parseCommand(CharStreams.toString(reader));
+  WhoisCommand readCommand(Reader reader, DateTime now) throws IOException, WhoisException {
+    return parseCommand(CharStreams.toString(checkNotNull(reader, "reader")), now);
   }
 
   /**
    * Given a WHOIS command string, parse it into its command type and target string. See class level
    * comments for a full description of the command syntax accepted.
    */
-  private WhoisCommand parseCommand(String command) throws WhoisException {
+  private WhoisCommand parseCommand(String command, DateTime now) throws WhoisException {
     // Split the string into tokens based on whitespace.
     List<String> tokens = filterEmptyStrings(command.split("\\s"));
-
     if (tokens.isEmpty()) {
       throw new WhoisException(now, SC_BAD_REQUEST, "No WHOIS command specified.");
     }
@@ -111,7 +114,8 @@ class WhoisReader {
 
       // Try to parse the argument as a domain name.
       try {
-        return new DomainLookupCommand(InternetDomainName.from(
+        logger.infofmt("Attempting domain lookup command using domain name %s", tokens.get(1));
+        return commandFactory.domainLookup(InternetDomainName.from(
             canonicalizeDomainName(tokens.get(1))));
       } catch (IllegalArgumentException iae) {
         // If we can't interpret the argument as a host name, then return an error.
@@ -129,14 +133,18 @@ class WhoisReader {
 
       // Try to parse the argument as an IP address.
       try {
-        return new NameserverLookupByIpCommand(InetAddresses.forString(tokens.get(1)));
+        logger.infofmt(
+            "Attempting nameserver lookup command using %s as an IP address", tokens.get(1));
+        return commandFactory.nameserverLookupByIp(InetAddresses.forString(tokens.get(1)));
       } catch (IllegalArgumentException iae) {
         // Silently ignore this exception.
       }
 
       // Try to parse the argument as a host name.
       try {
-        return new NameserverLookupByHostCommand(InternetDomainName.from(
+        logger.infofmt(
+            "Attempting nameserver lookup command using %s as a hostname", tokens.get(1));
+        return commandFactory.nameserverLookupByHost(InternetDomainName.from(
             canonicalizeDomainName(tokens.get(1))));
       } catch (IllegalArgumentException iae) {
         // Silently ignore this exception.
@@ -153,14 +161,18 @@ class WhoisReader {
         throw new WhoisException(now, SC_BAD_REQUEST, String.format(
             "Too few arguments to '%s' command.", REGISTRAR_LOOKUP_COMMAND));
       }
-      return new RegistrarLookupCommand(Joiner.on(' ').join(tokens.subList(1, tokens.size())));
+      String registrarLookupArgument = Joiner.on(' ').join(tokens.subList(1, tokens.size()));
+      logger.infofmt(
+          "Attempting registrar lookup command using registrar %s", registrarLookupArgument);
+      return commandFactory.registrarLookup(registrarLookupArgument);
     }
 
     // If we have a single token, then try to interpret that in various ways.
     if (tokens.size() == 1) {
       // Try to parse it as an IP address. If successful, then this is a lookup on a nameserver.
       try {
-        return new NameserverLookupByIpCommand(InetAddresses.forString(arg1));
+        logger.infofmt("Attempting nameserver lookup using %s as an IP address", arg1);
+        return commandFactory.nameserverLookupByIp(InetAddresses.forString(arg1));
       } catch (IllegalArgumentException iae) {
         // Silently ignore this exception.
       }
@@ -174,17 +186,20 @@ class WhoisReader {
         Optional<InternetDomainName> tld = findTldForName(targetName);
         if (!tld.isPresent()) {
           // This target is not under any configured TLD, so just try it as a registrar name.
+          logger.infofmt("Attempting registrar lookup using %s as a registrar", arg1);
           return new RegistrarLookupCommand(arg1);
         }
 
-        // If the target is exactly one level above the TLD, then this is an second level domain
+        // If the target is exactly one level above the TLD, then this is a second level domain
         // (SLD) and we should do a domain lookup on it.
         if (targetName.parent().equals(tld.get())) {
-          return new DomainLookupCommand(targetName, tld.get());
+          logger.infofmt("Attempting domain lookup using %s as a domain name", targetName);
+          return commandFactory.domainLookup(targetName);
         }
 
         // The target is more than one level above the TLD, so we'll assume it's a nameserver.
-        return new NameserverLookupByHostCommand(targetName, tld.get());
+        logger.infofmt("Attempting nameserver lookup using %s as a hostname", targetName);
+        return commandFactory.nameserverLookupByHost(targetName);
       } catch (IllegalArgumentException e) {
         // Silently ignore this exception.
       }
@@ -194,7 +209,10 @@ class WhoisReader {
 
     // The only case left is that there are multiple tokens with no particular command given. We'll
     // assume this is a registrar lookup, since there's really nothing else it could be.
-    return new RegistrarLookupCommand(Joiner.on(' ').join(tokens));
+    String registrarLookupArgument = Joiner.on(' ').join(tokens);
+    logger.infofmt(
+        "Attempting registrar lookup employing %s as a registrar", registrarLookupArgument);
+    return commandFactory.registrarLookup(registrarLookupArgument);
   }
 
   /** Returns an ArrayList containing the contents of the String array minus any empty strings. */

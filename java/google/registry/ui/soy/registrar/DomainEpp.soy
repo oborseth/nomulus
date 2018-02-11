@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-{namespace registry.soy.registrar.domainepp autoescape="strict"}
+{namespace registry.soy.registrar.domainepp}
 
 
 /* General Availability.  Sunrush down below. */
@@ -21,7 +21,7 @@
  * @param item
  * @param clTrid
  */
-{template .create}
+{template .create stricthtml="false"}
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <create>
@@ -32,18 +32,18 @@
         {/if}
         {if isNonnull($item['domain:ns'])}
         <domain:ns>
-          {foreach $hostObj in $item['domain:ns']['domain:hostObj']}
+          {for $hostObj in $item['domain:ns']['domain:hostObj']}
           <domain:hostObj>{$hostObj.value}</domain:hostObj>
-          {/foreach}
+          {/for}
         </domain:ns>
         {/if}
         {if isNonnull($item['domain:registrant'])}
         <domain:registrant>{$item['domain:registrant']}</domain:registrant>
         {/if}
         {if isNonnull($item['domain:contact'])}
-          {foreach $contact in $item['domain:contact']}
+          {for $contact in $item['domain:contact']}
         <domain:contact type="{$contact['@type']}">{$contact.value}</domain:contact>
-          {/foreach}
+          {/for}
         {/if}
         <domain:authInfo>
           <domain:pw>{$item['domain:authInfo']['domain:pw']}</domain:pw>
@@ -61,7 +61,7 @@
  * @param id
  * @param clTrid
  */
-{template .info}
+{template .info stricthtml="false"}
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <info>
@@ -84,7 +84,7 @@
  * @param? addContacts list of contact to add.
  * @param? remContacts list of contact to remove.
  */
-{template .update}
+{template .update stricthtml="false"}
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <update>
@@ -128,15 +128,15 @@
 <{$tagName}>
   {if isNonnull($hosts)}
   <domain:ns>
-    {foreach $host in $hosts}
+    {for $host in $hosts}
     <domain:hostObj>{$host.value}</domain:hostObj>
-    {/foreach}
+    {/for}
   </domain:ns>
   {/if}
   {if isNonnull($contacts)}
-    {foreach $contact in $contacts}
+    {for $contact in $contacts}
   <domain:contact type="{$contact['@type']}">{$contact.value}</domain:contact>
-    {/foreach}
+    {/for}
   {/if}
 </{$tagName}>
 {/template}
@@ -148,7 +148,7 @@
  * @param item
  * @param clTrid
  */
-{template .createSunrush}
+{template .createSunrush stricthtml="false"}
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <create>
@@ -192,7 +192,7 @@
  * @param applicationID
  * @param clTrid
  */
-{template .infoSunrush}
+{template .infoSunrush stricthtml="false"}
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <info>
@@ -219,7 +219,7 @@
  * @param item
  * @param clTrid
  */
-{template .updateSunrush}
+{template .updateSunrush stricthtml="false"}
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <update>

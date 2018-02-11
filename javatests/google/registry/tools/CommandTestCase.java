@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,8 @@
 
 package google.registry.tools;
 
+import static com.google.common.collect.Iterables.concat;
+import static com.google.common.collect.Iterables.toArray;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -21,14 +23,14 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import com.beust.jcommander.JCommander;
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
-import com.google.common.collect.FluentIterable;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.ObjectArrays;
 import com.google.common.io.Files;
 import com.google.common.reflect.TypeToken;
 import google.registry.model.poll.PollMessage;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.CertificateSamples;
-import google.registry.testing.ExceptionRule;
 import google.registry.tools.params.ParameterFactory;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -61,9 +63,6 @@ public abstract class CommandTestCase<C extends Command> {
       .build();
 
   @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Rule
   public TemporaryFolder tmpDir = new TemporaryFolder();
 
   @Before
@@ -83,7 +82,7 @@ public abstract class CommandTestCase<C extends Command> {
       jcommander.parse(args);
       command.run();
     } finally {
-      // Clear the session cache so that subsequent reads for verification purposes hit datastore.
+      // Clear the session cache so that subsequent reads for verification purposes hit Datastore.
       // This primarily matters for AutoTimestamp fields, which otherwise won't have updated values.
       ofy().clearSessionCache();
       // Reset back to UNITTEST environment.
@@ -95,9 +94,19 @@ public abstract class CommandTestCase<C extends Command> {
     runCommandInEnvironment(RegistryToolEnvironment.UNITTEST, args);
   }
 
+  protected void runCommand(Iterable<String> args) throws Exception {
+    runCommandInEnvironment(
+        RegistryToolEnvironment.UNITTEST, Iterables.toArray(args, String.class));
+  }
+
   /** Adds "--force" as the first parameter, then runs the command. */
   protected void runCommandForced(String... args) throws Exception {
     runCommand(ObjectArrays.concat("--force", args));
+  }
+
+  /** Adds "--force" as the first parameter, then runs the command. */
+  protected void runCommandForced(Iterable<String> args) throws Exception {
+    runCommand(concat(ImmutableList.of("--force"), args));
   }
 
   /** Writes the data to a named temporary file and then returns a path to the file. */
@@ -114,7 +123,7 @@ public abstract class CommandTestCase<C extends Command> {
 
   /** Writes the data to a temporary file and then returns a path to the file. */
   String writeToNamedTmpFile(String filename, Iterable<String> data) throws IOException {
-    return writeToNamedTmpFile(filename, FluentIterable.from(data).toArray(String.class));
+    return writeToNamedTmpFile(filename, toArray(data, String.class));
   }
 
   /** Writes the data to a temporary file and then returns a path to the file. */
@@ -129,7 +138,7 @@ public abstract class CommandTestCase<C extends Command> {
 
   /** Writes the data to a temporary file and then returns a path to the file. */
   String writeToTmpFile(Iterable<String> data) throws IOException {
-    return writeToNamedTmpFile("tmp_file", FluentIterable.from(data).toArray(String.class));
+    return writeToNamedTmpFile("tmp_file", toArray(data, String.class));
   }
 
   /** Returns a path to a known good certificate file. */
@@ -180,6 +189,10 @@ public abstract class CommandTestCase<C extends Command> {
 
   protected String getStdoutAsString() {
     return new String(stdout.toByteArray(), UTF_8);
+  }
+
+  protected String getStderrAsString() {
+    return new String(stderr.toByteArray(), UTF_8);
   }
 
   protected List<String> getStdoutAsLines() {

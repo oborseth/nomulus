@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +14,17 @@
 
 package google.registry.model.ofy;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.googlecode.objectify.ObjectifyService.ofy;
-import static google.registry.util.ObjectifyUtils.OBJECTS_TO_KEYS;
-import static java.util.Arrays.asList;
 
-import com.google.common.base.Functions;
-import com.google.common.collect.FluentIterable;
-import com.google.common.collect.Iterables;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Streams;
 import com.googlecode.objectify.Key;
 import com.googlecode.objectify.Result;
 import com.googlecode.objectify.cmd.DeleteType;
 import com.googlecode.objectify.cmd.Deleter;
 import java.util.Arrays;
+import java.util.stream.Stream;
 
 /**
  * A Deleter that forwards to {@code ofy().delete()}, but can be augmented via subclassing to
@@ -37,27 +36,31 @@ abstract class AugmentedDeleter implements Deleter {
   /** Extension method to allow this Deleter to do extra work prior to the actual delete. */
   protected abstract void handleDeletion(Iterable<Key<?>> keys);
 
+  private void handleDeletionStream(Stream<?> entityStream) {
+    handleDeletion(entityStream.map(Key::create).collect(toImmutableList()));
+  }
+
   @Override
   public Result<Void> entities(Iterable<?> entities) {
-    handleDeletion(Iterables.transform(entities, OBJECTS_TO_KEYS));
+    handleDeletionStream(Streams.stream(entities));
     return delegate.entities(entities);
   }
 
   @Override
   public Result<Void> entities(Object... entities) {
-    handleDeletion(FluentIterable.from(asList(entities)).transform(OBJECTS_TO_KEYS));
+    handleDeletionStream(Arrays.stream(entities));
     return delegate.entities(entities);
   }
 
   @Override
   public Result<Void> entity(Object entity) {
-    handleDeletion(Arrays.<Key<?>>asList(Key.create(entity)));
+    handleDeletionStream(Stream.of(entity));
     return delegate.entity(entity);
   }
 
   @Override
   public Result<Void> key(Key<?> key) {
-    handleDeletion(Arrays.<Key<?>>asList(key));
+    handleDeletion(Arrays.asList(key));
     return delegate.keys(key);
   }
 
@@ -66,11 +69,8 @@ abstract class AugmentedDeleter implements Deleter {
     // Magic to convert the type Iterable<? extends Key<?>> (a family of types which allows for
     // homogeneous iterables of a fixed Key<T> type, e.g. List<Key<Lock>>, and is convenient for
     // callers) into the type Iterable<Key<?>> (a concrete type of heterogeneous keys, which is
-    // convenient for users).  We do this by passing each key through the identity function
-    // parameterized for Key<?>, which erases any homogeneous typing on the iterable.
-    //   See: http://www.angelikalanger.com/GenericsFAQ/FAQSections/TypeArguments.html#FAQ104
-    Iterable<Key<?>> retypedKeys = Iterables.transform(keys, Functions.<Key<?>>identity());
-    handleDeletion(retypedKeys);
+    // convenient for users).
+    handleDeletion(ImmutableList.copyOf(keys));
     return delegate.keys(keys);
   }
 

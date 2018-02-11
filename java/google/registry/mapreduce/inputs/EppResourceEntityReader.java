@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ class EppResourceEntityReader<R extends EppResource> extends EppResourceBaseRead
    * The resource classes to postfilter for.
    *
    * <p>This can be {@link EppResource} or any descendant classes, regardless of whether those
-   * classes map directly to a kind in datastore, with the restriction that none of the classes
+   * classes map directly to a kind in Datastore, with the restriction that none of the classes
    * is a supertype of any of the others.
    */
   private final ImmutableSet<Class<? extends R>> resourceClasses;

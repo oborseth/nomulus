@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,8 +43,8 @@ public final class JsonHttpTestUtils {
   }
 
   /**
-   * Returns JSON data parsed out of a JsonTransportServlet response stored in the given writer.
-   * If the data will be fetched multiple times, consider {@link #createJsonResponseSupplier}.
+   * Returns JSON data parsed out of the contents of the given writer. If the data will be fetched
+   * multiple times, consider {@link #createJsonResponseSupplier}.
    *
    * <p>Example Mockito usage:<pre>  {@code
    *
@@ -80,10 +80,6 @@ public final class JsonHttpTestUtils {
    */
   public static Supplier<Map<String, Object>> createJsonResponseSupplier(
       final StringWriter writer) {
-    return memoize(new Supplier<Map<String, Object>>() {
-      @Override
-      public Map<String, Object> get() {
-        return getJsonResponse(writer);
-      }});
+    return memoize(() -> getJsonResponse(writer));
   }
 }

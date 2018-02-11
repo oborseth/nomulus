@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@ import static google.registry.model.ofy.ObjectifyService.ofy;
 import com.google.appengine.tools.mapreduce.Reducer;
 import com.google.appengine.tools.mapreduce.ReducerInput;
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.VoidWork;
 import java.util.Iterator;
 import java.util.List;
 
@@ -37,11 +36,7 @@ public class KillAllEntitiesReducer extends Reducer<Key<?>, Key<?>, Void> {
     while (batches.hasNext()) {
       final List<Key<?>> batch = batches.next();
       // Use a transaction to get retrying for free.
-      ofy().transact(new VoidWork() {
-        @Override
-        public void vrun() {
-          ofy().deleteWithoutBackup().keys(batch);
-        }});
+      ofy().transact(() -> ofy().deleteWithoutBackup().keys(batch));
       getContext().incrementCounter("entities deleted", batch.size());
       for (Key<?> key : batch) {
         getContext().incrementCounter(String.format("%s deleted", key.getKind()));

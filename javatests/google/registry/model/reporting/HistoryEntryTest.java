@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,9 +21,11 @@ import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
+import com.google.common.collect.ImmutableSet;
 import google.registry.model.EntityTestCase;
 import google.registry.model.domain.Period;
 import google.registry.model.eppcommon.Trid;
+import google.registry.model.reporting.DomainTransactionRecord.TransactionReportField;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -35,21 +37,30 @@ public class HistoryEntryTest extends EntityTestCase {
   @Before
   public void setUp() throws Exception {
     createTld("foobar");
+    DomainTransactionRecord transactionRecord =
+        new DomainTransactionRecord.Builder()
+            .setTld("foobar")
+            .setReportingTime(clock.nowUtc())
+            .setReportField(TransactionReportField.NET_ADDS_1_YR)
+            .setReportAmount(1)
+            .build();
     // Set up a new persisted HistoryEntry entity.
-    historyEntry = new HistoryEntry.Builder()
-      .setParent(newDomainResource("foo.foobar"))
-      .setType(HistoryEntry.Type.DOMAIN_CREATE)
-      .setPeriod(Period.create(1, Period.Unit.YEARS))
-      .setXmlBytes("<xml></xml>".getBytes(UTF_8))
-      .setModificationTime(clock.nowUtc())
-      .setClientId("foo")
-      .setTrid(Trid.create("ABC-123"))
-      .setBySuperuser(false)
-      .setReason("reason")
-      .setRequestedByRegistrar(false)
-      .build();
+    historyEntry =
+        new HistoryEntry.Builder()
+            .setParent(newDomainResource("foo.foobar"))
+            .setType(HistoryEntry.Type.DOMAIN_CREATE)
+            .setPeriod(Period.create(1, Period.Unit.YEARS))
+            .setXmlBytes("<xml></xml>".getBytes(UTF_8))
+            .setModificationTime(clock.nowUtc())
+            .setClientId("foo")
+            .setOtherClientId("otherClient")
+            .setTrid(Trid.create("ABC-123", "server-trid"))
+            .setBySuperuser(false)
+            .setReason("reason")
+            .setRequestedByRegistrar(false)
+            .setDomainTransactionRecords(ImmutableSet.of(transactionRecord))
+            .build();
     persistResource(historyEntry);
-
   }
 
   @Test

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,12 +16,16 @@ package google.registry.flows.domain;
 
 import static google.registry.model.eppoutput.CheckData.DomainCheck.create;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.DatastoreHelper.createTlds;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.newDomainApplication;
 import static google.registry.testing.DatastoreHelper.persistActiveDomain;
 import static google.registry.testing.DatastoreHelper.persistDeletedDomain;
 import static google.registry.testing.DatastoreHelper.persistPremiumList;
 import static google.registry.testing.DatastoreHelper.persistReservedList;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static org.joda.money.CurrencyUnit.USD;
 
@@ -29,6 +33,9 @@ import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
+import com.google.common.collect.Ordering;
+import com.googlecode.objectify.Key;
+import google.registry.flows.EppException;
 import google.registry.flows.ResourceCheckFlowTestCase;
 import google.registry.flows.domain.DomainCheckFlow.OnlyCheckedNamesCanBeFeeCheckedException;
 import google.registry.flows.domain.DomainFlowUtils.BadCommandForRegistryPhaseException;
@@ -38,6 +45,7 @@ import google.registry.flows.domain.DomainFlowUtils.BadPeriodUnitException;
 import google.registry.flows.domain.DomainFlowUtils.CurrencyUnitMismatchException;
 import google.registry.flows.domain.DomainFlowUtils.DashesInThirdAndFourthException;
 import google.registry.flows.domain.DomainFlowUtils.DomainLabelTooLongException;
+import google.registry.flows.domain.DomainFlowUtils.DomainNameExistsAsTldException;
 import google.registry.flows.domain.DomainFlowUtils.EmptyDomainNamePartException;
 import google.registry.flows.domain.DomainFlowUtils.FeeChecksDontSupportPhasesException;
 import google.registry.flows.domain.DomainFlowUtils.InvalidIdnDomainLabelException;
@@ -47,16 +55,17 @@ import google.registry.flows.domain.DomainFlowUtils.NotAuthorizedForTldException
 import google.registry.flows.domain.DomainFlowUtils.RestoresAreAlwaysForOneYearException;
 import google.registry.flows.domain.DomainFlowUtils.TldDoesNotExistException;
 import google.registry.flows.domain.DomainFlowUtils.TrailingDashException;
+import google.registry.flows.domain.DomainFlowUtils.TransfersAreAlwaysForOneYearException;
 import google.registry.flows.domain.DomainFlowUtils.UnknownFeeCommandException;
 import google.registry.flows.exceptions.TooManyResourceChecksException;
+import google.registry.model.domain.AllocationToken;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.launch.ApplicationStatus;
 import google.registry.model.domain.launch.LaunchPhase;
-import google.registry.model.registrar.Registrar;
 import google.registry.model.registry.Registry;
 import google.registry.model.registry.Registry.TldState;
 import google.registry.model.registry.label.ReservedList;
-import google.registry.testing.DatastoreHelper;
+import google.registry.model.reporting.HistoryEntry;
 import org.joda.money.CurrencyUnit;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
@@ -73,13 +82,13 @@ public class DomainCheckFlowTest
   }
 
   private ReservedList createReservedList() throws Exception {
-      return persistReservedList(
-          "tld-reserved",
-          "reserved,FULLY_BLOCKED",
-          "anchor,RESERVED_FOR_ANCHOR_TENANT,foo2BAR",
-          "allowedinsunrise,ALLOWED_IN_SUNRISE",
-          "collision,NAME_COLLISION",
-          "premiumcollision,NAME_COLLISION");
+    return persistReservedList(
+        "tld-reserved",
+        "reserved,FULLY_BLOCKED",
+        "anchor,RESERVED_FOR_ANCHOR_TENANT,foo2BAR",
+        "allowedinsunrise,ALLOWED_IN_SUNRISE",
+        "collision,NAME_COLLISION",
+        "premiumcollision,NAME_COLLISION");
   }
 
   @Before
@@ -106,11 +115,78 @@ public class DomainCheckFlowTest
   }
 
   @Test
+  public void testSuccess_oneExists_allocationTokenIsInvalid() throws Exception {
+    setEppInput("domain_check_allocationtoken.xml");
+    persistActiveDomain("example1.tld");
+    doCheckTest(
+        create(false, "example1.tld", "In use"),
+        create(false, "example2.tld", "The allocation token is invalid"),
+        create(false, "reserved.tld", "Reserved"));
+  }
+
+  @Test
+  public void testSuccess_oneExists_allocationTokenIsValid() throws Exception {
+    setEppInput("domain_check_allocationtoken.xml");
+    persistActiveDomain("example1.tld");
+    persistResource(new AllocationToken.Builder().setToken("abc123").build());
+    doCheckTest(
+        create(false, "example1.tld", "In use"),
+        create(true, "example2.tld", null),
+        create(false, "reserved.tld", "Reserved"));
+  }
+
+  @Test
+  public void testSuccess_oneExists_allocationTokenIsRedeemed() throws Exception {
+    setEppInput("domain_check_allocationtoken.xml");
+    persistActiveDomain("example1.tld");
+    persistResource(
+        new AllocationToken.Builder()
+            .setToken("abc123")
+            .setRedemptionHistoryEntry(Key.create(HistoryEntry.class, 1L))
+            .build());
+    doCheckTest(
+        create(false, "example1.tld", "In use"),
+        create(false, "example2.tld", "Alloc token was already redeemed"),
+        create(false, "reserved.tld", "Reserved"));
+  }
+
+  @Test
+  public void testSuccess_nothingExists_reservationsOverrideInvalidAllocationTokens()
+      throws Exception {
+    setEppInput("domain_check_reserved_allocationtoken.xml");
+    // Fill out these reasons
+    doCheckTest(
+        create(false, "collision.tld", "Cannot be delegated"),
+        create(false, "reserved.tld", "Reserved"),
+        create(false, "anchor.tld", "Reserved"),
+        create(false, "allowedinsunrise.tld", "Reserved for non-sunrise"),
+        create(false, "premiumcollision.tld", "Cannot be delegated"));
+  }
+
+  @Test
   public void testSuccess_oneReserved() throws Exception {
     setEppInput("domain_check_one_tld_reserved.xml");
     doCheckTest(
         create(false, "reserved.tld", "Reserved"),
         create(false, "allowedinsunrise.tld", "Reserved for non-sunrise"),
+        create(true, "example2.tld", null),
+        create(true, "example3.tld", null));
+  }
+
+  @Test
+  public void testSuccess_domainWithMultipleReservationType_useMostSevereMessage()
+      throws Exception {
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(
+                createReservedList(),
+                persistReservedList("tld-collision", "allowedinsunrise,NAME_COLLISION"))
+            .build());
+    setEppInput("domain_check_one_tld_reserved.xml");
+    doCheckTest(
+        create(false, "reserved.tld", "Reserved"),
+        create(false, "allowedinsunrise.tld", "Cannot be delegated"),
         create(true, "example2.tld", null),
         create(true, "example3.tld", null));
   }
@@ -127,8 +203,9 @@ public class DomainCheckFlowTest
     persistResource(
         Registry.get("tld.foo")
             .asBuilder()
-            .setReservedLists(persistReservedList(
-                "tld.foo", "reserved,FULLY_BLOCKED", "allowedinsunrise,ALLOWED_IN_SUNRISE"))
+            .setReservedLists(
+                persistReservedList(
+                    "tld.foo", "reserved,FULLY_BLOCKED", "allowedinsunrise,ALLOWED_IN_SUNRISE"))
             .build());
     setEppInput("domain_check_one_multipart_tld_reserved.xml");
     doCheckTest(
@@ -150,15 +227,13 @@ public class DomainCheckFlowTest
   @Test
   public void testSuccess_duplicatesAllowed() throws Exception {
     setEppInput("domain_check_duplicates.xml");
-    doCheckTest(
-        create(true, "example1.tld", null),
-        create(true, "example1.tld", null));
+    doCheckTest(create(true, "example1.tld", null), create(true, "example1.tld", null));
   }
 
   @Test
   public void testSuccess_xmlMatches() throws Exception {
     persistActiveDomain("example2.tld");
-    runFlowAssertResponse(readFile("domain_check_one_tld_response.xml"));
+    runFlowAssertResponse(loadFile("domain_check_one_tld_response.xml"));
   }
 
   @Test
@@ -169,10 +244,15 @@ public class DomainCheckFlowTest
   }
 
   @Test
+  public void testSuccess_50IdsAllowed_withAllocationToken() throws Exception {
+    setEppInput("domain_check_50_allocationtoken.xml");
+    runFlow();
+  }
+
+  @Test
   public void testSuccess_pendingSunriseApplicationInGeneralAvailability() throws Exception {
     createTld("tld", TldState.GENERAL_AVAILABILITY);
-    persistResource(newDomainApplication("example2.tld").asBuilder()
-        .build());
+    persistResource(newDomainApplication("example2.tld").asBuilder().build());
     doCheckTest(
         create(true, "example1.tld", null),
         create(false, "example2.tld", "Pending allocation"),
@@ -182,9 +262,8 @@ public class DomainCheckFlowTest
   @Test
   public void testSuccess_pendingLandrushApplicationInGeneralAvailability() throws Exception {
     createTld("tld", TldState.GENERAL_AVAILABILITY);
-    persistResource(newDomainApplication("example2.tld").asBuilder()
-        .setPhase(LaunchPhase.LANDRUSH)
-        .build());
+    persistResource(
+        newDomainApplication("example2.tld").asBuilder().setPhase(LaunchPhase.LANDRUSH).build());
     doCheckTest(
         create(true, "example1.tld", null),
         create(false, "example2.tld", "Pending allocation"),
@@ -194,8 +273,7 @@ public class DomainCheckFlowTest
   @Test
   public void testSuccess_pendingSunriseApplicationInQuietPeriod() throws Exception {
     createTld("tld", TldState.QUIET_PERIOD);
-    persistResource(newDomainApplication("example2.tld").asBuilder()
-        .build());
+    persistResource(newDomainApplication("example2.tld").asBuilder().build());
     doCheckTest(
         create(true, "example1.tld", null),
         create(false, "example2.tld", "Pending allocation"),
@@ -205,9 +283,8 @@ public class DomainCheckFlowTest
   @Test
   public void testSuccess_pendingLandrushApplicationInQuietPeriod() throws Exception {
     createTld("tld", TldState.QUIET_PERIOD);
-    persistResource(newDomainApplication("example2.tld").asBuilder()
-        .setPhase(LaunchPhase.LANDRUSH)
-        .build());
+    persistResource(
+        newDomainApplication("example2.tld").asBuilder().setPhase(LaunchPhase.LANDRUSH).build());
     doCheckTest(
         create(true, "example1.tld", null),
         create(false, "example2.tld", "Pending allocation"),
@@ -217,8 +294,7 @@ public class DomainCheckFlowTest
   @Test
   public void testSuccess_pendingSunriseApplicationInSunrise() throws Exception {
     createTld("tld", TldState.SUNRISE);
-    persistResource(newDomainApplication("example2.tld").asBuilder()
-        .build());
+    persistResource(newDomainApplication("example2.tld").asBuilder().build());
     doCheckTest(
         create(true, "example1.tld", null),
         create(true, "example2.tld", null),
@@ -228,9 +304,8 @@ public class DomainCheckFlowTest
   @Test
   public void testSuccess_pendingLandrushApplicationInLandrush() throws Exception {
     createTld("tld", TldState.LANDRUSH);
-    persistResource(newDomainApplication("example2.tld").asBuilder()
-        .setPhase(LaunchPhase.LANDRUSH)
-        .build());
+    persistResource(
+        newDomainApplication("example2.tld").asBuilder().setPhase(LaunchPhase.LANDRUSH).build());
     doCheckTest(
         create(true, "example1.tld", null),
         create(true, "example2.tld", null),
@@ -240,10 +315,12 @@ public class DomainCheckFlowTest
   @Test
   public void testSuccess_rejectedApplication() throws Exception {
     createTld("tld", TldState.LANDRUSH);
-    persistResource(newDomainApplication("example2.tld").asBuilder()
-        .setPhase(LaunchPhase.LANDRUSH)
-        .setApplicationStatus(ApplicationStatus.REJECTED)
-        .build());
+    persistResource(
+        newDomainApplication("example2.tld")
+            .asBuilder()
+            .setPhase(LaunchPhase.LANDRUSH)
+            .setApplicationStatus(ApplicationStatus.REJECTED)
+            .build());
     doCheckTest(
         create(true, "example1.tld", null),
         create(true, "example2.tld", null),
@@ -253,33 +330,39 @@ public class DomainCheckFlowTest
   @Test
   public void testFailure_tooManyIds() throws Exception {
     setEppInput("domain_check_51.xml");
-    thrown.expect(TooManyResourceChecksException.class);
-    runFlow();
+    EppException thrown = expectThrows(TooManyResourceChecksException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_wrongTld() throws Exception {
     setEppInput("domain_check.xml");
-    thrown.expect(TldDoesNotExistException.class);
-    runFlow();
+    EppException thrown = expectThrows(TldDoesNotExistException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_notAuthorizedForTld() throws Exception {
-    DatastoreHelper.persistResource(
-        Registrar.loadByClientId("TheRegistrar")
-            .asBuilder()
-            .setAllowedTlds(ImmutableSet.<String>of())
-            .build());
-    thrown.expect(NotAuthorizedForTldException.class);
-    runFlow();
+    persistResource(
+        loadRegistrar("TheRegistrar").asBuilder().setAllowedTlds(ImmutableSet.of()).build());
+    EppException thrown = expectThrows(NotAuthorizedForTldException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
-  private void doFailingBadLabelTest(String label, Class<? extends Exception> expectedException)
+  @Test
+  public void testSuccess_superuserNotAuthorizedForTld() throws Exception {
+    persistActiveDomain("example2.tld");
+    persistResource(
+        loadRegistrar("TheRegistrar").asBuilder().setAllowedTlds(ImmutableSet.of()).build());
+    runFlowAssertResponse(
+        CommitMode.LIVE, UserPrivileges.SUPERUSER, loadFile("domain_check_one_tld_response.xml"));
+  }
+
+  private void doFailingBadLabelTest(String label, Class<? extends EppException> expectedException)
       throws Exception {
     setEppInput("domain_check_template.xml", ImmutableMap.of("LABEL", label));
-    thrown.expect(expectedException);
-    runFlow();
+    EppException thrown = expectThrows(expectedException, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -328,6 +411,18 @@ public class DomainCheckFlowTest
   }
 
   @Test
+  public void testFailure_domainNameExistsAsTld_lowercase() throws Exception {
+    createTlds("foo.tld", "tld");
+    doFailingBadLabelTest("foo.tld", DomainNameExistsAsTldException.class);
+  }
+
+  @Test
+  public void testFailure_domainNameExistsAsTld_uppercase() throws Exception {
+    createTlds("foo.tld", "tld");
+    doFailingBadLabelTest("FOO.TLD", BadDomainNameCharacterException.class);
+  }
+
+  @Test
   public void testFailure_invalidPunycode() throws Exception {
     doFailingBadLabelTest("xn--abcdefg.tld", InvalidPunycodeException.class);
   }
@@ -351,8 +446,8 @@ public class DomainCheckFlowTest
   @Test
   public void testFailure_predelegation() throws Exception {
     createTld("tld", TldState.PREDELEGATION);
-    thrown.expect(BadCommandForRegistryPhaseException.class);
-    runFlow();
+    EppException thrown = expectThrows(BadCommandForRegistryPhaseException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -371,7 +466,7 @@ public class DomainCheckFlowTest
    */
   @Test
   public void testAvailExtension_premiumDomainsAreUnavailableWithoutExtension() throws Exception {
-    sessionMetadata.setServiceExtensionUris(ImmutableSet.<String>of());
+    sessionMetadata.setServiceExtensionUris(ImmutableSet.of());
     createTld("example");
     setEppInput("domain_check_premium.xml");
     doCheckTest(create(false, "rich.example", "Premium names require EPP ext."));
@@ -383,7 +478,7 @@ public class DomainCheckFlowTest
    */
   @Test
   public void testAvailExtension_premiumDomainsAvailableIfNotRequiredByTld() throws Exception {
-    sessionMetadata.setServiceExtensionUris(ImmutableSet.<String>of());
+    sessionMetadata.setServiceExtensionUris(ImmutableSet.of());
     createTld("example");
     persistResource(Registry.get("example").asBuilder().setPremiumPriceAckRequired(false).build());
     setEppInput("domain_check_premium.xml");
@@ -395,30 +490,44 @@ public class DomainCheckFlowTest
   public void testFeeExtension_v06() throws Exception {
     persistActiveDomain("example1.tld");
     setEppInput("domain_check_fee_v06.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_response_v06.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_response_v06.xml"));
+  }
+
+  @Test
+  public void testFeeExtension_multipleReservations() throws Exception {
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(
+                persistReservedList("example-sunrise", "allowedinsunrise,ALLOWED_IN_SUNRISE"))
+            .build());
+    persistActiveDomain("example1.tld");
+    setEppInput("domain_check_fee_v06.xml");
+    runFlowAssertResponse(loadFile("domain_check_fee_response_v06.xml"));
   }
 
   @Test
   public void testFeeExtension_v11() throws Exception {
     persistActiveDomain("example1.tld");
     setEppInput("domain_check_fee_v11.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_response_v11.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_response_v11.xml"));
   }
 
   @Test
   public void testFeeExtension_v12() throws Exception {
     persistActiveDomain("example1.tld");
     setEppInput("domain_check_fee_v12.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_response_v12.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_response_v12.xml"));
   }
 
   /**
    * Test commands for create, renew, transfer, restore and update with implicit period and
-   * currency. */
+   * currency.
+   */
   @Test
   public void testFeeExtension_multipleCommands_v06() throws Exception {
     setEppInput("domain_check_fee_multiple_commands_v06.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_multiple_commands_response_v06.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_multiple_commands_response_v06.xml"));
   }
 
   // Version 11 cannot have multiple commands.
@@ -426,7 +535,7 @@ public class DomainCheckFlowTest
   @Test
   public void testFeeExtension_multipleCommands_v12() throws Exception {
     setEppInput("domain_check_fee_multiple_commands_v12.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_multiple_commands_response_v12.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_multiple_commands_response_v12.xml"));
   }
 
   /** Test the same as {@link #testFeeExtension_multipleCommands_v06} with premium labels. */
@@ -434,49 +543,49 @@ public class DomainCheckFlowTest
   public void testFeeExtension_premiumLabels_v06() throws Exception {
     createTld("example");
     setEppInput("domain_check_fee_premium_v06.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_premium_response_v06.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_premium_response_v06.xml"));
   }
 
   @Test
   public void testFeeExtension_premiumLabels_v11_create() throws Exception {
     createTld("example");
     setEppInput("domain_check_fee_premium_v11_create.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_premium_response_v11_create.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_premium_response_v11_create.xml"));
   }
 
   @Test
   public void testFeeExtension_premiumLabels_v11_renew() throws Exception {
     createTld("example");
     setEppInput("domain_check_fee_premium_v11_renew.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_premium_response_v11_renew.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_premium_response_v11_renew.xml"));
   }
 
   @Test
   public void testFeeExtension_premiumLabels_v11_transfer() throws Exception {
     createTld("example");
     setEppInput("domain_check_fee_premium_v11_transfer.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_premium_response_v11_transfer.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_premium_response_v11_transfer.xml"));
   }
 
   @Test
   public void testFeeExtension_premiumLabels_v11_restore() throws Exception {
     createTld("example");
     setEppInput("domain_check_fee_premium_v11_restore.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_premium_response_v11_restore.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_premium_response_v11_restore.xml"));
   }
 
   @Test
   public void testFeeExtension_premiumLabels_v11_update() throws Exception {
     createTld("example");
     setEppInput("domain_check_fee_premium_v11_update.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_premium_response_v11_update.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_premium_response_v11_update.xml"));
   }
 
   @Test
   public void testFeeExtension_premiumLabels_v12() throws Exception {
     createTld("example");
     setEppInput("domain_check_fee_premium_v12.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_premium_response_v12.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_premium_response_v12.xml"));
   }
 
   @Test
@@ -484,312 +593,363 @@ public class DomainCheckFlowTest
     // Note that the response xml expects to see "11.10" with two digits after the decimal point.
     // This works because Money.getAmount(), used in the flow, returns a BigDecimal that is set to
     // display the number of digits that is conventional for the given currency.
-    persistResource(Registry.get("tld").asBuilder()
-        .setCreateBillingCost(Money.of(CurrencyUnit.USD, 11.1))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setCreateBillingCost(Money.of(CurrencyUnit.USD, 11.1))
+            .build());
     setEppInput("domain_check_fee_fractional.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_fractional_response.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_fractional_response.xml"));
   }
 
   /** Test that create fees are properly omitted/classed on names on reserved lists. */
   @Test
   public void testFeeExtension_reservedName_v06() throws Exception {
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(createReservedList())
-        .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(createReservedList())
+            .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
+            .build());
     setEppInput("domain_check_fee_reserved_v06.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_reserved_response_v06.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_reserved_response_v06.xml"));
   }
 
   /** The tests must be split up for version 11, which allows only one command at a time. */
   @Test
   public void testFeeExtension_reservedName_v11_create() throws Exception {
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(createReservedList())
-        .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(createReservedList())
+            .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
+            .build());
     setEppInput("domain_check_fee_reserved_v11_create.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_reserved_response_v11_create.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_reserved_response_v11_create.xml"));
   }
 
   @Test
   public void testFeeExtension_reservedName_v11_renew() throws Exception {
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(createReservedList())
-        .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(createReservedList())
+            .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
+            .build());
     setEppInput("domain_check_fee_reserved_v11_renew.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_reserved_response_v11_renew.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_reserved_response_v11_renew.xml"));
   }
 
   @Test
   public void testFeeExtension_reservedName_v11_transfer() throws Exception {
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(createReservedList())
-        .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(createReservedList())
+            .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
+            .build());
     setEppInput("domain_check_fee_reserved_v11_transfer.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_reserved_response_v11_transfer.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_reserved_response_v11_transfer.xml"));
   }
 
   @Test
   public void testFeeExtension_reservedName_v11_restore() throws Exception {
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(createReservedList())
-        .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(createReservedList())
+            .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
+            .build());
     setEppInput("domain_check_fee_reserved_v11_restore.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_reserved_response_v11_restore.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_reserved_response_v11_restore.xml"));
   }
 
   @Test
   public void testFeeExtension_reservedName_v12() throws Exception {
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(createReservedList())
-        .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(createReservedList())
+            .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
+            .build());
     setEppInput("domain_check_fee_reserved_v12.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_reserved_response_v12.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_reserved_response_v12.xml"));
   }
 
   @Test
   public void testFeeExtension_feesNotOmittedOnReservedNamesInSunrise_v06() throws Exception {
     createTld("tld", TldState.SUNRISE);
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(createReservedList())
-        .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(createReservedList())
+            .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
+            .build());
     setEppInput("domain_check_fee_reserved_v06.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_reserved_sunrise_response_v06.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_reserved_sunrise_response_v06.xml"));
   }
 
   @Test
-  public void
-      testFeeExtension_feesNotOmittedOnReservedNamesInSunrise_v11_create() throws Exception {
+  public void testFeeExtension_feesNotOmittedOnReservedNamesInSunrise_v11_create()
+      throws Exception {
     createTld("tld", TldState.SUNRISE);
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(createReservedList())
-        .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(createReservedList())
+            .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
+            .build());
     setEppInput("domain_check_fee_reserved_v11_create.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_reserved_sunrise_response_v11_create.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_reserved_sunrise_response_v11_create.xml"));
   }
 
   @Test
-  public void
-      testFeeExtension_feesNotOmittedOnReservedNamesInSunrise_v11_renew() throws Exception {
+  public void testFeeExtension_feesNotOmittedOnReservedNamesInSunrise_v11_renew() throws Exception {
     createTld("tld", TldState.SUNRISE);
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(createReservedList())
-        .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(createReservedList())
+            .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
+            .build());
     setEppInput("domain_check_fee_reserved_v11_renew.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_reserved_sunrise_response_v11_renew.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_reserved_sunrise_response_v11_renew.xml"));
   }
 
   @Test
-  public void
-      testFeeExtension_feesNotOmittedOnReservedNamesInSunrise_v11_transfer() throws Exception {
+  public void testFeeExtension_feesNotOmittedOnReservedNamesInSunrise_v11_transfer()
+      throws Exception {
     createTld("tld", TldState.SUNRISE);
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(createReservedList())
-        .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(createReservedList())
+            .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
+            .build());
     setEppInput("domain_check_fee_reserved_v11_transfer.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_reserved_sunrise_response_v11_transfer.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_reserved_sunrise_response_v11_transfer.xml"));
   }
 
   @Test
-  public void
-      testFeeExtension_feesNotOmittedOnReservedNamesInSunrise_v11_restore() throws Exception {
+  public void testFeeExtension_feesNotOmittedOnReservedNamesInSunrise_v11_restore()
+      throws Exception {
     createTld("tld", TldState.SUNRISE);
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(createReservedList())
-        .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(createReservedList())
+            .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
+            .build());
     setEppInput("domain_check_fee_reserved_v11_restore.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_reserved_sunrise_response_v11_restore.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_reserved_sunrise_response_v11_restore.xml"));
   }
 
   @Test
   public void testFeeExtension_feesNotOmittedOnReservedNamesInSunrise_v12() throws Exception {
     createTld("tld", TldState.SUNRISE);
-    persistResource(Registry.get("tld").asBuilder()
-        .setReservedLists(createReservedList())
-        .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setReservedLists(createReservedList())
+            .setPremiumList(persistPremiumList("tld", "premiumcollision,USD 70"))
+            .build());
     setEppInput("domain_check_fee_reserved_v12.xml");
-    runFlowAssertResponse(readFile("domain_check_fee_reserved_sunrise_response_v12.xml"));
+    runFlowAssertResponse(loadFile("domain_check_fee_reserved_sunrise_response_v12.xml"));
   }
 
   @Test
   public void testFeeExtension_wrongCurrency_v06() throws Exception {
     setEppInput("domain_check_fee_euro_v06.xml");
-    thrown.expect(CurrencyUnitMismatchException.class);
-    runFlow();
+    EppException thrown = expectThrows(CurrencyUnitMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_wrongCurrency_v11() throws Exception {
     setEppInput("domain_check_fee_euro_v11.xml");
-    thrown.expect(CurrencyUnitMismatchException.class);
-    runFlow();
+    EppException thrown = expectThrows(CurrencyUnitMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_wrongCurrency_v12() throws Exception {
     setEppInput("domain_check_fee_euro_v12.xml");
-    thrown.expect(CurrencyUnitMismatchException.class);
-    runFlow();
+    EppException thrown = expectThrows(CurrencyUnitMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_periodNotInYears_v06() throws Exception {
     setEppInput("domain_check_fee_bad_period_v06.xml");
-    thrown.expect(BadPeriodUnitException.class);
-    runFlow();
+    EppException thrown = expectThrows(BadPeriodUnitException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_periodNotInYears_v11() throws Exception {
     setEppInput("domain_check_fee_bad_period_v11.xml");
-    thrown.expect(BadPeriodUnitException.class);
-    runFlow();
+    EppException thrown = expectThrows(BadPeriodUnitException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_periodNotInYears_v12() throws Exception {
     setEppInput("domain_check_fee_bad_period_v12.xml");
-    thrown.expect(BadPeriodUnitException.class);
-    runFlow();
+    EppException thrown = expectThrows(BadPeriodUnitException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_commandWithPhase_v06() throws Exception {
     setEppInput("domain_check_fee_command_phase_v06.xml");
-    thrown.expect(FeeChecksDontSupportPhasesException.class);
-    runFlow();
+    EppException thrown = expectThrows(FeeChecksDontSupportPhasesException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_commandWithPhase_v11() throws Exception {
     setEppInput("domain_check_fee_command_phase_v11.xml");
-    thrown.expect(FeeChecksDontSupportPhasesException.class);
-    runFlow();
+    EppException thrown = expectThrows(FeeChecksDontSupportPhasesException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_commandWithPhase_v12() throws Exception {
     setEppInput("domain_check_fee_command_phase_v12.xml");
-    thrown.expect(FeeChecksDontSupportPhasesException.class);
-    runFlow();
+    EppException thrown = expectThrows(FeeChecksDontSupportPhasesException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_commandSubphase_v06() throws Exception {
     setEppInput("domain_check_fee_command_subphase_v06.xml");
-    thrown.expect(FeeChecksDontSupportPhasesException.class);
-    runFlow();
+    EppException thrown = expectThrows(FeeChecksDontSupportPhasesException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_commandSubphase_v11() throws Exception {
     setEppInput("domain_check_fee_command_subphase_v11.xml");
-    thrown.expect(FeeChecksDontSupportPhasesException.class);
-    runFlow();
+    EppException thrown = expectThrows(FeeChecksDontSupportPhasesException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_commandSubphase_v12() throws Exception {
     setEppInput("domain_check_fee_command_subphase_v12.xml");
-    thrown.expect(FeeChecksDontSupportPhasesException.class);
-    runFlow();
+    EppException thrown = expectThrows(FeeChecksDontSupportPhasesException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   // This test is only relevant for v06, since domain names are not specified in v11 or v12.
   @Test
   public void testFeeExtension_feeCheckNotInAvailabilityCheck() throws Exception {
     setEppInput("domain_check_fee_not_in_avail.xml");
-    thrown.expect(OnlyCheckedNamesCanBeFeeCheckedException.class);
-    runFlow();
+    EppException thrown =
+        expectThrows(OnlyCheckedNamesCanBeFeeCheckedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_multiyearRestore_v06() throws Exception {
     setEppInput("domain_check_fee_multiyear_restore_v06.xml");
-    thrown.expect(RestoresAreAlwaysForOneYearException.class);
-    runFlow();
+    EppException thrown = expectThrows(RestoresAreAlwaysForOneYearException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_multiyearRestore_v11() throws Exception {
     setEppInput("domain_check_fee_multiyear_restore_v11.xml");
-    thrown.expect(RestoresAreAlwaysForOneYearException.class);
-    runFlow();
+    EppException thrown = expectThrows(RestoresAreAlwaysForOneYearException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_multiyearRestore_v12() throws Exception {
     setEppInput("domain_check_fee_multiyear_restore_v12.xml");
-    thrown.expect(RestoresAreAlwaysForOneYearException.class);
-    runFlow();
+    EppException thrown = expectThrows(RestoresAreAlwaysForOneYearException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testFeeExtension_multiyearTransfer_v06() throws Exception {
+    setEppInput("domain_check_fee_multiyear_transfer_v06.xml");
+    EppException thrown = expectThrows(TransfersAreAlwaysForOneYearException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testFeeExtension_multiyearTransfer_v11() throws Exception {
+    setEppInput("domain_check_fee_multiyear_transfer_v11.xml");
+    EppException thrown = expectThrows(TransfersAreAlwaysForOneYearException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testFeeExtension_multiyearTransfer_v12() throws Exception {
+    setEppInput("domain_check_fee_multiyear_transfer_v12.xml");
+    EppException thrown = expectThrows(TransfersAreAlwaysForOneYearException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_unknownCommand_v06() throws Exception {
     setEppInput("domain_check_fee_unknown_command_v06.xml");
-    thrown.expect(UnknownFeeCommandException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnknownFeeCommandException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_unknownCommand_v11() throws Exception {
     setEppInput("domain_check_fee_unknown_command_v11.xml");
-    thrown.expect(UnknownFeeCommandException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnknownFeeCommandException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_unknownCommand_v12() throws Exception {
     setEppInput("domain_check_fee_unknown_command_v12.xml");
-    thrown.expect(UnknownFeeCommandException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnknownFeeCommandException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_invalidCommand_v06() throws Exception {
     setEppInput("domain_check_fee_invalid_command_v06.xml");
-    thrown.expect(UnknownFeeCommandException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnknownFeeCommandException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_invalidCommand_v11() throws Exception {
     setEppInput("domain_check_fee_invalid_command_v11.xml");
-    thrown.expect(UnknownFeeCommandException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnknownFeeCommandException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFeeExtension_invalidCommand_v12() throws Exception {
     setEppInput("domain_check_fee_invalid_command_v12.xml");
-    thrown.expect(UnknownFeeCommandException.class);
-    runFlow();
+    EppException thrown = expectThrows(UnknownFeeCommandException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   private void runEapFeeCheckTest(String inputFile, String outputFile) throws Exception {
     clock.setTo(DateTime.parse("2010-01-01T10:00:00Z"));
     persistActiveDomain("example1.tld");
-    persistResource(Registry.get("tld").asBuilder()
-        .setEapFeeSchedule(ImmutableSortedMap.of(
-            START_OF_TIME, Money.of(USD, 0),
-            clock.nowUtc().minusDays(1), Money.of(USD, 100),
-            clock.nowUtc().plusDays(1), Money.of(USD, 50),
-            clock.nowUtc().plusDays(2), Money.of(USD, 0)))
-        .build());
+    persistResource(
+        Registry.get("tld")
+            .asBuilder()
+            .setEapFeeSchedule(
+                new ImmutableSortedMap.Builder<DateTime, Money>(Ordering.natural())
+                    .put(START_OF_TIME, Money.of(USD, 0))
+                    .put(clock.nowUtc().minusDays(1), Money.of(USD, 100))
+                    .put(clock.nowUtc().plusDays(1), Money.of(USD, 50))
+                    .put(clock.nowUtc().plusDays(2), Money.of(USD, 0))
+                    .build())
+            .build());
     setEppInput(inputFile);
-    runFlowAssertResponse(readFile(outputFile));
+    runFlowAssertResponse(loadFile(outputFile));
   }
 
   @Test
@@ -809,8 +969,8 @@ public class DomainCheckFlowTest
 
   @Test
   public void testSuccess_eapFeeCheck_date_v12() throws Exception {
-    runEapFeeCheckTest("domain_check_fee_date_v12.xml",
-        "domain_check_eap_fee_response_date_v12.xml");
+    runEapFeeCheckTest(
+        "domain_check_fee_date_v12.xml", "domain_check_eap_fee_response_date_v12.xml");
   }
 
   @Ignore
@@ -818,5 +978,16 @@ public class DomainCheckFlowTest
   public void testSuccess_feeCheck_multipleRanges() throws Exception {
     // TODO: If at some point we have more than one type of fees that are time dependent, populate
     // this test to test if the notAfter date is the earliest of the end points of the ranges.
+  }
+
+  @Test
+  public void testIcannActivityReportField_getsLogged() throws Exception {
+    createTld("com", TldState.GENERAL_AVAILABILITY);
+    createTld("net", TldState.GENERAL_AVAILABILITY);
+    createTld("org", TldState.GENERAL_AVAILABILITY);
+    setEppInput("domain_check.xml");
+    runFlow();
+    assertIcannReportingActivityFieldLogged("srs-dom-check");
+    assertTldsFieldLogged("com", "net", "org");
   }
 }

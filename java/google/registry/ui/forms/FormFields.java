@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,40 +19,32 @@ import static com.google.common.collect.Range.closed;
 import static com.google.common.collect.Range.singleton;
 import static java.util.Locale.getISOCountries;
 
-import com.google.common.base.Function;
 import com.google.common.collect.ImmutableSet;
 import com.google.re2j.Pattern;
-import javax.annotation.Nullable;
 
 /** Utility class of {@link FormField} objects for validating EPP related things. */
 public final class FormFields {
 
   private static final Pattern WHITESPACE = Pattern.compile("[ \\t\\r\\n]+");
-  private static final Function<String, String> COLLAPSE_WHITESPACE =
-      new Function<String, String>() {
-        @Nullable
-        @Override
-        public String apply(@Nullable String input) {
-          return input != null ? WHITESPACE.matcher(input).replaceAll(" ") : null;
-        }};
-
   /**
    * Form field that applies XML Schema Token cleanup to input.
    *
    * <p>This trims the input and collapses whitespace.
    *
-   * @see "http://www.w3.org/TR/xmlschema11-2/#token"
+   * @see <a href="http://www.w3.org/TR/xmlschema11-2/#token">XSD Datatypes - token</a>
    */
-  public static final FormField<String, String> XS_TOKEN = FormField.named("xsToken")
-      .emptyToNull()
-      .trimmed()
-      .transform(COLLAPSE_WHITESPACE)
-      .build();
+  public static final FormField<String, String> XS_TOKEN =
+      FormField.named("xsToken")
+          .emptyToNull()
+          .trimmed()
+          .transform(input -> input != null ? WHITESPACE.matcher(input).replaceAll(" ") : null)
+          .build();
 
   /**
    * Form field that ensures input does not contain tabs, line feeds, or carriage returns.
    *
-   * @see "http://www.w3.org/TR/xmlschema11-2/#normalizedString"
+   * @see <a href="http://www.w3.org/TR/xmlschema11-2/#normalizedString">
+   *     XSD Datatypes - normalizedString</a>
    */
   public static final FormField<String, String> XS_NORMALIZED_STRING =
       FormField.named("xsNormalizedString")
@@ -63,7 +55,7 @@ public final class FormFields {
   /**
    * Form field for +E164 phone numbers with a dot after the country prefix.
    *
-   * @see "http://tools.ietf.org/html/rfc5733#section-4"
+   * @see <a href="http://tools.ietf.org/html/rfc5733#section-4">RFC 5733 - EPP - Formal Syntax</a>
    */
   public static final FormField<String, String> PHONE_NUMBER =
       XS_TOKEN.asBuilderNamed("phoneNumber")
@@ -113,7 +105,7 @@ public final class FormFields {
   /**
    * Ensure value is an EPP Repository Object IDentifier (ROID).
    *
-   * @see "http://tools.ietf.org/html/rfc5730#section-4.2"
+   * @see <a href="http://tools.ietf.org/html/rfc5730#section-4.2">Shared Structure Schema</a>
    */
   public static final FormField<String, String> ROID = XS_TOKEN.asBuilderNamed("roid")
       .matches(Pattern.compile("(\\w|_){1,80}-\\w{1,8}"),

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 package google.registry.flows.contact;
 
+import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.ContactResourceSubject.assertAboutContacts;
 import static google.registry.testing.DatastoreHelper.assertNoBillingEvents;
 import static google.registry.testing.DatastoreHelper.createTld;
@@ -22,8 +23,11 @@ import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.persistActiveContact;
 import static google.registry.testing.DatastoreHelper.persistDeletedContact;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import com.google.common.collect.ImmutableSet;
+import google.registry.flows.EppException;
 import google.registry.flows.ResourceFlowTestCase;
 import google.registry.flows.ResourceFlowUtils.ResourceDoesNotExistException;
 import google.registry.flows.ResourceFlowUtils.ResourceNotOwnedException;
@@ -31,6 +35,7 @@ import google.registry.flows.exceptions.ResourceStatusProhibitsOperationExceptio
 import google.registry.flows.exceptions.ResourceToDeleteIsReferencedException;
 import google.registry.model.contact.ContactResource;
 import google.registry.model.eppcommon.StatusValue;
+import google.registry.model.eppcommon.Trid;
 import google.registry.model.reporting.HistoryEntry;
 import org.junit.Before;
 import org.junit.Test;
@@ -44,20 +49,10 @@ public class ContactDeleteFlowTest
     setEppInput("contact_delete.xml");
   }
 
-  private void doFailingStatusTest(StatusValue statusValue, Class<? extends Exception> exception)
-      throws Exception {
-    persistResource(
-        newContactResource(getUniqueIdFromCommand()).asBuilder()
-            .setStatusValues(ImmutableSet.of(statusValue))
-            .build());
-    thrown.expect(exception);
-    runFlow();
-  }
-
   @Test
   public void testDryRun() throws Exception {
     persistActiveContact(getUniqueIdFromCommand());
-    dryRunFlowAssertResponse(readFile("contact_delete_response.xml"));
+    dryRunFlowAssertResponse(loadFile("contact_delete_response.xml"));
   }
 
   @Test
@@ -65,10 +60,11 @@ public class ContactDeleteFlowTest
     persistActiveContact(getUniqueIdFromCommand());
     clock.advanceOneMilli();
     assertTransactionalFlow(true);
-    runFlowAssertResponse(readFile("contact_delete_response.xml"));
+    runFlowAssertResponse(loadFile("contact_delete_response.xml"));
     ContactResource deletedContact = reloadResourceByForeignKey();
     assertAboutContacts().that(deletedContact).hasStatusValue(StatusValue.PENDING_DELETE);
-    assertAsyncDeletionTaskEnqueued(deletedContact, "TheRegistrar", false);
+    assertAsyncDeletionTaskEnqueued(
+        deletedContact, "TheRegistrar", Trid.create("ABC-12345", "server-trid"), false);
     assertAboutContacts().that(deletedContact)
         .hasOnlyOneHistoryEntryWhich()
         .hasType(HistoryEntry.Type.CONTACT_PENDING_DELETE);
@@ -77,19 +73,19 @@ public class ContactDeleteFlowTest
 
   @Test
   public void testFailure_neverExisted() throws Exception {
-    thrown.expect(
-        ResourceDoesNotExistException.class,
-        String.format("(%s)", getUniqueIdFromCommand()));
-    runFlow();
+    ResourceDoesNotExistException thrown =
+        expectThrows(ResourceDoesNotExistException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains(String.format("(%s)", getUniqueIdFromCommand()));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
   public void testFailure_existedButWasDeleted() throws Exception {
     persistDeletedContact(getUniqueIdFromCommand(), clock.nowUtc().minusDays(1));
-    thrown.expect(
-        ResourceDoesNotExistException.class,
-        String.format("(%s)", getUniqueIdFromCommand()));
-    runFlow();
+    ResourceDoesNotExistException thrown =
+        expectThrows(ResourceDoesNotExistException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains(String.format("(%s)", getUniqueIdFromCommand()));
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -110,12 +106,23 @@ public class ContactDeleteFlowTest
         StatusValue.PENDING_DELETE, ResourceStatusProhibitsOperationException.class);
   }
 
+  private void doFailingStatusTest(StatusValue statusValue, Class<? extends EppException> exception)
+      throws Exception {
+    persistResource(
+        newContactResource(getUniqueIdFromCommand()).asBuilder()
+            .setStatusValues(ImmutableSet.of(statusValue))
+            .build());
+    EppException thrown = expectThrows(exception, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains(statusValue.getXmlName());
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
   @Test
   public void testFailure_unauthorizedClient() throws Exception {
     sessionMetadata.setClientId("NewRegistrar");
     persistActiveContact(getUniqueIdFromCommand());
-    thrown.expect(ResourceNotOwnedException.class);
-    runFlow();
+    EppException thrown = expectThrows(ResourceNotOwnedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -124,11 +131,13 @@ public class ContactDeleteFlowTest
     persistActiveContact(getUniqueIdFromCommand());
     clock.advanceOneMilli();
     runFlowAssertResponse(
-        CommitMode.LIVE, UserPrivileges.SUPERUSER, readFile("contact_delete_response.xml"));
+        CommitMode.LIVE, UserPrivileges.SUPERUSER, loadFile("contact_delete_response.xml"));
     ContactResource deletedContact = reloadResourceByForeignKey();
     assertAboutContacts().that(deletedContact).hasStatusValue(StatusValue.PENDING_DELETE);
-    assertAsyncDeletionTaskEnqueued(deletedContact, "NewRegistrar", true);
-    assertAboutContacts().that(deletedContact)
+    assertAsyncDeletionTaskEnqueued(
+        deletedContact, "NewRegistrar", Trid.create("ABC-12345", "server-trid"), true);
+    assertAboutContacts()
+        .that(deletedContact)
         .hasOnlyOneHistoryEntryWhich()
         .hasType(HistoryEntry.Type.CONTACT_PENDING_DELETE);
     assertNoBillingEvents();
@@ -139,8 +148,8 @@ public class ContactDeleteFlowTest
     createTld("tld");
     persistResource(
         newDomainResource("example.tld", persistActiveContact(getUniqueIdFromCommand())));
-    thrown.expect(ResourceToDeleteIsReferencedException.class);
-    runFlow();
+    EppException thrown = expectThrows(ResourceToDeleteIsReferencedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
@@ -148,7 +157,15 @@ public class ContactDeleteFlowTest
     createTld("tld");
     persistResource(
         newDomainResource("example.tld", persistActiveContact(getUniqueIdFromCommand())));
-    thrown.expect(ResourceToDeleteIsReferencedException.class);
+    EppException thrown = expectThrows(ResourceToDeleteIsReferencedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testIcannActivityReportField_getsLogged() throws Exception {
+    persistActiveContact(getUniqueIdFromCommand());
+    clock.advanceOneMilli();
     runFlow();
+    assertIcannReportingActivityFieldLogged("srs-cont-delete");
   }
 }

@@ -7,23 +7,21 @@ licenses(["notice"])  # Apache 2.0
 
 load("//java/com/google/testing/builddefs:GenTestRules.bzl", "GenTestRules")
 
-
 java_library(
     name = "xml",
     srcs = glob(["*.java"]),
     resources = glob(["testdata/*.xml"]),
     deps = [
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//java/com/google/common/net",
-        "//third_party/java/joda_time",
-        "//third_party/java/json",
-        "//third_party/java/jsr305_annotations",
-        "//third_party/java/junit",
-        "//third_party/java/truth",
         "//java/google/registry/util",
         "//java/google/registry/xml",
         "//javatests/google/registry/testing",
+        "@com_google_code_findbugs_jsr305",
+        "@com_google_guava",
+        "@com_google_truth",
+        "@com_google_truth_extensions_truth_java8_extension",
+        "@joda_time",
+        "@junit",
+        "@org_json",
     ],
 )
 

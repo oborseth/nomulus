@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,8 +26,10 @@ import static google.registry.testing.DatastoreHelper.persistActiveSubordinateHo
 import static google.registry.testing.DatastoreHelper.persistDeletedDomain;
 import static google.registry.testing.DatastoreHelper.persistDeletedHost;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
 
 import com.google.common.base.VerifyException;
@@ -41,10 +43,10 @@ import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.host.HostResource;
 import google.registry.model.ofy.Ofy;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.InjectRule;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
@@ -75,9 +77,6 @@ public class DnsUpdateWriterTest {
       AppEngineRule.builder().withDatastore().withTaskQueue().build();
 
   @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Rule
   public final InjectRule inject = new InjectRule();
 
   @Mock
@@ -97,7 +96,8 @@ public class DnsUpdateWriterTest {
     createTld("tld");
     when(mockResolver.send(any(Update.class))).thenReturn(messageWithResponseCode(Rcode.NOERROR));
 
-    writer = new DnsUpdateWriter(Duration.ZERO, mockResolver, clock);
+    writer = new DnsUpdateWriter(
+        "tld", Duration.ZERO, Duration.ZERO, Duration.ZERO, mockResolver, clock);
   }
 
   @Test
@@ -112,6 +112,7 @@ public class DnsUpdateWriterTest {
     persistResource(domain);
 
     writer.publishDomain("example.tld");
+    writer.commit();
 
     verify(mockResolver).send(updateCaptor.capture());
     Update update = updateCaptor.getValue();
@@ -119,6 +120,62 @@ public class DnsUpdateWriterTest {
     assertThatUpdateDeletes(update, "example.tld.", Type.ANY);
     assertThatUpdateAdds(update, "example.tld.", Type.NS, "ns1.example.tld.", "ns2.example.tld.");
     assertThatTotalUpdateSetsIs(update, 2); // The delete and NS sets
+  }
+
+  @Test
+  public void testPublishAtomic_noCommit() throws Exception {
+    HostResource host1 = persistActiveHost("ns.example1.tld");
+    DomainResource domain1 =
+        persistActiveDomain("example1.tld")
+            .asBuilder()
+            .setNameservers(ImmutableSet.of(Key.create(host1)))
+            .build();
+    persistResource(domain1);
+
+    HostResource host2 = persistActiveHost("ns.example2.tld");
+    DomainResource domain2 =
+        persistActiveDomain("example2.tld")
+            .asBuilder()
+            .setNameservers(ImmutableSet.of(Key.create(host2)))
+            .build();
+    persistResource(domain2);
+
+    writer.publishDomain("example1.tld");
+    writer.publishDomain("example2.tld");
+
+    verifyZeroInteractions(mockResolver);
+  }
+
+  @Test
+  public void testPublishAtomic_oneUpdate() throws Exception {
+    HostResource host1 = persistActiveHost("ns.example1.tld");
+    DomainResource domain1 =
+        persistActiveDomain("example1.tld")
+            .asBuilder()
+            .setNameservers(ImmutableSet.of(Key.create(host1)))
+            .build();
+    persistResource(domain1);
+
+    HostResource host2 = persistActiveHost("ns.example2.tld");
+    DomainResource domain2 =
+        persistActiveDomain("example2.tld")
+            .asBuilder()
+            .setNameservers(ImmutableSet.of(Key.create(host2)))
+            .build();
+    persistResource(domain2);
+
+    writer.publishDomain("example1.tld");
+    writer.publishDomain("example2.tld");
+    writer.commit();
+
+    verify(mockResolver).send(updateCaptor.capture());
+    Update update = updateCaptor.getValue();
+    assertThatUpdatedZoneIs(update, "tld.");
+    assertThatUpdateDeletes(update, "example1.tld.", Type.ANY);
+    assertThatUpdateDeletes(update, "example2.tld.", Type.ANY);
+    assertThatUpdateAdds(update, "example1.tld.", Type.NS, "ns.example1.tld.");
+    assertThatUpdateAdds(update, "example2.tld.", Type.NS, "ns.example2.tld.");
+    assertThatTotalUpdateSetsIs(update, 4); // The delete and NS sets for each TLD
   }
 
   @Test
@@ -134,6 +191,7 @@ public class DnsUpdateWriterTest {
     persistResource(domain);
 
     writer.publishDomain("example.tld");
+    writer.commit();
 
     verify(mockResolver).send(updateCaptor.capture());
     Update update = updateCaptor.getValue();
@@ -155,6 +213,7 @@ public class DnsUpdateWriterTest {
     persistResource(domain);
 
     writer.publishDomain("example.tld");
+    writer.commit();
 
     verify(mockResolver).send(updateCaptor.capture());
     Update update = updateCaptor.getValue();
@@ -168,6 +227,7 @@ public class DnsUpdateWriterTest {
     persistDeletedDomain("example.tld", clock.nowUtc().minusDays(1));
 
     writer.publishDomain("example.tld");
+    writer.commit();
 
     verify(mockResolver).send(updateCaptor.capture());
     Update update = updateCaptor.getValue();
@@ -196,6 +256,7 @@ public class DnsUpdateWriterTest {
             .build());
 
     writer.publishHost("ns1.example.tld");
+    writer.commit();
 
     verify(mockResolver).send(updateCaptor.capture());
     Update update = updateCaptor.getValue();
@@ -214,6 +275,7 @@ public class DnsUpdateWriterTest {
     persistActiveDomain("example.tld");
 
     writer.publishHost("ns1.example.tld");
+    writer.commit();
 
     verify(mockResolver).send(updateCaptor.capture());
     Update update = updateCaptor.getValue();
@@ -233,6 +295,7 @@ public class DnsUpdateWriterTest {
             .build());
 
     writer.publishHost("ns1.example.tld");
+    writer.commit();
 
     verify(mockResolver).send(updateCaptor.capture());
     Update update = updateCaptor.getValue();
@@ -266,6 +329,7 @@ public class DnsUpdateWriterTest {
             .build());
 
     writer.publishDomain("example.tld");
+    writer.commit();
 
     verify(mockResolver).send(updateCaptor.capture());
     Update update = updateCaptor.getValue();
@@ -300,6 +364,7 @@ public class DnsUpdateWriterTest {
             .build());
 
     writer.publishDomain("example.tld");
+    writer.commit();
 
     verify(mockResolver).send(updateCaptor.capture());
     Update update = updateCaptor.getValue();
@@ -322,9 +387,14 @@ public class DnsUpdateWriterTest {
             .build();
     persistResource(domain);
     when(mockResolver.send(any(Message.class))).thenReturn(messageWithResponseCode(Rcode.SERVFAIL));
-    thrown.expect(VerifyException.class, "SERVFAIL");
-
-    writer.publishDomain("example.tld");
+    VerifyException thrown =
+        expectThrows(
+            VerifyException.class,
+            () -> {
+              writer.publishDomain("example.tld");
+              writer.commit();
+            });
+    assertThat(thrown).hasMessageThat().contains("SERVFAIL");
   }
 
   @Test
@@ -336,9 +406,14 @@ public class DnsUpdateWriterTest {
             .build();
     persistResource(host);
     when(mockResolver.send(any(Message.class))).thenReturn(messageWithResponseCode(Rcode.SERVFAIL));
-    thrown.expect(VerifyException.class, "SERVFAIL");
-
-    writer.publishHost("ns1.example.tld");
+    VerifyException thrown =
+        expectThrows(
+            VerifyException.class,
+            () -> {
+              writer.publishHost("ns1.example.tld");
+              writer.commit();
+            });
+    assertThat(thrown).hasMessageThat().contains("SERVFAIL");
   }
 
   private void assertThatUpdatedZoneIs(Update update, String zoneName) {
@@ -360,9 +435,7 @@ public class DnsUpdateWriterTest {
   private void assertThatUpdateAdds(
       Update update, String resourceName, int recordType, String... resourceData) {
     ArrayList<String> expectedData = new ArrayList<>();
-    for (String resourceDatum : resourceData) {
-      expectedData.add(resourceDatum);
-    }
+    Collections.addAll(expectedData, resourceData);
 
     ArrayList<String> actualData = new ArrayList<>();
     for (Record record : findUpdateRecords(update, resourceName, recordType)) {

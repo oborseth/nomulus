@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -48,7 +48,6 @@ import google.registry.model.poll.PollMessage;
 import google.registry.model.poll.PollMessage.Autorenew;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.model.transfer.TransferData;
-import google.registry.model.transfer.TransferData.TransferServerApproveEntity;
 import google.registry.model.transfer.TransferStatus;
 import google.registry.testing.FakeClock;
 import google.registry.util.Idn;
@@ -90,7 +89,7 @@ final class RdeFixtures {
                 makeContactResource(clock, "5372808-TRL",
                     "bird or fiend!? i shrieked upstarting", "bog@cat.みんな")))))
         .setCreationClientId("TheRegistrar")
-        .setCurrentSponsorClientId("TheRegistrar")
+        .setPersistedCurrentSponsorClientId("TheRegistrar")
         .setCreationTimeForTest(clock.nowUtc())
         .setDsData(ImmutableSet.of(DelegationSignerData.create(
               123, 200, 230, base16().decode("1234567890"))))
@@ -149,7 +148,6 @@ final class RdeFixtures {
                     .setParent(historyEntry)
                     .build())))
         .setTransferData(new TransferData.Builder()
-            .setExtendedRegistrationYears(1)
             .setGainingClientId("gaining")
             .setLosingClientId("losing")
             .setPendingTransferExpirationTime(DateTime.parse("1925-04-20T00:00:00Z"))
@@ -174,11 +172,11 @@ final class RdeFixtures {
                     .setMsg("Domain was auto-renewed.")
                     .setParent(historyEntry)
                     .build())))
-            .setServerApproveEntities(ImmutableSet.<Key<? extends TransferServerApproveEntity>>of(
+            .setServerApproveEntities(ImmutableSet.of(
                 Key.create(billingEvent)))
             .setTransferRequestTime(DateTime.parse("1919-01-01T00:00:00Z"))
             .setTransferStatus(TransferStatus.PENDING)
-            .setTransferRequestTrid(Trid.create("client trid"))
+            .setTransferRequestTrid(Trid.create("client-trid", "server-trid"))
             .build())
         .build();
     clock.advanceOneMilli();
@@ -194,7 +192,7 @@ final class RdeFixtures {
             .setRepoId(generateNewContactHostRoid())
             .setEmailAddress(email)
             .setStatusValues(ImmutableSet.of(StatusValue.OK))
-            .setCurrentSponsorClientId("GetTheeBack")
+            .setPersistedCurrentSponsorClientId("GetTheeBack")
             .setCreationClientId("GetTheeBack")
             .setCreationTimeForTest(clock.nowUtc())
             .setInternationalizedPostalInfo(new PostalInfo.Builder()
@@ -227,15 +225,13 @@ final class RdeFixtures {
             .setRepoId(generateNewContactHostRoid())
             .setCreationClientId("LawyerCat")
             .setCreationTimeForTest(clock.nowUtc())
-            .setCurrentSponsorClientId("BusinessCat")
+            .setPersistedCurrentSponsorClientId("BusinessCat")
             .setFullyQualifiedHostName(Idn.toASCII(fqhn))
             .setInetAddresses(ImmutableSet.of(InetAddresses.forString(ip)))
             .setLastTransferTime(DateTime.parse("1910-01-01T00:00:00Z"))
             .setLastEppUpdateClientId("CeilingCat")
             .setLastEppUpdateTime(clock.nowUtc())
-            .setStatusValues(ImmutableSet.of(
-                StatusValue.OK,
-                StatusValue.PENDING_UPDATE))
+            .setStatusValues(ImmutableSet.of(StatusValue.OK))
             .build());
   }
 

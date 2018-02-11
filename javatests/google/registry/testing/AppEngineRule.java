@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -108,7 +108,7 @@ public final class AppEngineRule extends ExternalResource {
 
     private AppEngineRule rule = new AppEngineRule();
 
-    /** Turn on the datastore service. */
+    /** Turn on the Datastore service. */
     public Builder withDatastore() {
       rule.withDatastore = true;
       return this;
@@ -275,7 +275,7 @@ public final class AppEngineRule extends ExternalResource {
     }
     if (withTaskQueue) {
       File queueFile = temporaryFolder.newFile("queue.xml");
-      Files.write(taskQueueXml, queueFile, UTF_8);
+      Files.asCharSink(queueFile, UTF_8).write(taskQueueXml);
       configs.add(new LocalTaskQueueTestConfig()
           .setQueueXmlPath(queueFile.getAbsolutePath()));
     }
@@ -298,12 +298,7 @@ public final class AppEngineRule extends ExternalResource {
     }
 
     if (clock != null) {
-      helper.setClock(new com.google.appengine.tools.development.Clock() {
-        @Override
-        public long getCurrentTime() {
-          return clock.nowUtc().getMillis();
-        }
-      });
+      helper.setClock(() -> clock.nowUtc().getMillis());
     }
 
     if (withLocalModules) {
@@ -327,10 +322,10 @@ public final class AppEngineRule extends ExternalResource {
     ObjectifyFilter.complete();
     helper.tearDown();
     helper = null;
-    // Test that the datastore didn't need any indexes we don't have listed in our index file.
+    // Test that Datastore didn't need any indexes we don't have listed in our index file.
     try {
-      Set<String> autoIndexes = getIndexXmlStrings(Files.toString(
-          new File(temporaryFolder.getRoot(), "datastore-indexes-auto.xml"), UTF_8));
+      Set<String> autoIndexes = getIndexXmlStrings(Files.asCharSource(
+          new File(temporaryFolder.getRoot(), "datastore-indexes-auto.xml"), UTF_8).read());
       Set<String> missingIndexes = Sets.difference(autoIndexes, MANUAL_INDEXES);
       if (!missingIndexes.isEmpty()) {
         assert_().fail("Missing indexes:\n%s", Joiner.on('\n').join(missingIndexes));
@@ -345,7 +340,7 @@ public final class AppEngineRule extends ExternalResource {
         .readConfiguration(new ByteArrayInputStream(LOGGING_PROPERTIES.getBytes(UTF_8)));
   }
 
-  /** Read a datastore index file, and parse the indexes into individual strings. */
+  /** Read a Datastore index file, and parse the indexes into individual strings. */
   private static Set<String> getIndexXmlStrings(String indexFile) {
     ImmutableSet.Builder<String> builder = new ImmutableSet.Builder<>();
     try {

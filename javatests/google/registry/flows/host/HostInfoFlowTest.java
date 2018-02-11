@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,17 +15,23 @@
 package google.registry.flows.host;
 
 import static com.google.common.truth.Truth.assertThat;
-import static google.registry.model.EppResourceUtils.isDeleted;
 import static google.registry.testing.DatastoreHelper.assertNoBillingEvents;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.net.InetAddresses;
 import com.googlecode.objectify.Key;
+import google.registry.flows.EppException;
 import google.registry.flows.ResourceFlowTestCase;
 import google.registry.flows.ResourceFlowUtils.ResourceDoesNotExistException;
+import google.registry.flows.host.HostFlowUtils.HostNameNotLowerCaseException;
+import google.registry.flows.host.HostFlowUtils.HostNameNotNormalizedException;
+import google.registry.flows.host.HostFlowUtils.HostNameNotPunyCodedException;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.host.HostResource;
@@ -38,7 +44,7 @@ import org.junit.Test;
 public class HostInfoFlowTest extends ResourceFlowTestCase<HostInfoFlow, HostResource> {
 
   public HostInfoFlowTest() {
-    setEppInput("host_info.xml");
+    setEppInput("host_info.xml", ImmutableMap.of("HOSTNAME", "ns1.example.tld"));
   }
 
   @Before
@@ -46,37 +52,34 @@ public class HostInfoFlowTest extends ResourceFlowTestCase<HostInfoFlow, HostRes
     createTld("foobar");
   }
 
-  private HostResource persistHostResource(boolean active) throws Exception {
-    HostResource host = persistResource(
+  private HostResource persistHostResource() throws Exception {
+    return persistResource(
         new HostResource.Builder()
             .setFullyQualifiedHostName(getUniqueIdFromCommand())
             .setRepoId("1FF-FOOBAR")
-            .setDeletionTime(active ? null : clock.nowUtc().minusDays(1))
-            .setCurrentSponsorClientId("my sponsor")
-            .setStatusValues(
-                ImmutableSet.of(StatusValue.CLIENT_UPDATE_PROHIBITED))
-            .setInetAddresses(ImmutableSet.of(
-                InetAddresses.forString("192.0.2.2"),
-                InetAddresses.forString("1080:0:0:0:8:800:200C:417A"),
-                InetAddresses.forString("192.0.2.29")))
-            .setCurrentSponsorClientId("TheRegistrar")
+            .setPersistedCurrentSponsorClientId("my sponsor")
+            .setStatusValues(ImmutableSet.of(StatusValue.CLIENT_UPDATE_PROHIBITED))
+            .setInetAddresses(
+                ImmutableSet.of(
+                    InetAddresses.forString("192.0.2.2"),
+                    InetAddresses.forString("1080:0:0:0:8:800:200C:417A"),
+                    InetAddresses.forString("192.0.2.29")))
+            .setPersistedCurrentSponsorClientId("TheRegistrar")
             .setCreationClientId("NewRegistrar")
             .setLastEppUpdateClientId("NewRegistrar")
             .setCreationTimeForTest(DateTime.parse("1999-04-03T22:00:00.0Z"))
             .setLastEppUpdateTime(DateTime.parse("1999-12-03T09:00:00.0Z"))
             .setLastTransferTime(DateTime.parse("2000-04-08T09:00:00.0Z"))
             .build());
-    assertThat(isDeleted(host, clock.nowUtc())).isNotEqualTo(active);
-    return host;
   }
 
   @Test
   public void testSuccess() throws Exception {
-    persistHostResource(true);
+    persistHostResource();
     assertTransactionalFlow(false);
     // Check that the persisted host info was returned.
     runFlowAssertResponse(
-        readFile("host_info_response.xml"),
+        loadFile("host_info_response.xml"),
         // We use a different roid scheme than the samples so ignore it.
         "epp.response.resData.infData.roid");
     assertNoHistory();
@@ -85,38 +88,42 @@ public class HostInfoFlowTest extends ResourceFlowTestCase<HostInfoFlow, HostRes
 
   @Test
   public void testSuccess_linked() throws Exception {
-    persistHostResource(true);
+    persistHostResource();
     persistResource(
-        newDomainResource("example.foobar").asBuilder()
-          .addNameservers(ImmutableSet.of(Key.create(persistHostResource(true))))
-          .build());
+        newDomainResource("example.foobar")
+            .asBuilder()
+            .addNameservers(ImmutableSet.of(Key.create(persistHostResource())))
+            .build());
     assertTransactionalFlow(false);
     // Check that the persisted host info was returned.
     runFlowAssertResponse(
-        readFile("host_info_response_linked.xml"),
+        loadFile("host_info_response_linked.xml"),
         // We use a different roid scheme than the samples so ignore it.
         "epp.response.resData.infData.roid");
     assertNoHistory();
     assertNoBillingEvents();
   }
 
-  private void runTest_superordinateDomain(DateTime domainTransferTime,
-      @Nullable DateTime lastSuperordinateChange) throws Exception {
-    DomainResource domain = persistResource(
-        newDomainResource("parent.foobar").asBuilder()
-            .setRepoId("BEEF-FOOBAR")
-            .setLastTransferTime(domainTransferTime)
-            .setCurrentSponsorClientId("superclientid")
-            .build());
+  private void runTest_superordinateDomain(
+      DateTime domainTransferTime, @Nullable DateTime lastSuperordinateChange) throws Exception {
+    DomainResource domain =
+        persistResource(
+            newDomainResource("parent.foobar")
+                .asBuilder()
+                .setRepoId("BEEF-FOOBAR")
+                .setLastTransferTime(domainTransferTime)
+                .setPersistedCurrentSponsorClientId("superclientid")
+                .build());
     persistResource(
-        persistHostResource(true).asBuilder()
+        persistHostResource()
+            .asBuilder()
             .setRepoId("CEEF-FOOBAR")
             .setSuperordinateDomain(Key.create(domain))
             .setLastSuperordinateChange(lastSuperordinateChange)
             .build());
     assertTransactionalFlow(false);
     runFlowAssertResponse(
-        readFile("host_info_response_superordinate_clientid.xml"),
+        loadFile("host_info_response_superordinate_clientid.xml"),
         // We use a different roid scheme than the samples so ignore it.
         "epp.response.resData.infData.roid");
     assertNoHistory();
@@ -124,17 +131,15 @@ public class HostInfoFlowTest extends ResourceFlowTestCase<HostInfoFlow, HostRes
   }
 
   @Test
-  public void testSuccess_withSuperordinateDomain_hostMovedAfterDomainTransfer()
-      throws Exception {
-    runTest_superordinateDomain(DateTime.parse("2000-01-08T09:00:00.0Z"),
-        DateTime.parse("2000-03-01T01:00:00.0Z"));
+  public void testSuccess_withSuperordinateDomain_hostMovedAfterDomainTransfer() throws Exception {
+    runTest_superordinateDomain(
+        DateTime.parse("2000-01-08T09:00:00.0Z"), DateTime.parse("2000-03-01T01:00:00.0Z"));
   }
 
   @Test
-  public void testSuccess_withSuperordinateDomain_hostMovedBeforeDomainTransfer()
-      throws Exception {
-    runTest_superordinateDomain(DateTime.parse("2000-04-08T09:00:00.0Z"),
-        DateTime.parse("2000-02-08T09:00:00.0Z"));
+  public void testSuccess_withSuperordinateDomain_hostMovedBeforeDomainTransfer() throws Exception {
+    runTest_superordinateDomain(
+        DateTime.parse("2000-04-08T09:00:00.0Z"), DateTime.parse("2000-02-08T09:00:00.0Z"));
   }
 
   @Test
@@ -144,18 +149,46 @@ public class HostInfoFlowTest extends ResourceFlowTestCase<HostInfoFlow, HostRes
 
   @Test
   public void testFailure_neverExisted() throws Exception {
-    thrown.expect(
-        ResourceDoesNotExistException.class,
-        String.format("(%s)", getUniqueIdFromCommand()));
-    runFlow();
+    ResourceDoesNotExistException thrown =
+        expectThrows(ResourceDoesNotExistException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains(String.format("(%s)", getUniqueIdFromCommand()));
   }
 
   @Test
   public void testFailure_existedButWasDeleted() throws Exception {
-    persistHostResource(false);
-    thrown.expect(
-        ResourceDoesNotExistException.class,
-        String.format("(%s)", getUniqueIdFromCommand()));
+    persistResource(
+        persistHostResource().asBuilder().setDeletionTime(clock.nowUtc().minusDays(1)).build());
+    ResourceDoesNotExistException thrown =
+        expectThrows(ResourceDoesNotExistException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains(String.format("(%s)", getUniqueIdFromCommand()));
+  }
+
+  @Test
+  public void testFailure_nonLowerCaseHostname() throws Exception {
+    setEppInput("host_info.xml", ImmutableMap.of("HOSTNAME", "NS1.EXAMPLE.NET"));
+    EppException thrown = expectThrows(HostNameNotLowerCaseException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testFailure_nonPunyCodedHostname() throws Exception {
+    setEppInput("host_info.xml", ImmutableMap.of("HOSTNAME", "ns1.çauçalito.tld"));
+    HostNameNotPunyCodedException thrown =
+        expectThrows(HostNameNotPunyCodedException.class, this::runFlow);
+    assertThat(thrown).hasMessageThat().contains("expected ns1.xn--aualito-txac.tld");
+  }
+
+  @Test
+  public void testFailure_nonCanonicalHostname() throws Exception {
+    setEppInput("host_info.xml", ImmutableMap.of("HOSTNAME", "ns1.example.tld."));
+    EppException thrown = expectThrows(HostNameNotNormalizedException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  public void testIcannActivityReportField_getsLogged() throws Exception {
+    persistHostResource();
     runFlow();
+    assertIcannReportingActivityFieldLogged("srs-host-info");
   }
 }

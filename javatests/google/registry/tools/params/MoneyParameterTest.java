@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,11 @@
 package google.registry.tools.params;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import com.beust.jcommander.ParameterException;
-import google.registry.testing.ExceptionRule;
 import org.joda.money.Money;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -27,10 +27,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link MoneyParameter}. */
 @RunWith(JUnit4.class)
 public class MoneyParameterTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   private final MoneyParameter instance = new MoneyParameter();
 
   @Test
@@ -55,32 +51,29 @@ public class MoneyParameterTest {
 
   @Test
   public void testConvert_badCurrency_throws() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("FOO 1337");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert("FOO 1337"));
   }
 
   @Test
   public void testConvert_null_throws() throws Exception {
-    thrown.expect(NullPointerException.class);
-    instance.convert(null);
+    assertThrows(NullPointerException.class, () -> instance.convert(null));
   }
 
   @Test
   public void testConvert_empty_throws() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert(""));
   }
 
   @Test
   public void testConvert_sillyString_throws() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    instance.convert("foo");
+    assertThrows(IllegalArgumentException.class, () -> instance.convert("foo"));
   }
 
   @Test
   public void testValidate_sillyString_throws() throws Exception {
-    thrown.expect(ParameterException.class, "--money=foo not valid");
-    instance.validate("--money", "foo");
+    ParameterException thrown =
+        expectThrows(ParameterException.class, () -> instance.validate("--money", "foo"));
+    assertThat(thrown).hasMessageThat().contains("--money=foo not valid");
   }
 
   @Test

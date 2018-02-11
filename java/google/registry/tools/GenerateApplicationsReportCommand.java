@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,7 +26,6 @@ import static java.util.Collections.emptyList;
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.net.InternetDomainName;
 import com.googlecode.objectify.cmd.LoadType;
 import com.googlecode.objectify.cmd.Query;
@@ -46,6 +45,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import javax.annotation.CheckReturnValue;
 import javax.inject.Inject;
 import org.joda.time.DateTime;
@@ -71,8 +71,8 @@ final class GenerateApplicationsReportCommand implements RemoteApiCommand {
       validateWith = PathParameter.OutputFile.class)
   private Path output = Paths.get("/dev/stdout");
 
-  @Inject
-  Clock clock;
+  @Inject Clock clock;
+  @Inject TmchXmlSignature tmchXmlSignature;
 
   @Override
   public void run() throws Exception {
@@ -91,14 +91,14 @@ final class GenerateApplicationsReportCommand implements RemoteApiCommand {
           System.err.printf("Application ID %d not found\n", applicationId);
           continue;
         }
-        result.addAll(validate(domainApplication, now).asSet());
+        validate(domainApplication, now).ifPresent(result::add);
       }
     } else {
       LoadType<DomainApplication> loader = ofy().load().type(DomainApplication.class);
       Query<DomainApplication> domainApplications =
           (tld == null) ? loader : loader.filter("tld", tld);
       for (DomainApplication domainApplication : domainApplications) {
-        result.addAll(validate(domainApplication, now).asSet());
+        validate(domainApplication, now).ifPresent(result::add);
       }
     }
     Files.write(output, result, UTF_8);
@@ -113,7 +113,7 @@ final class GenerateApplicationsReportCommand implements RemoteApiCommand {
 
     // Ignore deleted applications.
     if (isBeforeOrAt(domainApplication.getDeletionTime(), now)) {
-      return Optional.absent();
+      return Optional.empty();
     }
 
     // Defensive invalid punycode check.
@@ -143,7 +143,7 @@ final class GenerateApplicationsReportCommand implements RemoteApiCommand {
       }
 
       try {
-        TmchXmlSignature.verify(signedMarkData);
+        tmchXmlSignature.verify(signedMarkData);
       } catch (Exception e) {
         return Optional.of(
             makeLine(domainApplication, String.format("Invalid SMD (%s)", e.getMessage())));

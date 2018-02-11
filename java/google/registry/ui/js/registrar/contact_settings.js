@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -115,7 +115,9 @@ registry.registrar.ContactSettings.prototype.renderItem = function(rspObj) {
       var contact = contacts[c];
       var types = contact.types;
       if (!types) {
-        continue;
+        // If the contact has no types, synthesize an "OTHER" type so that it
+        // still will be displayed in the console.
+        types = 'OTHER';
       }
       types = types.split(',');
       for (var t in types) {
@@ -163,7 +165,7 @@ registry.registrar.ContactSettings.prototype.sendDelete = function() {
     throw new Error('Email to delete does not match model.');
   }
   var modelCopy = /** @type {!Object}
-                   */ (goog.json.parse(goog.json.serialize(this.model)));
+                   */ (JSON.parse(goog.json.serialize(this.model)));
   goog.array.removeAt(modelCopy.contacts, ndxToDel);
   this.resource.update(modelCopy, goog.bind(this.handleDeleteResponse, this));
 };
@@ -194,6 +196,8 @@ registry.registrar.ContactSettings.prototype.prepareUpdate =
   }
   contact.visibleInWhoisAsAdmin = contact.visibleInWhoisAsAdmin == 'true';
   contact.visibleInWhoisAsTech = contact.visibleInWhoisAsTech == 'true';
+  contact.visibleInDomainWhoisAsAbuse =
+      contact.visibleInDomainWhoisAsAbuse == 'true';
   contact.types = '';
   for (var tNdx in contact.type) {
     if (contact.type[tNdx]) {
@@ -204,6 +208,14 @@ registry.registrar.ContactSettings.prototype.prepareUpdate =
     }
   }
   delete contact['type'];
+  // Override previous domain WHOIS abuse contact.
+  if (contact.visibleInDomainWhoisAsAbuse) {
+    for (var c in modelCopy.contacts) {
+      if (modelCopy.contacts[c].emailAddress != contact.emailAddress) {
+        modelCopy.contacts[c].visibleInDomainWhoisAsAbuse = false;
+      }
+    }
+  }
   this.nextId = contact.emailAddress;
 };
 

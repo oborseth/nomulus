@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 package google.registry.util;
 
-import com.google.common.base.Predicate;
+import java.util.function.Predicate;
 
 /** Utility class containing {@link Predicate} methods. */
 public class PredicateUtils {
@@ -23,7 +23,7 @@ public class PredicateUtils {
    * A predicate for a given class X that checks if tested classes are supertypes of X.
    *
    * <p>We need our own predicate because Guava's class predicates are backwards.
-   * @see "https://github.com/google/guava/issues/1444"
+   * @see <a href="https://github.com/google/guava/issues/1444">Guava issue #1444</a>
    */
   private static class SupertypeOfPredicate implements Predicate<Class<?>> {
 
@@ -34,7 +34,7 @@ public class PredicateUtils {
     }
 
     @Override
-    public boolean apply(Class<?> superClass) {
+    public boolean test(Class<?> superClass) {
       return superClass.isAssignableFrom(subClass);
     }
   }

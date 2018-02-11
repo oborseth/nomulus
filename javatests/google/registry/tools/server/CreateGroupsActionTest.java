@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,71 +15,68 @@
 package google.registry.tools.server;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static javax.servlet.http.HttpServletResponse.SC_OK;
-import static org.junit.Assert.fail;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.google.common.base.Optional;
 import google.registry.groups.DirectoryGroupsConnection;
 import google.registry.groups.GroupsConnection.Role;
 import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.InternalServerErrorException;
 import google.registry.request.Response;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.InjectRule;
+import java.util.Optional;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /**
  * Unit tests for {@link CreateGroupsAction}.
  */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class CreateGroupsActionTest {
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder()
       .withDatastore()
       .build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   @Rule
   public final InjectRule inject = new InjectRule();
 
-  @Mock
-  private DirectoryGroupsConnection connection;
-
-  @Mock
-  private Response response;
+  private final DirectoryGroupsConnection connection = mock(DirectoryGroupsConnection.class);
+  private final Response response = mock(Response.class);
 
   private void runAction(String clientId) {
     CreateGroupsAction action = new CreateGroupsAction();
     action.response = response;
     action.groupsConnection = connection;
-    action.publicDomainName = "domain-registry.example";
-    action.clientId = Optional.fromNullable(clientId);
+    action.gSuiteDomainName = "domain-registry.example";
+    action.clientId = Optional.ofNullable(clientId);
     action.run();
   }
 
   @Test
   public void test_invalidRequest_missingClientId() throws Exception {
-    thrown.expect(BadRequestException.class,
-        "Error creating Google Groups, missing parameter: clientId");
-    runAction(null);
+    BadRequestException thrown = expectThrows(BadRequestException.class, () -> runAction(null));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Error creating Google Groups, missing parameter: clientId");
   }
 
   @Test
   public void test_invalidRequest_invalidClientId() throws Exception {
-    thrown.expect(BadRequestException.class,
-        "Error creating Google Groups; could not find registrar with id completelyMadeUpClientId");
-    runAction("completelyMadeUpClientId");
+    BadRequestException thrown =
+        expectThrows(BadRequestException.class, () -> runAction("completelyMadeUpClientId"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains(
+            "Error creating Google Groups; "
+                + "could not find registrar with id completelyMadeUpClientId");
   }
 
   @Test
@@ -101,11 +98,9 @@ public class CreateGroupsActionTest {
         "registrar-technical-contacts@domain-registry.example",
         "newregistrar-technical-contacts@domain-registry.example",
         Role.MEMBER);
-    try {
-      runAction("NewRegistrar");
-      fail("Should have thrown InternalServerErrorException.");
-    } catch (InternalServerErrorException e) {
-      String responseString = e.toString();
+    InternalServerErrorException e =
+        expectThrows(InternalServerErrorException.class, () -> runAction("NewRegistrar"));
+    String responseString = e.toString();
       assertThat(responseString).contains("abuse => Success");
       assertThat(responseString).contains("billing => Success");
       assertThat(responseString).contains("legal => Success");
@@ -116,7 +111,6 @@ public class CreateGroupsActionTest {
       assertThat(responseString).contains(
           "technical => java.lang.RuntimeException: Invalid access.");
       verifyGroupCreationCallsForNewRegistrar();
-    }
   }
 
   private void verifyGroupCreationCallsForNewRegistrar() throws Exception {

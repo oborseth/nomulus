@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
 package google.registry.tools;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static google.registry.model.registry.label.PremiumListUtils.deletePremiumList;
+import static google.registry.model.registry.label.PremiumListUtils.doesPremiumListExist;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
@@ -43,7 +45,7 @@ final class DeletePremiumListCommand extends ConfirmingCommand implements Remote
   @Override
   protected void init() throws Exception {
     checkArgument(
-        PremiumList.exists(name),
+        doesPremiumListExist(name),
         "Cannot delete the premium list %s because it doesn't exist.",
         name);
     premiumList = PremiumList.get(name).get();
@@ -61,10 +63,7 @@ final class DeletePremiumListCommand extends ConfirmingCommand implements Remote
 
   @Override
   protected String execute() throws Exception {
-    premiumList.delete();
-    return String.format(
-        "Deleted premium list %s with %d entries.\n",
-        premiumList.getName(),
-        premiumList.getPremiumListEntries().size());
+    deletePremiumList(premiumList);
+    return String.format("Deleted premium list '%s'.\n", premiumList.getName());
   }
 }

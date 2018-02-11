@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package google.registry.tools;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistPremiumList;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.assertThrows;
 
 import com.beust.jcommander.ParameterException;
 import google.registry.model.registry.Registry;
@@ -37,35 +38,35 @@ public class CreateAnchorTenantCommandTest
   public void testSuccess() throws Exception {
     runCommandForced("--client=NewRegistrar", "--superuser",
         "--reason=anchor-tenant-test", "--contact=jd1234", "--domain_name=example.tld");
-    eppVerifier().asSuperuser().verifySent("domain_create_anchor_tenant.xml");
+    eppVerifier.expectSuperuser().verifySent("domain_create_anchor_tenant.xml");
   }
 
   @Test
   public void testSuccess_suppliedPassword() throws Exception {
     runCommandForced("--client=NewRegistrar", "--superuser", "--password=foo",
         "--reason=anchor-tenant-test", "--contact=jd1234", "--domain_name=example.tld");
-    eppVerifier().asSuperuser().verifySent("domain_create_anchor_tenant_password.xml");
+    eppVerifier.expectSuperuser().verifySent("domain_create_anchor_tenant_password.xml");
   }
 
   @Test
   public void testSuccess_multipleWordReason() throws Exception {
     runCommandForced("--client=NewRegistrar", "--superuser",
         "--reason=\"anchor tenant test\"", "--contact=jd1234", "--domain_name=example.tld");
-    eppVerifier().asSuperuser().verifySent("domain_create_anchor_tenant_multiple_word_reason.xml");
+    eppVerifier.expectSuperuser().verifySent("domain_create_anchor_tenant_multiple_word_reason.xml");
   }
 
   @Test
   public void testSuccess_noReason() throws Exception {
     runCommandForced("--client=NewRegistrar", "--superuser",
         "--contact=jd1234", "--domain_name=example.tld");
-    eppVerifier().asSuperuser().verifySent("domain_create_anchor_tenant_no_reason.xml");
+    eppVerifier.expectSuperuser().verifySent("domain_create_anchor_tenant_no_reason.xml");
   }
 
   @Test
   public void testSuccess_feeStandard() throws Exception {
     runCommandForced("--client=NewRegistrar", "--superuser", "--fee",
         "--reason=anchor-tenant-test", "--contact=jd1234", "--domain_name=example.tld");
-    eppVerifier().asSuperuser().verifySent("domain_create_anchor_tenant_fee_standard.xml");
+    eppVerifier.expectSuperuser().verifySent("domain_create_anchor_tenant_fee_standard.xml");
   }
 
   @Test
@@ -78,48 +79,85 @@ public class CreateAnchorTenantCommandTest
             .build());
     runCommandForced("--client=NewRegistrar", "--superuser", "--fee",
         "--reason=anchor-tenant-test", "--contact=jd1234", "--domain_name=premium.tld");
-    eppVerifier().asSuperuser().verifySent("domain_create_anchor_tenant_fee_premium.xml");
+    eppVerifier.expectSuperuser().verifySent("domain_create_anchor_tenant_fee_premium.xml");
   }
 
   @Test
   public void testFailure_mainParameter() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--tld=tld", "--client=NewRegistrar", "--superuser",
-        "--reason=anchor-tenant-test", "--contact=jd1234", "--domain_name=example.tld", "foo");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--tld=tld",
+                "--client=NewRegistrar",
+                "--superuser",
+                "--reason=anchor-tenant-test",
+                "--contact=jd1234",
+                "--domain_name=example.tld",
+                "foo"));
   }
 
   @Test
   public void testFailure_missingClientId() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--superuser",
-        "--reason=anchor-tenant-test", "--contact=jd1234", "--domain_name=example.tld");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--superuser",
+                "--reason=anchor-tenant-test",
+                "--contact=jd1234",
+                "--domain_name=example.tld"));
   }
 
   @Test
   public void testFailure_unknownFlag() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--foo=bar", "--client=NewRegistrar", "--superuser",
-        "--reason=anchor-tenant-test", "--contact=jd1234", "--domain_name=example.tld");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--foo=bar",
+                "--client=NewRegistrar",
+                "--superuser",
+                "--reason=anchor-tenant-test",
+                "--contact=jd1234",
+                "--domain_name=example.tld"));
   }
 
   @Test
   public void testFailure_missingDomainName() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--client=NewRegistrar", "--superuser",
-        "--reason=anchor-tenant-test", "--contact=jd1234", "foo");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--client=NewRegistrar",
+                "--superuser",
+                "--reason=anchor-tenant-test",
+                "--contact=jd1234",
+                "foo"));
   }
 
   @Test
   public void testFailure_missingContact() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--client=NewRegistrar", "--superuser",
-        "--reason=anchor-tenant-test", "--domain_name=example.tld", "foo");
+    assertThrows(
+        ParameterException.class,
+        () ->
+            runCommandForced(
+                "--client=NewRegistrar",
+                "--superuser",
+                "--reason=anchor-tenant-test",
+                "--domain_name=example.tld",
+                "foo"));
   }
 
   @Test
   public void testFailure_notAsSuperuser() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced("--client=NewRegistrar",
-        "--reason=anchor-tenant-test", "--contact=jd1234", "--domain_name=example.tld");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            runCommandForced(
+                "--client=NewRegistrar",
+                "--reason=anchor-tenant-test",
+                "--contact=jd1234",
+                "--domain_name=example.tld"));
   }
 }

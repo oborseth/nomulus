@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,10 +18,13 @@ import static com.google.appengine.api.taskqueue.QueueFactory.getQueue;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assert_;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.SEVERE;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.google.api.services.bigquery.Bigquery;
@@ -32,12 +35,10 @@ import com.google.api.services.bigquery.model.JobStatus;
 import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.taskqueue.TaskOptions.Method;
 import com.google.appengine.api.taskqueue.dev.QueueStateInfo.TaskStateInfo;
-import dagger.Lazy;
 import google.registry.export.BigqueryPollJobAction.BigqueryPollJobEnqueuer;
 import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.NotModifiedException;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.FakeSleeper;
 import google.registry.testing.TaskQueueHelper;
@@ -57,11 +58,10 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link BigqueryPollJobAction}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class BigqueryPollJobActionTest {
 
   @Rule
@@ -69,19 +69,15 @@ public class BigqueryPollJobActionTest {
       .withDatastore()
       .withTaskQueue()
       .build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Mock Bigquery bigquery;
-  @Mock Bigquery.Jobs bigqueryJobs;
-  @Mock Bigquery.Jobs.Get bigqueryJobsGet;
-
-  static final String PROJECT_ID = "project_id";
-  static final String JOB_ID = "job_id";
-  static final String CHAINED_QUEUE_NAME = UpdateSnapshotViewAction.QUEUE;
-  static final TaskEnqueuer ENQUEUER =
+  private static final String PROJECT_ID = "project_id";
+  private static final String JOB_ID = "job_id";
+  private static final String CHAINED_QUEUE_NAME = UpdateSnapshotViewAction.QUEUE;
+  private static final TaskEnqueuer ENQUEUER =
       new TaskEnqueuer(new Retrier(new FakeSleeper(new FakeClock()), 1));
+
+  private final Bigquery bigquery = mock(Bigquery.class);
+  private final Bigquery.Jobs bigqueryJobs = mock(Bigquery.Jobs.class);
+  private final Bigquery.Jobs.Get bigqueryJobsGet = mock(Bigquery.Jobs.Get.class);
 
   private final CapturingLogHandler logHandler = new CapturingLogHandler();
   private BigqueryPollJobAction action = new BigqueryPollJobAction();
@@ -94,12 +90,7 @@ public class BigqueryPollJobActionTest {
     action.enqueuer = ENQUEUER;
     action.projectId = PROJECT_ID;
     action.jobId = JOB_ID;
-    action.chainedQueueName =
-        new Lazy<String>() {
-          @Override
-          public String get() {
-            return CHAINED_QUEUE_NAME;
-          }};
+    action.chainedQueueName = () -> CHAINED_QUEUE_NAME;
     Logger.getLogger(BigqueryPollJobAction.class.getName()).addHandler(logHandler);
   }
 
@@ -139,7 +130,7 @@ public class BigqueryPollJobActionTest {
 
   private void assertLogMessage(Level level, String message) {
     for (LogRecord logRecord : logHandler.getRecords()) {
-      if (logRecord.getLevel() == level && logRecord.getMessage().contains(message)) {
+      if (logRecord.getLevel().equals(level) && logRecord.getMessage().contains(message)) {
         return;
       }
     }
@@ -198,16 +189,13 @@ public class BigqueryPollJobActionTest {
   public void testJobPending() throws Exception {
     when(bigqueryJobsGet.execute()).thenReturn(
         new Job().setStatus(new JobStatus().setState("PENDING")));
-    thrown.expect(NotModifiedException.class);
-    action.run();
+    assertThrows(NotModifiedException.class, action::run);
   }
 
   @Test
-  @SuppressWarnings("unchecked")
   public void testJobStatusUnreadable() throws Exception {
     when(bigqueryJobsGet.execute()).thenThrow(IOException.class);
-    thrown.expect(NotModifiedException.class);
-    action.run();
+    assertThrows(NotModifiedException.class, action::run);
   }
 
   @Test
@@ -215,7 +203,7 @@ public class BigqueryPollJobActionTest {
     when(bigqueryJobsGet.execute()).thenReturn(
         new Job().setStatus(new JobStatus().setState("DONE")));
     action.payload = "payload".getBytes(UTF_8);
-    thrown.expect(BadRequestException.class, "Cannot deserialize task from payload");
-    action.run();
+    BadRequestException thrown = expectThrows(BadRequestException.class, action::run);
+    assertThat(thrown).hasMessageThat().contains("Cannot deserialize task from payload");
   }
 }

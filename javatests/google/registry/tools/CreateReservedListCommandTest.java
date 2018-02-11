@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,12 @@
 package google.registry.tools;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.model.registry.label.ReservationType.FULLY_BLOCKED;
 import static google.registry.testing.DatastoreHelper.createTlds;
 import static google.registry.testing.DatastoreHelper.persistReservedList;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.tools.CreateReservedListCommand.INVALID_FORMAT_ERROR_MESSAGE;
 import static org.joda.time.DateTimeZone.UTC;
 
@@ -89,8 +90,11 @@ public class CreateReservedListCommandTest extends
   public void testFailure_reservedListWithThatNameAlreadyExists() throws Exception {
     ReservedList rl = persistReservedList("xn--q9jyb4c_foo", "jones,FULLY_BLOCKED");
     persistResource(Registry.get("xn--q9jyb4c").asBuilder().setReservedLists(rl).build());
-    thrown.expect(IllegalArgumentException.class, "A reserved list already exists by this name");
-    runCommandForced("--name=xn--q9jyb4c_foo", "--input=" + reservedTermsPath);
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--name=xn--q9jyb4c_foo", "--input=" + reservedTermsPath));
+    assertThat(thrown).hasMessageThat().contains("A reserved list already exists by this name");
   }
 
   @Test
@@ -170,13 +174,12 @@ public class CreateReservedListCommandTest extends
   }
 
   private void runNameTestExpectedFailure(String name, String expectedErrorMsg) throws Exception {
-    try {
-      runCommandForced("--name=" + name, "--input=" + reservedTermsPath);
-      assertWithMessage("Expected IllegalArgumentException to be thrown").fail();
-    } catch (IllegalArgumentException e) {
-      assertThat(ReservedList.get(name)).isAbsent();
-      assertThat(e).hasMessage(expectedErrorMsg);
-    }
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--name=" + name, "--input=" + reservedTermsPath));
+    assertThat(ReservedList.get(name)).isEmpty();
+    assertThat(thrown).hasMessageThat().isEqualTo(expectedErrorMsg);
   }
 
   private void runNameTestWithOverride(String name) throws Exception {

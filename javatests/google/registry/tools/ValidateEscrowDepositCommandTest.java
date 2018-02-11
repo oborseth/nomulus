@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 package google.registry.tools;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import google.registry.rde.RdeTestData;
 import google.registry.xml.XmlException;
@@ -29,7 +30,7 @@ public class ValidateEscrowDepositCommandTest
 
   @Test
   public void testRun_plainXml() throws Exception {
-    String file = writeToTmpFile(RdeTestData.get("deposit_full.xml").read());
+    String file = writeToTmpFile(RdeTestData.loadBytes("deposit_full.xml").read());
     runCommand("--input=" + file);
     assertThat(getStdoutAsString()).isEqualTo(""
         + "ID: 20101017001\n"
@@ -64,7 +65,7 @@ public class ValidateEscrowDepositCommandTest
 
   @Test
   public void testRun_plainXml_badReference() throws Exception {
-    String file = writeToTmpFile(RdeTestData.get("deposit_full_badref.xml").read());
+    String file = writeToTmpFile(RdeTestData.loadBytes("deposit_full_badref.xml").read());
     runCommand("--input=" + file);
     assertThat(getStdoutAsString()).isEqualTo(""
         + "ID: 20101017001\n"
@@ -100,9 +101,12 @@ public class ValidateEscrowDepositCommandTest
 
   @Test
   public void testRun_badXml() throws Exception {
-    String file = writeToTmpFile(RdeTestData.loadUtf8("deposit_full.xml").substring(0, 2000));
-    thrown.expect(XmlException.class, "Syntax error at line 46, column 38: "
-        + "XML document structures must start and end within the same entity.");
-    runCommand("--input=" + file);
+    String file = writeToTmpFile(RdeTestData.loadFile("deposit_full.xml").substring(0, 2000));
+    XmlException thrown = expectThrows(XmlException.class, () -> runCommand("--input=" + file));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains(
+            "Syntax error at line 46, column 38: "
+                + "XML document structures must start and end within the same entity.");
   }
 }

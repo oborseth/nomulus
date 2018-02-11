@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,15 +14,35 @@
 
 package google.registry.testing;
 
+import google.registry.util.FormattingLogger;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestName;
 
 /**
  * Test case with 3 empty methods.
  *
- * The sharding test runner fails if it produces an empty shard, and we shard 4 ways. This makes
+ * <p>The sharding test runner fails if it produces an empty shard, and we shard 4 ways. This makes
  * sure that we never produces empty shards.
  */
 public abstract class ShardableTestCase {
+
+  private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
+
+  @Rule
+  public final TestName testName = new TestName();
+
+  @Before
+  public void beforeShardable() {
+    logger.infofmt("Starting test %s", testName.getMethodName());
+  }
+
+  @After
+  public void afterShardable() {
+    logger.infofmt("Finishing test %s", testName.getMethodName());
+  }
 
   @Test
   public void testNothing1() {}

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,9 +15,8 @@
 package google.registry.util;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
-import google.registry.testing.ExceptionRule;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -25,9 +24,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link SqlTemplate}. */
 @RunWith(JUnit4.class)
 public class SqlTemplateTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   @Test
   public void testFillSqlTemplate() throws Exception {
@@ -52,87 +48,99 @@ public class SqlTemplateTest {
 
   @Test
   public void testFillSqlTemplate_substitutionButNoVariables() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "Not found in template: ONE");
-    SqlTemplate.create("")
-        .put("ONE", "1")
-        .build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class, () -> SqlTemplate.create("").put("ONE", "1").build());
+    assertThat(thrown).hasMessageThat().contains("Not found in template: ONE");
   }
 
   @Test
   public void testFillSqlTemplate_substitutionButMissingVariables() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "Not found in template: TWO");
-    SqlTemplate.create("%ONE%")
-        .put("ONE", "1")
-        .put("TWO", "2")
-        .build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> SqlTemplate.create("%ONE%").put("ONE", "1").put("TWO", "2").build());
+    assertThat(thrown).hasMessageThat().contains("Not found in template: TWO");
   }
 
   @Test
   public void testFillSqlTemplate_sameKeyTwice_failsEarly() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "");
-    SqlTemplate.create("%ONE%")
-        .put("ONE", "1")
-        .put("ONE", "2");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> SqlTemplate.create("%ONE%").put("ONE", "1").put("ONE", "2"));
+    assertThat(thrown).hasMessageThat().contains("");
   }
 
   @Test
   public void testFillSqlTemplate_variablesButNotEnoughSubstitutions() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "%TWO% found in template but no substitution");
-    SqlTemplate.create("%ONE% %TWO%")
-        .put("ONE", "1")
-        .build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> SqlTemplate.create("%ONE% %TWO%").put("ONE", "1").build());
+    assertThat(thrown).hasMessageThat().contains("%TWO% found in template but no substitution");
   }
 
   @Test
   public void testFillSqlTemplate_mismatchedVariableAndSubstitution() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "%TWO% found in template but no substitution");
-    SqlTemplate.create("%TWO%")
-        .put("TOO", "2")
-        .build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> SqlTemplate.create("%TWO%").put("TOO", "2").build());
+    assertThat(thrown).hasMessageThat().contains("%TWO% found in template but no substitution");
   }
 
   @Test
   public void testFillSqlTemplate_missingKeyVals_whatsThePoint() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "%TWO% found in template but no substitution");
-    SqlTemplate.create("%TWO%")
-        .build();
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> SqlTemplate.create("%TWO%").build());
+    assertThat(thrown).hasMessageThat().contains("%TWO% found in template but no substitution");
   }
 
   @Test
   public void testFillSqlTemplate_lowercaseKey_notAllowed() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "Bad substitution key: test");
-    SqlTemplate.create("%test%")
-        .put("test", "hello world")
-        .build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> SqlTemplate.create("%test%").put("test", "hello world").build());
+    assertThat(thrown).hasMessageThat().contains("Bad substitution key: test");
   }
 
   @Test
   public void testFillSqlTemplate_substitution_disallowsSingleQuotes() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "Illegal characters in foo'bar");
-    SqlTemplate.create("The words are '%LOS%' and baz")
-        .put("LOS", "foo'bar");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> SqlTemplate.create("The words are '%LOS%' and baz").put("LOS", "foo'bar"));
+    assertThat(thrown).hasMessageThat().contains("Illegal characters in foo'bar");
   }
 
   @Test
   public void testFillSqlTemplate_substitution_disallowsDoubleQuotes() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "Illegal characters in foo\"bar");
-    SqlTemplate.create("The words are '%LOS%' and baz")
-        .put("LOS", "foo\"bar");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> SqlTemplate.create("The words are '%LOS%' and baz").put("LOS", "foo\"bar"));
+    assertThat(thrown).hasMessageThat().contains("Illegal characters in foo\"bar");
   }
 
   @Test
   public void testFillSqlTemplate_quoteMismatch_throwsError() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "Quote mismatch: \"%LOS%'");
-    SqlTemplate.create("The words are \"%LOS%' and baz")
-        .put("LOS", "foobar")
-        .build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                SqlTemplate.create("The words are \"%LOS%' and baz").put("LOS", "foobar").build());
+    assertThat(thrown).hasMessageThat().contains("Quote mismatch: \"%LOS%'");
   }
 
   @Test
   public void testFillSqlTemplate_extendedQuote_throwsError() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "Quote mismatch: '%LOS%");
-    SqlTemplate.create("The words are '%LOS%-lol' and baz")
-        .put("LOS", "roid")
-        .build();
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                SqlTemplate.create("The words are '%LOS%-lol' and baz").put("LOS", "roid").build());
+    assertThat(thrown).hasMessageThat().contains("Quote mismatch: '%LOS%");
   }
 }

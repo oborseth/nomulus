@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import google.registry.model.pricing.PremiumPricingEngine;
 import google.registry.model.pricing.PremiumPricingEngine.DomainPrices;
 import google.registry.model.registry.Registry;
 import java.util.Map;
+import java.util.Optional;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 
@@ -44,6 +45,16 @@ public final class PricingEngineProxy {
   public static Money getDomainRenewCost(String domainName, DateTime priceTime, int years) {
     checkArgument(years > 0, "Number of years must be positive");
     return getPricesForDomainName(domainName, priceTime).getRenewCost().multipliedBy(years);
+  }
+
+  /** Returns true if the specified domain name is premium. */
+  public static boolean isDomainPremium(String domainName, DateTime priceTime) {
+    return getPricesForDomainName(domainName, priceTime).isPremium();
+  }
+
+  /** Returns the fee class of the specified domain name. */
+  public static Optional<String> getDomainFeeClass(String domainName, DateTime priceTime) {
+    return getPricesForDomainName(domainName, priceTime).getFeeClass();
   }
 
   /**

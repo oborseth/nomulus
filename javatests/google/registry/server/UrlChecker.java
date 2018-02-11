@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,14 +14,14 @@
 
 package google.registry.server;
 
-import com.google.common.base.Throwables;
+import static com.google.common.base.Throwables.throwIfUnchecked;
+import static java.util.concurrent.Executors.newCachedThreadPool;
+
 import com.google.common.util.concurrent.SimpleTimeLimiter;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
-import javax.annotation.Nullable;
 
 final class UrlChecker {
 
@@ -31,21 +31,22 @@ final class UrlChecker {
   /** Probes {@code url} until it becomes available. */
   static void waitUntilAvailable(final URL url, int timeoutMs) {
     try {
-      new SimpleTimeLimiter().callWithTimeout(new Callable<Void>() {
-        @Nullable
-        @Override
-        public Void call() throws InterruptedException, IOException {
-          int exponentialBackoffMs = 1;
-          while (true) {
-            if (isAvailable(url)) {
-              return null;
-            }
-            Thread.sleep(exponentialBackoffMs *= 2);
-          }
-        }
-      }, timeoutMs, TimeUnit.MILLISECONDS, true);
+      Void unusedReturnValue = SimpleTimeLimiter.create(newCachedThreadPool())
+          .callWithTimeout(
+              () -> {
+                int exponentialBackoffMs = 1;
+                while (true) {
+                  if (isAvailable(url)) {
+                    return null;
+                  }
+                  Thread.sleep(exponentialBackoffMs *= 2);
+                }
+              },
+              timeoutMs,
+              TimeUnit.MILLISECONDS);
     } catch (Exception e) {
-      throw Throwables.propagate(e);
+      throwIfUnchecked(e);
+      throw new RuntimeException(e);
     }
   }
 

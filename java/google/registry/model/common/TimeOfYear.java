@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,16 +15,15 @@
 package google.registry.model.common;
 
 import static com.google.common.collect.DiscreteDomain.integers;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static google.registry.util.DateTimeUtils.isAtOrAfter;
 import static google.registry.util.DateTimeUtils.isBeforeOrAt;
 import static org.joda.time.DateTimeZone.UTC;
 
-import com.google.common.base.Function;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ContiguousSet;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.Range;
 import com.googlecode.objectify.annotation.Embed;
 import com.googlecode.objectify.annotation.Index;
@@ -84,13 +83,11 @@ public class TimeOfYear extends ImmutableObject {
     Range<Integer> yearRange = Range.closed(
         normalizedRange.lowerEndpoint().getYear(),
         normalizedRange.upperEndpoint().getYear());
-    return FluentIterable.from(ContiguousSet.create(yearRange, integers()))
-        .transform(new Function<Integer, DateTime>() {
-          @Override
-          public DateTime apply(Integer year) {
-            return getDateTimeWithYear(year);
-          }})
-        .filter(normalizedRange);
+    return ContiguousSet.create(yearRange, integers())
+        .stream()
+        .map(this::getDateTimeWithYear)
+        .filter(normalizedRange)
+        .collect(toImmutableList());
   }
 
   /** Get the first {@link DateTime} with this month/day/millis that is at or after the start. */

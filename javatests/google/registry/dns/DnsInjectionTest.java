@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,9 +14,11 @@
 
 package google.registry.dns;
 
+import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistActiveDomain;
 import static google.registry.testing.DatastoreHelper.persistActiveSubordinateHost;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.testing.TaskQueueHelper.assertDnsTasksEnqueued;
 import static google.registry.testing.TaskQueueHelper.assertNoDnsTasksEnqueued;
 import static org.mockito.Mockito.mock;
@@ -26,7 +28,6 @@ import google.registry.model.ofy.Ofy;
 import google.registry.request.HttpException.NotFoundException;
 import google.registry.request.RequestModule;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.InjectRule;
 import java.io.PrintWriter;
@@ -49,9 +50,6 @@ public final class DnsInjectionTest {
       .withDatastore()
       .withTaskQueue()
       .build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
 
   @Rule
   public final InjectRule inject = new InjectRule();
@@ -97,8 +95,9 @@ public final class DnsInjectionTest {
   public void testRefreshDns_missingDomain_throwsNotFound() throws Exception {
     when(req.getParameter("type")).thenReturn("domain");
     when(req.getParameter("name")).thenReturn("example.lol");
-    thrown.expect(NotFoundException.class, "domain example.lol not found");
-    component.refreshDns().run();
+    NotFoundException thrown =
+        expectThrows(NotFoundException.class, () -> component.refreshDns().run());
+    assertThat(thrown).hasMessageThat().contains("domain example.lol not found");
   }
 
   @Test
@@ -114,7 +113,8 @@ public final class DnsInjectionTest {
   public void testRefreshDns_missingHost_throwsNotFound() throws Exception {
     when(req.getParameter("type")).thenReturn("host");
     when(req.getParameter("name")).thenReturn("ns1.example.lol");
-    thrown.expect(NotFoundException.class, "host ns1.example.lol not found");
-    component.refreshDns().run();
+    NotFoundException thrown =
+        expectThrows(NotFoundException.class, () -> component.refreshDns().run());
+    assertThat(thrown).hasMessageThat().contains("host ns1.example.lol not found");
   }
 }

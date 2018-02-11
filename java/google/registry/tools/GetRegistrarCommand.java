@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 package google.registry.tools;
 
-import static com.google.common.base.Preconditions.checkState;
+import static google.registry.util.PreconditionsUtils.checkArgumentPresent;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
@@ -34,9 +34,9 @@ final class GetRegistrarCommand implements RemoteApiCommand {
   @Override
   public void run() {
     for (String clientId : mainParameters) {
-      Registrar registrar = Registrar.loadByClientId(clientId);
-      checkState(registrar != null, "Registrar does not exist");
-
+      Registrar registrar =
+          checkArgumentPresent(
+              Registrar.loadByClientId(clientId), "Registrar with id %s does not exist", clientId);
       System.out.println(registrar);
     }
   }

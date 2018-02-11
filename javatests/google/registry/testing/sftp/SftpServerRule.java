@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ import static com.google.common.base.Preconditions.checkState;
 
 import google.registry.util.NetworkUtils;
 import java.io.File;
-import java.io.IOException;
 import javax.annotation.Nullable;
 import org.apache.ftpserver.FtpServer;
 import org.apache.ftpserver.ftplet.FtpException;
@@ -39,7 +38,7 @@ public final class SftpServerRule extends ExternalResource {
    *
    * @return the port on which the server is listening
    */
-  public int serve(String user, String pass, File home) throws IOException, FtpException {
+  public int serve(String user, String pass, File home) throws FtpException {
     checkState(server == null, "You already have an SFTP server!");
     int port = NetworkUtils.pickUnusedPort();
     server = createSftpServer(user, pass, home, port);

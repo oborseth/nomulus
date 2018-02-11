@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-{namespace registry.soy.registrar.contact autoescape="strict"}
+{namespace registry.soy.registrar.contact}
 
 
 /**
  * Set view for contacts.
  */
 {template .set}
-  <div class="{css set} {css contact}">
+  <div class="{css('set')} {css('contact')}">
     <p>Please enter a query for a single contact in the form "contact/[contact id]".
   </div>
 {/template}
@@ -31,7 +31,7 @@
  * @param? readonly passed through to field rendering.
  */
 {template .item}
-  <form name="item" class="{css item} {css contact}">
+  <form name="item" class="{css('item')} {css('contact')}">
     <h1>
       {if isNonnull($item['contact:id'])}
         {$item['contact:id']['keyValue']}
@@ -40,7 +40,7 @@
       {/if}
     </h1>
     <table>
-      <tr class="{css section-lead}">
+      <tr class="{css('section-lead')}">
         <th colspan="2"><h2>Authentication</h2></th>
       </tr>
       {if not isNonnull($item['contact:id'])}
@@ -55,7 +55,7 @@
         {param value: isNonnull($item['contact:authInfo']) ?
           $item['contact:authInfo']['contact:pw'] : '' /}
       {/call}
-      <tr class="{css section-lead}">
+      <tr class="{css('section-lead')}">
         <th colspan="2"><h2>Contacts</h2></th>
       </tr>
       {call registry.soy.forms.inputFieldRowWithValue data="all"}
@@ -75,11 +75,11 @@
         {param value: $item['contact:fax'] /}
         {param placeholder: 'e.g. +1.2125552638' /}
       {/call}
-      <tr class="{css section-lead} {css subsection}">
+      <tr class="{css('section-lead')} {css('subsection')}">
         <th id="contact-postalInfoHeader" colspan="2">
           <h3>Postal address(es)</h3>
           <button id="domain-contact-postalInfo-add-button" type="button"
-                  class="{css kd-button} {css reg-add}"
+                  class="{css('kd-button')} {css('reg-add')}"
                   {if $readonly}disabled{/if}>
             Add Localized Address
           </button>
@@ -89,21 +89,19 @@
         <td colspan="2">
           <div id="contact-postalInfo">
             {if isNonnull($item['contact:postalInfo'])}
-              {foreach $pi in $item['contact:postalInfo']}
+              {for $pi in $item['contact:postalInfo']}
                 {call .postalInfo data="all"}
                   {param localized: index($pi) == 1 /}
                   {param item: $pi/}
-                  {param itemPrefix: 'contact:' /}
                   {param namePrefix: 'contact:postalInfo[' + index($pi) + '].contact:' /}
                 {/call}
-              {/foreach}
+              {/for}
             {else}
               {call .postalInfo data="all"}
-                {param prefix: 'contact:' /}
                 {param namePrefix: 'contact:postalInfo[0].contact:' /}
               {/call}
             {/if}
-            <table id="domain-contact-postalInfos-footer"/>
+            <table id="domain-contact-postalInfos-footer"></table>
           </div>
         </td>
       </tr>
@@ -126,10 +124,10 @@
     <tr><th colspan=2>
       {if $localized}
         <strong>Localized address</strong><br>
-        <span class="{css info}">Full UTF-8 charsets allowed</span>
+        <span class="{css('info')}">Full UTF-8 charsets allowed</span>
       {else}
         <strong>Internationalized address</strong><br>
-        <span class="{css info}">Only 7-bit ASCII allowed</span>
+        <span class="{css('info')}">Only 7-bit ASCII allowed</span>
       {/if}
     </th></tr>
   {call registry.soy.forms.inputFieldRowWithValue data="all"}

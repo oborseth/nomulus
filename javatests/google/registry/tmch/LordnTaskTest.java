@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,8 +17,11 @@ package google.registry.tmch;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.persistActiveContact;
 import static google.registry.testing.DatastoreHelper.persistDomainAndEnqueueLordn;
+import static google.registry.testing.JUnitBackports.assertThrows;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.mock;
@@ -37,10 +40,8 @@ import com.googlecode.objectify.VoidWork;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.domain.launch.LaunchNotice;
 import google.registry.model.ofy.Ofy;
-import google.registry.model.registrar.Registrar;
 import google.registry.model.registrar.Registrar.Type;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.InjectRule;
 import google.registry.testing.TaskQueueHelper.TaskMatcher;
@@ -51,10 +52,10 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link LordnTask}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class LordnTaskTest {
 
   private static final Clock clock = new FakeClock(DateTime.parse("2010-05-01T10:11:12Z"));
@@ -64,10 +65,6 @@ public class LordnTaskTest {
       .withDatastore()
       .withTaskQueue()
       .build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   @Rule
   public final InjectRule inject = new InjectRule();
 
@@ -91,14 +88,15 @@ public class LordnTaskTest {
   @Test
   public void test_convertTasksToCsv_doesntFailOnEmptyTasks() throws Exception {
     assertThat(
-        LordnTask.convertTasksToCsv(ImmutableList.<TaskHandle> of(), clock.nowUtc(), "col1,col2"))
+        LordnTask.convertTasksToCsv(ImmutableList.of(), clock.nowUtc(), "col1,col2"))
             .isEqualTo("1,2010-05-01T10:11:12.000Z,0\ncol1,col2\n");
   }
 
   @Test
   public void test_convertTasksToCsv_throwsNpeOnNullTasks() throws Exception {
-    thrown.expect(NullPointerException.class);
-    LordnTask.convertTasksToCsv(null, clock.nowUtc(), "header");
+    assertThrows(
+        NullPointerException.class,
+        () -> LordnTask.convertTasksToCsv(null, clock.nowUtc(), "header"));
   }
 
   private DomainResource.Builder newDomainBuilder(DateTime applicationTime) {
@@ -138,17 +136,19 @@ public class LordnTaskTest {
 
   @Test
   public void test_oteRegistrarWithNullIanaId() throws Exception {
-    ofy().transact(new VoidWork() {
-      @Override
-      public void vrun() {
-        ofy().save().entity(Registrar.loadByClientId("TheRegistrar").asBuilder()
-            .setType(Type.OTE)
-            .setIanaIdentifier(null)
-            .build());
-      }});
-    DomainResource domain = newDomainBuilder(DateTime.parse("2010-05-01T10:11:12Z"))
-        .setRepoId("3-EXAMPLE")
-        .build();
+    ofy()
+        .transact(
+            () ->
+                ofy()
+                    .save()
+                    .entity(
+                        loadRegistrar("TheRegistrar")
+                            .asBuilder()
+                            .setType(Type.OTE)
+                            .setIanaIdentifier(null)
+                            .build()));
+    DomainResource domain =
+        newDomainBuilder(DateTime.parse("2010-05-01T10:11:12Z")).setRepoId("3-EXAMPLE").build();
     persistDomainAndEnqueueLordn(domain);
     String expectedPayload =
         "3-EXAMPLE,fleece.example,smdzzzz,null,2010-05-01T10:11:12.000Z,2010-05-01T10:11:12.000Z";
@@ -159,23 +159,31 @@ public class LordnTaskTest {
   @Test
   public void test_enqueueDomainResourceTask_throwsExceptionOnInvalidRegistrar() throws Exception {
     DateTime time = DateTime.parse("2010-05-01T10:11:12Z");
-    DomainResource domain = newDomainBuilder(time)
-        .setRepoId("9000-EXAMPLE")
-        .setCreationClientId("nonexistentRegistrar")
-        .build();
-    thrown.expect(NullPointerException.class,
-        "No registrar found for client id: nonexistentRegistrar");
-    persistDomainAndEnqueueLordn(domain);
+    DomainResource domain =
+        newDomainBuilder(time)
+            .setRepoId("9000-EXAMPLE")
+            .setCreationClientId("nonexistentRegistrar")
+            .build();
+    IllegalStateException thrown =
+        expectThrows(IllegalStateException.class, () -> persistDomainAndEnqueueLordn(domain));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("No registrar found for client id: nonexistentRegistrar");
   }
 
   @Test
   public void test_enqueueDomainResourceTask_throwsNpeOnNullDomain() throws Exception {
-    thrown.expect(NullPointerException.class);
-    ofy().transactNew(new VoidWork() {
-      @Override
-      public void vrun() {
-        LordnTask.enqueueDomainResourceTask(null);
-      }});
+    assertThrows(
+        NullPointerException.class,
+        () ->
+            ofy()
+                .transactNew(
+                    new VoidWork() {
+                      @Override
+                      public void vrun() {
+                        LordnTask.enqueueDomainResourceTask(null);
+                      }
+                    }));
   }
 
   @SuppressWarnings("unchecked")
@@ -186,7 +194,7 @@ public class LordnTaskTest {
     when(queue.leaseTasks(any(LeaseOptions.class)))
         .thenThrow(TransientFailureException.class)
         .thenThrow(DeadlineExceededException.class)
-        .thenReturn(ImmutableList.<TaskHandle>of(task), ImmutableList.<TaskHandle>of());
+        .thenReturn(ImmutableList.of(task), ImmutableList.of());
     assertThat(LordnTask.loadAllTasks(queue, "tld")).containsExactly(task);
   }
 
@@ -195,8 +203,9 @@ public class LordnTaskTest {
   public void test_loadAllTasks_retryLogic_allFailures() throws Exception {
     Queue queue = mock(Queue.class);
     when(queue.leaseTasks(any(LeaseOptions.class))).thenThrow(TransientFailureException.class);
-    thrown.expect(RuntimeException.class, "Error leasing tasks");
-    LordnTask.loadAllTasks(queue, "tld");
+    RuntimeException thrown =
+        expectThrows(RuntimeException.class, () -> LordnTask.loadAllTasks(queue, "tld"));
+    assertThat(thrown).hasMessageThat().contains("Error leasing tasks");
   }
 
   private static TaskHandle makeTaskHandle(

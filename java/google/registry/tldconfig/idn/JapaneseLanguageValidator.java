@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -53,9 +53,9 @@ class JapaneseLanguageValidator extends LanguageValidator {
    */
   private static final ImmutableRangeSet<Integer> JAPANESE_EXCEPTION_CODEPOINTS =
       new ImmutableRangeSet.Builder<Integer>()
-      .add(Range.<Integer>singleton(IDEOGRAPHIC_CLOSING_MARK))
-      .add(Range.<Integer>singleton(KATAKANA_MIDDLE_DOT))
-      .add(Range.<Integer>singleton(KATAKANA_HIRAGANA_PROLONGED_SOUND_MARK))
+      .add(Range.singleton(IDEOGRAPHIC_CLOSING_MARK))
+      .add(Range.singleton(KATAKANA_MIDDLE_DOT))
+      .add(Range.singleton(KATAKANA_HIRAGANA_PROLONGED_SOUND_MARK))
       .build();
 
   @Override

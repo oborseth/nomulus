@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,20 +18,27 @@ import static google.registry.request.Action.Method.GET;
 import static google.registry.request.Action.Method.HEAD;
 
 import com.google.common.collect.ImmutableMap;
+import google.registry.rdap.RdapMetrics.EndpointType;
 import google.registry.request.Action;
 import google.registry.request.HttpException.NotImplementedException;
+import google.registry.request.auth.Auth;
 import javax.inject.Inject;
 
 /**
- * RDAP (new WHOIS) action for RDAP autonomous system number reuqests.
+ * RDAP (new WHOIS) action for RDAP autonomous system number requests.
  *
  * <p>This feature is not implemented because it's only necessary for <i>address</i> registries like
  * ARIN, not domain registries.
  */
-@Action(path = RdapAutnumAction.PATH, method = {GET, HEAD}, isPrefix = true)
+@Action(
+  path = RdapAutnumAction.PATH,
+  method = {GET, HEAD},
+  isPrefix = true,
+  auth = Auth.AUTH_PUBLIC_ANONYMOUS
+)
 public class RdapAutnumAction extends RdapActionBase {
 
-  public static final String PATH = "/rdap/autnum";
+  public static final String PATH = "/rdap/autnum/";
 
   @Inject RdapAutnumAction() {}
 
@@ -41,13 +48,18 @@ public class RdapAutnumAction extends RdapActionBase {
   }
 
   @Override
+  public EndpointType getEndpointType() {
+    return EndpointType.AUTNUM;
+  }
+
+  @Override
   public String getActionPath() {
     return PATH;
   }
 
   @Override
   public ImmutableMap<String, Object> getJsonObjectForResource(
-      String pathSearchString, boolean isHeadRequest, String linkBase) {
+      String pathSearchString, boolean isHeadRequest) {
     throw new NotImplementedException("Domain Name Registry information only");
   }
 }

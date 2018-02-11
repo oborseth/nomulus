@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /**
- * Nomulus datastore model common/shared classes.
+ * Nomulus Datastore model common/shared classes.
  *
  * <p>This package is intended to hold classes which are shared across multiple XML namespaces. As
  * such, no default namespace is declared in this package, and all objects in this package should be

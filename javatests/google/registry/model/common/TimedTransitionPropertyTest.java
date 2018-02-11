@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,18 +16,17 @@ package google.registry.model.common;
 
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.common.TimedTransitionProperty.forMapify;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSortedMap;
-import google.registry.testing.ExceptionRule;
 import java.util.Map;
 import java.util.Set;
 import org.joda.time.DateTime;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -35,10 +34,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link TimedTransitionProperty}. */
 @RunWith(JUnit4.class)
 public class TimedTransitionPropertyTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   private static final DateTime A_LONG_TIME_AGO = new DateTime(Long.MIN_VALUE, UTC);
 
   private static final DateTime DATE_1 = DateTime.parse("2001-01-01T00:00:00.0Z");
@@ -119,7 +114,7 @@ public class TimedTransitionPropertyTest {
     // Just for testing, don't extract transitions from a TimedTransitionProperty in real code.
     Set<Map.Entry<DateTime, StringTimedTransition>> transitions = timedString.entrySet();
     timedString = forMapify("0", StringTimedTransition.class);
-    // Simulate a load from datastore by clearing and then re-inserting the original transitions.
+    // Simulate a load from Datastore by clearing and then re-inserting the original transitions.
     timedString.clear();
     for (Map.Entry<DateTime, StringTimedTransition> transition : transitions) {
       timedString.put(transition.getKey(), transition.getValue());
@@ -130,40 +125,47 @@ public class TimedTransitionPropertyTest {
 
   @Test
   public void testFailure_valueMapNotChronologicallyOrdered() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    TimedTransitionProperty.fromValueMap(
-        ImmutableSortedMap.<DateTime, String>reverseOrder().put(START_OF_TIME, "0").build(),
-        StringTimedTransition.class);
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            TimedTransitionProperty.fromValueMap(
+                ImmutableSortedMap.<DateTime, String>reverseOrder().put(START_OF_TIME, "0").build(),
+                StringTimedTransition.class));
   }
 
   @Test
   public void testFailure_transitionTimeBeforeStartOfTime() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    TimedTransitionProperty.fromValueMap(
-        ImmutableSortedMap.of(A_LONG_TIME_AGO, "?"), StringTimedTransition.class);
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            TimedTransitionProperty.fromValueMap(
+                ImmutableSortedMap.of(A_LONG_TIME_AGO, "?"), StringTimedTransition.class));
   }
 
   @Test
   public void testFailure_noValues() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    TimedTransitionProperty.fromValueMap(
-        ImmutableSortedMap.<DateTime, String>of(), StringTimedTransition.class);
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            TimedTransitionProperty.fromValueMap(
+                ImmutableSortedMap.of(), StringTimedTransition.class));
   }
 
   @Test
   public void testFailure_noValueAtStartOfTime() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    TimedTransitionProperty.fromValueMap(
-        ImmutableSortedMap.of(DATE_1, "1"), StringTimedTransition.class);
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            TimedTransitionProperty.fromValueMap(
+                ImmutableSortedMap.of(DATE_1, "1"), StringTimedTransition.class));
   }
 
   @Test
   public void testFailure_noValuesAfterSimulatedEmptyLoad() throws Exception {
     timedString = forMapify("0", StringTimedTransition.class);
-    // Simulate a load from datastore by clearing, but don't insert any transitions.
+    // Simulate a load from Datastore by clearing, but don't insert any transitions.
     timedString.clear();
-    thrown.expect(IllegalStateException.class);
-    timedString.checkValidity();
+    assertThrows(IllegalStateException.class, timedString::checkValidity);
   }
 
   @Test
@@ -171,11 +173,10 @@ public class TimedTransitionPropertyTest {
     // Just for testing, don't extract transitions from a TimedTransitionProperty in real code.
     StringTimedTransition transition1 = timedString.get(DATE_1);
     timedString = forMapify("0", StringTimedTransition.class);
-    // Simulate a load from datastore by clearing and inserting transitions, but deliberately
+    // Simulate a load from Datastore by clearing and inserting transitions, but deliberately
     // omit a transition corresponding to START_OF_TIME.
     timedString.clear();
     timedString.put(DATE_1, transition1);
-    thrown.expect(IllegalStateException.class);
-    timedString.checkValidity();
+    assertThrows(IllegalStateException.class, timedString::checkValidity);
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,8 +20,10 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import com.google.api.client.extensions.appengine.http.UrlFetchTransport;
 import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
 import com.google.api.client.googleapis.extensions.appengine.auth.oauth2.AppIdentityCredential;
+import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
 import com.google.api.client.http.HttpRequestInitializer;
 import com.google.api.client.http.HttpTransport;
+import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.JsonFactory;
 import com.google.api.client.json.jackson2.JacksonFactory;
 import com.google.appengine.api.datastore.DatastoreService;
@@ -31,16 +33,16 @@ import com.google.appengine.api.urlfetch.URLFetchService;
 import com.google.appengine.api.urlfetch.URLFetchServiceFactory;
 import com.google.appengine.api.users.UserService;
 import com.google.appengine.api.users.UserServiceFactory;
-import com.google.common.base.Function;
 import com.google.common.collect.ImmutableSet;
 import dagger.Binds;
 import dagger.Module;
 import dagger.Provides;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.keyring.api.KeyModule.Key;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.Set;
+import java.util.function.Function;
 import javax.inject.Named;
 import javax.inject.Provider;
 import javax.inject.Singleton;
@@ -118,6 +120,24 @@ public final class Modules {
   }
 
   /**
+   * Dagger module that provides standard {@link NetHttpTransport}. Used in non App Engine
+   * environment.
+   */
+  @Module
+  public static final class NetHttpTransportModule {
+
+    @Provides
+    @Singleton
+    static NetHttpTransport provideNetHttpTransport() {
+      try {
+        return GoogleNetHttpTransport.newTrustedTransport();
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }
+  }
+
+  /**
    * Dagger module providing {@link AppIdentityCredential}.
    *
    * <p>This can be used to authenticate to Google APIs using the identity of your GAE app.
@@ -128,12 +148,7 @@ public final class Modules {
   public static final class AppIdentityCredentialModule {
     @Provides
     static Function<Set<String>, AppIdentityCredential> provideAppIdentityCredential() {
-      return new Function<Set<String>, AppIdentityCredential>() {
-        @Override
-        public AppIdentityCredential apply(Set<String> scopes) {
-          return new AppIdentityCredential(scopes);
-        }
-      };
+      return AppIdentityCredential::new;
     }
   }
 
@@ -145,8 +160,8 @@ public final class Modules {
   @Module
   public abstract static class UseAppIdentityCredentialForGoogleApisModule {
     @Binds
-    abstract Function<Set<String>, ? extends HttpRequestInitializer>
-        provideHttpRequestInitializer(Function<Set<String>, AppIdentityCredential> credential);
+    abstract Function<Set<String>, ? extends HttpRequestInitializer> provideHttpRequestInitializer(
+        Function<Set<String>, AppIdentityCredential> credential);
   }
 
   /**
@@ -160,8 +175,8 @@ public final class Modules {
   @Module
   public abstract static class UseGoogleCredentialForGoogleApisModule {
     @Binds
-    abstract Function<Set<String>, ? extends HttpRequestInitializer>
-        provideHttpRequestInitializer(Function<Set<String>, GoogleCredential> credential);
+    abstract Function<Set<String>, ? extends HttpRequestInitializer> provideHttpRequestInitializer(
+        Function<Set<String>, GoogleCredential> credential);
   }
 
   /**
@@ -174,8 +189,8 @@ public final class Modules {
    * this authentication method should only be used for the following situations:
    *
    * <ol>
-   * <li>Locally-running programs (which aren't executing on the App Engine platform)
-   * <li>Spreadsheet service (which can't use {@link AppIdentityCredential} due to an old library)
+   *   <li>Locally-running programs (which aren't executing on the App Engine platform)
+   *   <li>Spreadsheet service (which can't use {@link AppIdentityCredential} due to an old library)
    * </ol>
    *
    * @see google.registry.keyring.api.Keyring#getJsonCredential()
@@ -186,12 +201,14 @@ public final class Modules {
     @Provides
     @Singleton
     static GoogleCredential provideGoogleCredential(
-        HttpTransport httpTransport,
+        NetHttpTransport netHttpTransport,
         JsonFactory jsonFactory,
         @Key("jsonCredential") String jsonCredential) {
       try {
         return GoogleCredential.fromStream(
-            new ByteArrayInputStream(jsonCredential.getBytes(UTF_8)), httpTransport, jsonFactory);
+            new ByteArrayInputStream(jsonCredential.getBytes(UTF_8)),
+            netHttpTransport,
+            jsonFactory);
       } catch (IOException e) {
         throw new RuntimeException(e);
       }
@@ -200,16 +217,11 @@ public final class Modules {
     @Provides
     static Function<Set<String>, GoogleCredential> provideScopedGoogleCredential(
         final Provider<GoogleCredential> googleCredentialProvider) {
-      return new Function<Set<String>, GoogleCredential>() {
-        @Override
-        public GoogleCredential apply(Set<String> scopes) {
-          return googleCredentialProvider.get().createScoped(scopes);
-        }
-      };
+      return scopes -> googleCredentialProvider.get().createScoped(scopes);
     }
 
     /**
-     * Provides a GoogleCredential that will connect to GAE using delegated admin access.  This is
+     * Provides a GoogleCredential that will connect to GAE using delegated admin access. This is
      * needed for API calls requiring domain admin access to the relevant GAFYD using delegated
      * scopes, e.g. the Directory API and the Groupssettings API.
      *
@@ -223,7 +235,7 @@ public final class Modules {
     static GoogleCredential provideDelegatedAdminGoogleCredential(
         GoogleCredential googleCredential,
         HttpTransport httpTransport,
-        @Config("googleAppsAdminEmailAddress") String googleAppsAdminEmailAddress) {
+        @Config("gSuiteAdminAccountEmailAddress") String gSuiteAdminAccountEmailAddress) {
       return new GoogleCredential.Builder()
           .setTransport(httpTransport)
           .setJsonFactory(googleCredential.getJsonFactory())
@@ -233,8 +245,8 @@ public final class Modules {
           // GoogleCredential constructor.  We don't yet know the actual scopes to use here, and it
           // is thus the responsibility of every user of a delegated admin credential to call
           // createScoped() on it first to get the version with the correct scopes set.
-          .setServiceAccountScopes(ImmutableSet.<String>of())
-          .setServiceAccountUser(googleAppsAdminEmailAddress)
+          .setServiceAccountScopes(ImmutableSet.of())
+          .setServiceAccountUser(gSuiteAdminAccountEmailAddress)
           .build();
     }
   }

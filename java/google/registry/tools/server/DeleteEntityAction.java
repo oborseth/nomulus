@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ import com.google.appengine.api.datastore.Entity;
 import com.google.appengine.api.datastore.EntityNotFoundException;
 import com.google.appengine.api.datastore.Key;
 import com.google.appengine.api.datastore.KeyFactory;
-import com.google.common.base.Optional;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.googlecode.objectify.VoidWork;
@@ -31,13 +30,15 @@ import google.registry.request.Action;
 import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.Parameter;
 import google.registry.request.Response;
+import google.registry.request.auth.Auth;
 import google.registry.util.FormattingLogger;
+import java.util.Optional;
 import javax.inject.Inject;
 
 /**
  * An action to delete entities in Datastore specified by raw key ids, which can be found in
- * Datastore Viewer in the AppEngine console - it's the really long alphanumeric key that is
- * labeled "Entity key" on the page for an individual entity.
+ * Datastore Viewer in the AppEngine console - it's the really long alphanumeric key that is labeled
+ * "Entity key" on the page for an individual entity.
  *
  * <p>rawKeys is the only required parameter. It is a comma-delimited list of Strings.
  *
@@ -47,7 +48,10 @@ import javax.inject.Inject;
  * malformed data that cannot be properly deleted using existing tools. Generally, if there already
  * exists an entity-specific deletion command, then use that one instead.
  */
-@Action(path = DeleteEntityAction.PATH)
+@Action(
+  path = DeleteEntityAction.PATH,
+  auth = Auth.AUTH_INTERNAL_OR_ADMIN
+)
 public class DeleteEntityAction implements Runnable {
 
   private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
@@ -78,7 +82,7 @@ public class DeleteEntityAction implements Runnable {
         rawDeletionsBuilder.add(rawEntity.get().getKey());
         continue;
       }
-      // The entity could not be found by either Objectify or the datastore service
+      // The entity could not be found by either Objectify or the Datastore service
       throw new BadRequestException("Could not find entity with key " + rawKeyString);
     }
     // Delete raw entities.
@@ -101,16 +105,16 @@ public class DeleteEntityAction implements Runnable {
 
   private Optional<Object> loadOfyEntity(Key rawKey) {
     EntityMetadata<Object> metadata = ofy().factory().getMetadata(rawKey.getKind());
-    return Optional.fromNullable(metadata == null ? null : ofy().load().key(create(rawKey)).now());
+    return Optional.ofNullable(metadata == null ? null : ofy().load().key(create(rawKey)).now());
   }
 
   private Optional<Entity> loadRawEntity(Key rawKey) {
     try {
-      return Optional.fromNullable(getDatastoreService().get(rawKey));
+      return Optional.ofNullable(getDatastoreService().get(rawKey));
     } catch (EntityNotFoundException e) {
-      logger.warningfmt(e, "Could not load entity from datastore service with key %s",
-          rawKey.toString());
-      return Optional.absent();
+      logger.warningfmt(
+          e, "Could not load entity from Datastore service with key %s", rawKey.toString());
+      return Optional.empty();
     }
   }
 }

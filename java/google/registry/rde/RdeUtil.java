@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -70,8 +70,7 @@ public final class RdeUtil {
     if (!watermarkMatcher.find()) {
       throw new XmlException("Could not find RDE watermark in XML");
     }
-    DateTime watermark = DATETIME_FORMATTER.parseDateTime(watermarkMatcher.group(1));
-    return watermark;
+    return DATETIME_FORMATTER.parseDateTime(watermarkMatcher.group(1));
   }
 
   /**

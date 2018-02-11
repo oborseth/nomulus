@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,81 +15,84 @@
 package google.registry.security;
 
 import static com.google.common.truth.Truth.assertThat;
-import static google.registry.security.XsrfTokenManager.generateToken;
-import static google.registry.security.XsrfTokenManager.validateToken;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 
+import com.google.appengine.api.users.User;
 import com.google.common.base.Splitter;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.FakeClock;
+import google.registry.testing.FakeUserService;
 import google.registry.testing.InjectRule;
-import google.registry.testing.UserInfo;
 import org.joda.time.Duration;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.junit.runners.JUnit4;
 
 /** Tests for {@link XsrfTokenManager}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class XsrfTokenManagerTest {
-
-  private static final Duration ONE_DAY = Duration.standardDays(1);
-
-  FakeClock clock = new FakeClock(START_OF_TIME);
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder()
       .withDatastore()
-      .withUserService(UserInfo.createAdmin("a@example.com", "user1"))
       .build();
 
   @Rule
   public InjectRule inject = new InjectRule();
 
+  private final User testUser = new User("test@example.com", "test@example.com");
+  private final FakeClock clock = new FakeClock(START_OF_TIME);
+  private final FakeUserService userService = new FakeUserService();
+  private final XsrfTokenManager xsrfTokenManager = new XsrfTokenManager(clock, userService);
+
+  private String token;
+
   @Before
   public void init() {
-    inject.setStaticField(XsrfTokenManager.class, "clock", clock);
+    userService.setUser(testUser, false);
+    token = xsrfTokenManager.generateToken(testUser.getEmail());
   }
 
   @Test
-  public void testSuccess() {
-    assertThat(validateToken(generateToken("console"), "console", ONE_DAY)).isTrue();
+  public void testValidate_validToken() {
+    assertThat(xsrfTokenManager.validateToken(token)).isTrue();
   }
 
   @Test
-  public void testNoTimestamp() {
-    assertThat(validateToken("foo", "console", ONE_DAY)).isFalse();
+  public void testValidate_tokenWithMissingParts() {
+    assertThat(xsrfTokenManager.validateToken("1:123")).isFalse();
   }
 
   @Test
-  public void testBadNumberTimestamp() {
-    assertThat(validateToken("foo:bar", "console", ONE_DAY)).isFalse();
+  public void testValidate_tokenWithBadVersion() {
+    assertThat(xsrfTokenManager.validateToken("2:123:base64")).isFalse();
   }
 
   @Test
-  public void testExpired() {
-    String token = generateToken("console");
-    clock.setTo(START_OF_TIME.plusDays(2));
-    assertThat(validateToken(token, "console", ONE_DAY)).isFalse();
+  public void testValidate_tokenWithBadNumberTimestamp() {
+    assertThat(xsrfTokenManager.validateToken("1:notanumber:base64")).isFalse();
   }
 
   @Test
-  public void testTimestampTamperedWith() {
-    String encodedPart = Splitter.on(':').splitToList(generateToken("console")).get(0);
-    long tamperedTimestamp = clock.nowUtc().plusMillis(1).getMillis();
-    assertThat(validateToken(encodedPart + ":" + tamperedTimestamp, "console", ONE_DAY)).isFalse();
+  public void testValidate_tokenExpiresAfterOneDay() {
+    clock.advanceBy(Duration.standardDays(1));
+    assertThat(xsrfTokenManager.validateToken(token)).isTrue();
+    clock.advanceOneMilli();
+    assertThat(xsrfTokenManager.validateToken(token)).isFalse();
   }
 
   @Test
-  public void testDifferentUser() {
-    assertThat(validateToken(generateToken("console", "b@example.com"), "console", ONE_DAY))
-        .isFalse();
+  public void testValidate_tokenTimestampTamperedWith() {
+    String encodedPart = Splitter.on(':').splitToList(token).get(2);
+    long fakeTimestamp = clock.nowUtc().plusMillis(1).getMillis();
+    assertThat(xsrfTokenManager.validateToken("1:" + fakeTimestamp + ":" + encodedPart)).isFalse();
   }
 
   @Test
-  public void testDifferentScope() {
-    assertThat(validateToken(generateToken("console"), "foobar", ONE_DAY)).isFalse();
+  public void testValidate_tokenForDifferentUser() {
+    String otherToken = xsrfTokenManager.generateToken("eve@example.com");
+    assertThat(xsrfTokenManager.validateToken(otherToken)).isFalse();
   }
 }

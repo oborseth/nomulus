@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,9 +15,10 @@
 package google.registry.whois;
 
 import dagger.Component;
-import google.registry.config.ConfigModule;
+import google.registry.config.RegistryConfig.ConfigModule;
 import google.registry.request.RequestModule;
 import google.registry.util.SystemClock.SystemClockModule;
+import google.registry.util.SystemSleeper.SystemSleeperModule;
 import javax.inject.Singleton;
 
 @Singleton
@@ -25,6 +26,7 @@ import javax.inject.Singleton;
     ConfigModule.class,
     RequestModule.class,
     SystemClockModule.class,
+    SystemSleeperModule.class,
     WhoisModule.class,
 })
 interface WhoisTestComponent {

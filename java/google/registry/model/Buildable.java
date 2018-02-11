@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,10 +18,10 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 
-import com.google.common.base.Optional;
 import google.registry.model.ofy.ObjectifyService;
 import google.registry.util.TypeUtils.TypeInstantiator;
 import java.lang.reflect.Field;
+import java.util.Optional;
 
 /** Interface for {@link ImmutableObject} subclasses that have a builder. */
 public interface Buildable {
@@ -33,7 +33,7 @@ public interface Buildable {
    *
    * <p>This can be used without implementing {@link Buildable}.
    */
-  public abstract static class Builder<S> {
+  abstract class Builder<S> {
 
     private S instance;
 
@@ -64,8 +64,8 @@ public interface Buildable {
         }
         if (idField != null
             && !idField.getType().equals(String.class)
-            && Optional.fromNullable((Long) ModelUtils.getFieldValue(instance, idField))
-                .or(0L) == 0) {
+            && Optional.ofNullable((Long) ModelUtils.getFieldValue(instance, idField))
+                .orElse(0L) == 0) {
           ModelUtils.setFieldValue(instance, idField, ObjectifyService.allocateId());
         }
         return instance;
@@ -77,7 +77,7 @@ public interface Buildable {
   }
 
   /** Boilerplate for abstract immutable builders that need to be able to cast "this". */
-  public abstract class GenericBuilder<S, B extends GenericBuilder<?, ?>> extends Builder<S> {
+  abstract class GenericBuilder<S, B extends GenericBuilder<?, ?>> extends Builder<S> {
     protected GenericBuilder() {}
 
     protected GenericBuilder(S instance) {
@@ -100,7 +100,7 @@ public interface Buildable {
    *
    * @param <T> the derived type
    */
-  public interface Overlayable<T> extends Buildable {
+  interface Overlayable<T> extends Buildable {
     /** Return an overlay of this object using non-null fields from the source. */
     T overlay(T source);
   }

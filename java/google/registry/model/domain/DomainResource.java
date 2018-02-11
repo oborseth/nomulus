@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package google.registry.model.domain;
+  package google.registry.model.domain;
 
 import static com.google.common.collect.Sets.intersection;
 import static google.registry.model.EppResourceUtils.projectResourceOntoBuilderAtTime;
 import static google.registry.model.EppResourceUtils.setAutomaticTransferSuccessProperties;
-import static google.registry.model.ofy.Ofy.RECOMMENDED_MEMCACHE_EXPIRATION;
 import static google.registry.util.CollectionUtils.difference;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
 import static google.registry.util.CollectionUtils.union;
@@ -25,14 +24,13 @@ import static google.registry.util.DateTimeUtils.earliestOf;
 import static google.registry.util.DateTimeUtils.isBeforeOrAt;
 import static google.registry.util.DateTimeUtils.leapSafeAddYears;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableSet;
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.annotation.Cache;
 import com.googlecode.objectify.annotation.EntitySubclass;
 import com.googlecode.objectify.annotation.IgnoreSave;
 import com.googlecode.objectify.condition.IfNull;
 import google.registry.model.EppResource.ForeignKeyedEppResource;
+import google.registry.model.EppResource.ResourceWithTransferData;
 import google.registry.model.annotations.ExternalMessagingName;
 import google.registry.model.billing.BillingEvent;
 import google.registry.model.domain.rgp.GracePeriodStatus;
@@ -42,36 +40,21 @@ import google.registry.model.registry.Registry;
 import google.registry.model.transfer.TransferData;
 import google.registry.model.transfer.TransferStatus;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
-import javax.xml.bind.annotation.XmlElement;
-import javax.xml.bind.annotation.XmlRootElement;
-import javax.xml.bind.annotation.XmlTransient;
-import javax.xml.bind.annotation.XmlType;
+import javax.annotation.Nullable;
 import org.joda.time.DateTime;
 import org.joda.time.Interval;
 
-/** A persistable domain resource including mutable and non-mutable fields. */
-@XmlRootElement(name = "infData")
-@XmlType(propOrder = {
-    "fullyQualifiedDomainName",
-    "repoId",
-    "status",
-    "marshalledRegistrant",
-    "marshalledContacts",
-    "marshalledNameservers",
-    "subordinateHosts",
-    "currentSponsorClientId",
-    "creationClientId",
-    "creationTime",
-    "lastEppUpdateClientId",
-    "lastEppUpdateTime",
-    "registrationExpirationTime",
-    "lastTransferTime",
-    "authInfo"})
-@Cache(expirationSeconds = RECOMMENDED_MEMCACHE_EXPIRATION)
+/**
+ * A persistable domain resource including mutable and non-mutable fields.
+ *
+ * @see <a href="https://tools.ietf.org/html/rfc5731">RFC 5731</a>
+ */
 @EntitySubclass(index = true)
 @ExternalMessagingName("domain")
-public class DomainResource extends DomainBase implements ForeignKeyedEppResource {
+public class DomainResource extends DomainBase
+    implements ForeignKeyedEppResource, ResourceWithTransferData {
 
   /** The max number of years that a domain can be registered for, as set by ICANN policy. */
   public static final int MAX_REGISTRATION_YEARS = 10;
@@ -85,11 +68,9 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
           StatusValue.SERVER_HOLD);
 
   /** Fully qualified host names of this domain's active subordinate hosts. */
-  @XmlElement(name = "host")
   Set<String> subordinateHosts;
 
   /** When this domain's registration will expire. */
-  @XmlElement(name = "exDate")
   DateTime registrationExpirationTime;
 
   /**
@@ -99,7 +80,6 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
    * refer to a {@link PollMessage} timed to when the domain is fully deleted. If the domain is
    * restored, the message should be deleted.
    */
-  @XmlTransient
   Key<PollMessage.OneTime> deletePollMessage;
 
   /**
@@ -110,7 +90,6 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
    * {@link #registrationExpirationTime} is changed the recurrence should be closed, a new one
    * should be created, and this field should be updated to point to the new one.
    */
-  @XmlTransient
   Key<BillingEvent.Recurring> autorenewBillingEvent;
 
   /**
@@ -121,11 +100,9 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
    * {@link #registrationExpirationTime} is changed the recurrence should be closed, a new one
    * should be created, and this field should be updated to point to the new one.
    */
-  @XmlTransient
   Key<PollMessage.Autorenew> autorenewPollMessage;
 
   /** The unexpired grace periods for this domain (some of which may not be active yet). */
-  @XmlTransient
   Set<GracePeriod> gracePeriods;
 
   /**
@@ -133,7 +110,6 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
    * Will only be populated for domains allocated from a sunrise application.
    */
   @IgnoreSave(IfNull.class)
-  @XmlTransient
   String smdId;
 
   /**
@@ -141,7 +117,6 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
    * for domains allocated from an application.
    */
   @IgnoreSave(IfNull.class)
-  @XmlTransient
   DateTime applicationTime;
 
   /**
@@ -149,8 +124,17 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
    * allocated from an application.
    */
   @IgnoreSave(IfNull.class)
-  @XmlTransient
   Key<DomainApplication> application;
+
+  /** Data about any pending or past transfers on this domain. */
+  TransferData transferData;
+
+  /**
+   * The time that this resource was last transferred.
+   *
+   * <p>Can be null if the resource has never been transferred.
+   */
+  DateTime lastTransferTime;
 
   public ImmutableSet<String> getSubordinateHosts() {
     return nullToEmptyImmutableCopy(subordinateHosts);
@@ -189,6 +173,16 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
   }
 
   @Override
+  public final TransferData getTransferData() {
+    return Optional.ofNullable(transferData).orElse(TransferData.EMPTY);
+  }
+
+  @Override
+  public DateTime getLastTransferTime() {
+    return lastTransferTime;
+  }
+
+  @Override
   public String getForeignKey() {
     return fullyQualifiedDomainName;
   }
@@ -216,35 +210,15 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
     return ImmutableSet.copyOf(gracePeriodStatuses);
   }
 
-  /**
-   * Returns the Registry Grace Period expiration date for the specified type of grace period for
-   * this domain, or null if there is no grace period of the specified type.
-   */
-  public Optional<DateTime> getGracePeriodExpirationTime(GracePeriodStatus gracePeriodType) {
+  /** Returns the subset of grace periods having the specified type. */
+  public ImmutableSet<GracePeriod> getGracePeriodsOfType(GracePeriodStatus gracePeriodType) {
+    ImmutableSet.Builder<GracePeriod> builder = new ImmutableSet.Builder<>();
     for (GracePeriod gracePeriod : getGracePeriods()) {
       if (gracePeriod.getType() == gracePeriodType) {
-        return Optional.of(gracePeriod.getExpirationTime());
+        builder.add(gracePeriod);
       }
     }
-    return Optional.absent();
-  }
-
-  /**
-   * Checks to see if the domain is in a particular type of grace period at the specified time. We
-   * only check the expiration time, because grace periods are always assumed to start at the
-   * beginning of time. This could be confusing if asOfDate is in the past. For instance, the Add
-   * Grace Period will appear to last from the beginning of time until 5 days after the domain is
-   * created.
-   */
-  public boolean doesAnyGracePeriodOfTypeExpireAfter(
-      GracePeriodStatus gracePeriodType, DateTime asOfDate) {
-    for (GracePeriod gracePeriod : getGracePeriods()) {
-      if ((gracePeriod.getType() == gracePeriodType)
-          && gracePeriod.getExpirationTime().isAfter(asOfDate)) {
-        return true;
-      }
-    }
-    return false;
+    return builder.build();
   }
 
   /**
@@ -270,11 +244,12 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
           cloneProjectedAtTime(transferExpirationTime.minusMillis(1));
       // If we are within an autorenew grace period, the transfer will subsume the autorenew. There
       // will already be a cancellation written in advance by the transfer request flow, so we don't
-      // need to worry about billing, but we do need to reduce the number of years added to the
-      // expiration time by one to account for the year added by the autorenew.
-      int extraYears = transferData.getExtendedRegistrationYears();
+      // need to worry about billing, but we do need to cancel out the expiration time increase.
+      // The transfer period saved in the transfer data will be one year, unless the superuser
+      // extension set the transfer period to zero.
+      int extraYears = transferData.getTransferPeriod().getValue();
       if (domainAtTransferTime.getGracePeriodStatuses().contains(GracePeriodStatus.AUTO_RENEW)) {
-        extraYears--;
+        extraYears = 0;
       }
       // Set the expiration, autorenew events, and grace period for the transfer. (Transfer ends
       // all other graces).
@@ -288,14 +263,22 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
               extraYears))
           // Set the speculatively-written new autorenew events as the domain's autorenew events.
           .setAutorenewBillingEvent(transferData.getServerApproveAutorenewEvent())
-          .setAutorenewPollMessage(transferData.getServerApproveAutorenewPollMessage())
-          // Set the grace period using a key to the prescheduled transfer billing event.  Not using
-          // GracePeriod.forBillingEvent() here in order to avoid the actual datastore fetch.
-          .setGracePeriods(ImmutableSet.of(GracePeriod.create(
-              GracePeriodStatus.TRANSFER,
-              transferExpirationTime.plus(Registry.get(getTld()).getTransferGracePeriodLength()),
-              transferData.getGainingClientId(),
-              transferData.getServerApproveBillingEvent())));
+          .setAutorenewPollMessage(transferData.getServerApproveAutorenewPollMessage());
+      if (transferData.getTransferPeriod().getValue() == 1) {
+        // Set the grace period using a key to the prescheduled transfer billing event.  Not using
+        // GracePeriod.forBillingEvent() here in order to avoid the actual Datastore fetch.
+        builder.setGracePeriods(
+            ImmutableSet.of(
+                GracePeriod.create(
+                    GracePeriodStatus.TRANSFER,
+                    transferExpirationTime.plus(
+                        Registry.get(getTld()).getTransferGracePeriodLength()),
+                    transferData.getGainingClientId(),
+                    transferData.getServerApproveBillingEvent())));
+      } else {
+        // There won't be a billing event, so we don't need a grace period
+        builder.setGracePeriods(ImmutableSet.of());
+      }
       // Set all remaining transfer properties.
       setAutomaticTransferSuccessProperties(builder, transferData);
       // Finish projecting to now.
@@ -338,11 +321,14 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
 
   /** Return what the expiration time would be if the given number of years were added to it. */
   public static DateTime extendRegistrationWithCap(
-      DateTime now, DateTime currentExpirationTime, Integer extendedRegistrationYears) {
+      DateTime now,
+      DateTime currentExpirationTime,
+      @Nullable Integer extendedRegistrationYears) {
     // We must cap registration at the max years (aka 10), even if that truncates the last year.
     return earliestOf(
         leapSafeAddYears(
-            currentExpirationTime, Optional.fromNullable(extendedRegistrationYears).or(0)),
+            currentExpirationTime,
+            Optional.ofNullable(extendedRegistrationYears).orElse(0)),
         leapSafeAddYears(now, MAX_REGISTRATION_YEARS));
   }
 
@@ -352,7 +338,8 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
   }
 
   /** A builder for constructing {@link DomainResource}, since it is immutable. */
-  public static class Builder extends DomainBase.Builder<DomainResource, Builder> {
+  public static class Builder extends DomainBase.Builder<DomainResource, Builder>
+      implements BuilderWithTransferData<Builder> {
 
     public Builder() {}
 
@@ -362,6 +349,10 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
 
     @Override
     public DomainResource build() {
+      // If TransferData is totally empty, set it to null.
+      if (TransferData.EMPTY.equals(getInstance().transferData)) {
+        setTransferData(null);
+      }
       // A DomainResource has status INACTIVE if there are no nameservers.
       if (getInstance().getNameservers().isEmpty()) {
         addStatusValue(StatusValue.INACTIVE);
@@ -436,5 +427,18 @@ public class DomainResource extends DomainBase implements ForeignKeyedEppResourc
       getInstance().gracePeriods = difference(getInstance().getGracePeriods(), gracePeriod);
       return this;
     }
+
+    @Override
+    public Builder setTransferData(TransferData transferData) {
+      getInstance().transferData = transferData;
+      return thisCastToDerived();
+    }
+
+    @Override
+    public Builder setLastTransferTime(DateTime lastTransferTime) {
+      getInstance().lastTransferTime = lastTransferTime;
+      return thisCastToDerived();
+    }
   }
 }
+

@@ -7,29 +7,24 @@ licenses(["notice"])  # Apache 2.0
 
 load("//java/com/google/testing/builddefs:GenTestRules.bzl", "GenTestRules")
 
-
 java_library(
     name = "clouddns",
     srcs = glob(["*Test.java"]),
     deps = [
-        "//apiserving/discoverydata/cloud/dns:cloud_dns_v2beta1_versioned",
-        "//java/com/google/common/base",
-        "//java/com/google/common/collect",
-        "//java/com/google/common/io",
-        "//java/com/google/common/net",
-        "//java/com/google/common/util/concurrent",
-        "//third_party/java/joda_time",
-        "//third_party/java/jsr305_annotations",
-        "//third_party/java/jsr330_inject",
-        "//third_party/java/junit",
-        "//third_party/java/mockito",
-        "//third_party/java/objectify:objectify-v4_1",
-        "//third_party/java/servlet/servlet_api",
-        "//third_party/java/truth",
         "//java/google/registry/dns/writer/clouddns",
         "//java/google/registry/model",
         "//java/google/registry/util",
         "//javatests/google/registry/testing",
+        "//third_party/objectify:objectify-v4_1",
+        "@com_google_apis_google_api_services_dns",
+        "@com_google_code_findbugs_jsr305",
+        "@com_google_guava",
+        "@com_google_truth",
+        "@com_google_truth_extensions_truth_java8_extension",
+        "@javax_servlet_api",
+        "@joda_time",
+        "@junit",
+        "@org_mockito_all",
     ],
 )
 

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,15 +19,15 @@ import static google.registry.util.ListNamingUtils.convertFilePathToName;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.beust.jcommander.Parameters;
-import com.google.common.base.Optional;
 import com.google.common.base.Strings;
 import google.registry.model.registry.label.ReservedList;
 import google.registry.model.registry.label.ReservedList.Builder;
 import google.registry.util.SystemClock;
 import java.nio.file.Files;
+import java.util.Optional;
 
 /** Command to safely update {@link ReservedList} on Datastore. */
-@Parameters(separators = " =", commandDescription = "Update a ReservedList in datastore.")
+@Parameters(separators = " =", commandDescription = "Update a ReservedList in Datastore.")
 final class UpdateReservedListCommand extends CreateOrUpdateReservedListCommand {
 
   @Override

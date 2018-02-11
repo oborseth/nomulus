@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import static com.google.common.base.MoreObjects.toStringHelper;
 import static google.registry.util.CollectionUtils.nullToEmpty;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
+import java.util.Optional;
 import java.util.Set;
 import javax.servlet.http.HttpSession;
 
@@ -48,12 +48,12 @@ public class HttpSessionMetadata implements SessionMetadata {
   @Override
   @SuppressWarnings("unchecked")
   public Set<String> getServiceExtensionUris() {
-    return (Set<String>) session.getAttribute(SERVICE_EXTENSIONS);
+    return nullToEmpty((Set<String>) session.getAttribute(SERVICE_EXTENSIONS));
   }
 
   @Override
   public int getFailedLoginAttempts() {
-    return Optional.fromNullable((Integer) session.getAttribute(FAILED_LOGIN_ATTEMPTS)).or(0);
+    return Optional.ofNullable((Integer) session.getAttribute(FAILED_LOGIN_ATTEMPTS)).orElse(0);
   }
 
   @Override

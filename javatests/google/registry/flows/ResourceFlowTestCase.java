@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,22 +14,27 @@
 
 package google.registry.flows;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.model.EppResourceUtils.loadByForeignKey;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.model.tmch.ClaimsListShardTest.createTestClaimsListShard;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
+import static google.registry.testing.LogsSubject.assertAboutLogs;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
 
-import com.google.common.base.Predicate;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Streams;
+import com.google.common.testing.TestLogHandler;
 import com.googlecode.objectify.Key;
-import google.registry.flows.EppException.CommandUseErrorException;
+import google.registry.flows.FlowUtils.NotLoggedInException;
 import google.registry.model.EppResource;
 import google.registry.model.EppResourceUtils;
 import google.registry.model.domain.DomainApplication;
 import google.registry.model.domain.launch.ApplicationIdTargetExtension;
+import google.registry.model.eppcommon.Trid;
 import google.registry.model.eppinput.EppInput.ResourceCommandWrapper;
 import google.registry.model.eppinput.ResourceCommand;
 import google.registry.model.index.EppResourceIndex;
@@ -38,8 +43,13 @@ import google.registry.model.tmch.ClaimsListShard.ClaimsListRevision;
 import google.registry.model.tmch.ClaimsListShard.ClaimsListSingleton;
 import google.registry.testing.TaskQueueHelper.TaskMatcher;
 import google.registry.util.TypeUtils.TypeInstantiator;
+import java.util.Optional;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
+import org.json.simple.JSONValue;
+import org.junit.Before;
 import org.junit.Test;
 
 /**
@@ -51,9 +61,19 @@ import org.junit.Test;
 public abstract class ResourceFlowTestCase<F extends Flow, R extends EppResource>
     extends FlowTestCase<F> {
 
+  private final TestLogHandler logHandler = new TestLogHandler();
+
+  @Before
+  public void beforeResourceFlowTestCase() {
+    // Attach TestLogHandler to the root logger so it has access to all log messages.
+    // Note that in theory for assertIcannReportingActivityFieldLogged() below it would suffice to
+    // attach it only to the FlowRunner logger, but for some reason this doesn't work for all flows.
+    Logger.getLogger("").addHandler(logHandler);
+  }
+
   protected R reloadResourceByForeignKey(DateTime now) throws Exception {
-    // Force the session to be cleared so that when we read it back, we read from the datastore and
-    // not from the transaction cache or memcache.
+    // Force the session to be cleared so that when we read it back, we read from Datastore and not
+    // from the transaction's session cache.
     ofy().clearSessionCache();
     return loadByForeignKey(getResourceClass(), getUniqueIdFromCommand(), now);
   }
@@ -87,9 +107,11 @@ public abstract class ResourceFlowTestCase<F extends Flow, R extends EppResource
    * the test code rather than the production code.
    */
   protected String getUniqueIdFromCommand() throws Exception {
-    ApplicationIdTargetExtension extension =
+    Optional<ApplicationIdTargetExtension> extension =
         eppLoader.getEpp().getSingleExtension(ApplicationIdTargetExtension.class);
-    return extension == null ? getResourceCommand().getTargetId() : extension.getApplicationId();
+    return extension.isPresent()
+        ? extension.get().getApplicationId()
+        : getResourceCommand().getTargetId();
   }
 
   protected Class<R> getResourceClass() {
@@ -114,41 +136,64 @@ public abstract class ResourceFlowTestCase<F extends Flow, R extends EppResource
   @Test
   public void testRequiresLogin() throws Exception {
     sessionMetadata.setClientId(null);
-    thrown.expect(CommandUseErrorException.class);
-    runFlow();
+    EppException thrown = expectThrows(NotLoggedInException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   /**
-   * Confirms that an EppResourceIndex entity exists in datastore for a given resource.
+   * Confirms that an EppResourceIndex entity exists in Datastore for a given resource.
    */
   protected static <T extends EppResource> void assertEppResourceIndexEntityFor(final T resource) {
-    ImmutableList<EppResourceIndex> indices = FluentIterable
-        .from(ofy().load()
-            .type(EppResourceIndex.class)
-            .filter("kind", Key.getKind(resource.getClass())))
-        .filter(new Predicate<EppResourceIndex>() {
-            @Override
-            public boolean apply(EppResourceIndex index) {
-              return Key.create(resource).equals(index.getKey())
-                  && ofy().load().key(index.getKey()).now().equals(resource);
-            }})
-        .toList();
+    ImmutableList<EppResourceIndex> indices =
+        Streams.stream(
+                ofy()
+                    .load()
+                    .type(EppResourceIndex.class)
+                    .filter("kind", Key.getKind(resource.getClass())))
+            .filter(
+                index ->
+                    Key.create(resource).equals(index.getKey())
+                        && ofy().load().key(index.getKey()).now().equals(resource))
+            .collect(toImmutableList());
     assertThat(indices).hasSize(1);
     assertThat(indices.get(0).getBucket())
         .isEqualTo(EppResourceIndexBucket.getBucketKey(Key.create(resource)));
   }
 
   /** Asserts the presence of a single enqueued async contact or host deletion */
-  protected static <T extends EppResource> void assertAsyncDeletionTaskEnqueued(
-      T resource, String requestingClientId, boolean isSuperuser) throws Exception {
-    String expectedPayload =
-        String.format(
-            "resourceKey=%s&requestingClientId=%s&isSuperuser=%s",
-            Key.create(resource).getString(), requestingClientId, Boolean.toString(isSuperuser));
+  protected <T extends EppResource> void assertAsyncDeletionTaskEnqueued(
+      T resource, String requestingClientId, Trid trid, boolean isSuperuser) throws Exception {
     assertTasksEnqueued(
         "async-delete-pull",
         new TaskMatcher()
             .etaDelta(Duration.standardSeconds(75), Duration.standardSeconds(105)) // expected: 90
-            .payload(expectedPayload));
+            .param("resourceKey", Key.create(resource).getString())
+            .param("requestingClientId", requestingClientId)
+            .param("clientTransactionId", trid.getClientTransactionId())
+            .param("serverTransactionId", trid.getServerTransactionId())
+            .param("isSuperuser", Boolean.toString(isSuperuser))
+            .param("requestedTime", clock.nowUtc().toString()));
+  }
+
+
+  protected void assertClientIdFieldLogged(String clientId) {
+    assertAboutLogs().that(logHandler)
+        .hasLogAtLevelWithMessage(Level.INFO, "FLOW-LOG-SIGNATURE-METADATA")
+        .which()
+        .contains("\"clientId\":" + JSONValue.toJSONString(clientId));
+  }
+
+  protected void assertTldsFieldLogged(String... tlds) {
+    assertAboutLogs().that(logHandler)
+        .hasLogAtLevelWithMessage(Level.INFO, "FLOW-LOG-SIGNATURE-METADATA")
+        .which()
+        .contains("\"tlds\":" + JSONValue.toJSONString(ImmutableList.copyOf(tlds)));
+  }
+
+  protected void assertIcannReportingActivityFieldLogged(String fieldName) {
+    assertAboutLogs().that(logHandler)
+        .hasLogAtLevelWithMessage(Level.INFO, "FLOW-LOG-SIGNATURE-METADATA")
+        .which()
+        .contains("\"icannActivityReportField\":" + JSONValue.toJSONString(fieldName));
   }
 }

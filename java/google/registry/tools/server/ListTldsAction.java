@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,23 +14,27 @@
 
 package google.registry.tools.server;
 
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static google.registry.model.registry.Registries.getTlds;
 import static google.registry.request.Action.Method.GET;
 import static google.registry.request.Action.Method.POST;
 
-import com.google.common.base.Function;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import google.registry.model.registry.Registry;
 import google.registry.request.Action;
+import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
 import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /** An action that lists top-level domains, for use by the {@code nomulus list_tlds} command. */
-@Action(path = ListTldsAction.PATH, method = {GET, POST})
+@Action(
+  path = ListTldsAction.PATH,
+  method = {GET, POST},
+  auth = Auth.AUTH_INTERNAL_OR_ADMIN
+)
 public final class ListTldsAction extends ListObjectsAction<Registry> {
 
   public static final String PATH = "/_dr/admin/list/tlds";
@@ -45,13 +49,7 @@ public final class ListTldsAction extends ListObjectsAction<Registry> {
 
   @Override
   public ImmutableSet<Registry> loadObjects() {
-    return FluentIterable.from(getTlds())
-        .transform(new Function<String, Registry>() {
-            @Override
-            public Registry apply(String tldString) {
-              return Registry.get(tldString);
-            }})
-        .toSet();
+    return getTlds().stream().map(Registry::get).collect(toImmutableSet());
   }
 
   @Override

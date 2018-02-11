@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,21 +14,23 @@
 
 package google.registry.ui.server.registrar;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static google.registry.model.ofy.ObjectifyService.ofy;
+import static google.registry.util.PreconditionsUtils.checkArgumentPresent;
 
 import com.google.appengine.api.users.User;
-import com.google.appengine.api.users.UserService;
-import com.google.common.base.Optional;
-import com.google.common.base.Predicate;
-import com.google.common.collect.FluentIterable;
+import com.google.common.base.Strings;
+import com.googlecode.objectify.Key;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.model.registrar.Registrar;
 import google.registry.model.registrar.RegistrarContact;
+import google.registry.request.HttpException.ForbiddenException;
+import google.registry.request.auth.AuthResult;
+import google.registry.request.auth.UserAuthInfo;
 import google.registry.util.FormattingLogger;
+import java.util.Optional;
 import javax.annotation.CheckReturnValue;
-import javax.annotation.Nonnull;
 import javax.annotation.concurrent.Immutable;
 import javax.inject.Inject;
 import javax.servlet.http.HttpServletRequest;
@@ -38,61 +40,112 @@ import javax.servlet.http.HttpSession;
 @Immutable
 public class SessionUtils {
 
-  private static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
+  static final FormattingLogger logger = FormattingLogger.getLoggerForCallerClass();
 
   public static final String CLIENT_ID_ATTRIBUTE = "clientId";
 
-  private final UserService userService;
-
   @Inject
-  public SessionUtils(UserService userService) {
-    this.userService = checkNotNull(userService);
+  @Config("registryAdminClientId")
+  String registryAdminClientId;
+
+  @Inject public SessionUtils() {}
+
+  /**
+   * Checks that the authentication result indicates a user that has access to the registrar
+   * console, then gets the associated registrar.
+   *
+   * <p>Throws a {@link ForbiddenException} if the user is not logged in, or not authorized to use
+   * the registrar console.
+   */
+  @CheckReturnValue
+  Registrar getRegistrarForAuthResult(HttpServletRequest request, AuthResult authResult) {
+    if (!authResult.userAuthInfo().isPresent()) {
+      throw new ForbiddenException("Not logged in");
+    }
+    if (!checkRegistrarConsoleLogin(request, authResult.userAuthInfo().get())) {
+      throw new ForbiddenException("Not authorized to access Registrar Console");
+    }
+    String clientId = getRegistrarClientId(request);
+    return checkArgumentPresent(
+        Registrar.loadByClientIdCached(clientId), "Registrar %s not found", clientId);
   }
 
   /**
-   * Checks GAE user has access to Registrar Console.
+   * Checks that the specified user has access to the Registrar Console.
    *
    * <p>This routine will first check the HTTP session (creating one if it doesn't exist) for the
    * {@code clientId} attribute:
    *
    * <ul>
    * <li>If it does not exist, then we will attempt to guess the {@link Registrar} with which the
-   * user's GAIA ID is associated. The {@code clientId} of the first matching {@code Registrar} will
-   * then be stored to the HTTP session.
-   * <li>If it does exist, then we'll fetch the Registrar from the datastore to make sure access
-   * wasn't revoked. This should only cost one memcache read.
+   * user is associated. The {@code clientId} of the first matching {@code Registrar} will then
+   * be stored to the HTTP session.
+   * <li>If it does exist, then we'll fetch the Registrar from Datastore to make sure access
+   * wasn't revoked.
    * </ul>
    *
-   * <p><b>Note:</b> You must ensure the user has logged in before calling this method, for example
-   * by setting {@code @Action(requireLogin = true)}.
+   * <p><b>Note:</b> You must ensure the user has logged in before calling this method.
    *
    * @return {@code false} if user does not have access, in which case the caller should write an
    *     error response and abort the request.
    */
   @CheckReturnValue
-  public boolean checkRegistrarConsoleLogin(HttpServletRequest req) {
+  public boolean checkRegistrarConsoleLogin(HttpServletRequest req, UserAuthInfo userAuthInfo) {
+    checkState(userAuthInfo != null, "No logged in user found");
+    User user = userAuthInfo.user();
     HttpSession session = req.getSession();
-    User user = userService.getCurrentUser();
-    checkState(user != null, "No logged in user found");
     String clientId = (String) session.getAttribute(CLIENT_ID_ATTRIBUTE);
-    if (clientId == null) {
-      Optional<Registrar> registrar = guessRegistrar(user.getUserId());
-      if (!registrar.isPresent()) {
-        logger.infofmt("User not associated with any Registrar: %s (%s)",
-            user.getUserId(), user.getEmail());
-        return false;
-      }
-      verify(hasAccessToRegistrar(registrar.get(), user.getUserId()));
-      session.setAttribute(CLIENT_ID_ATTRIBUTE, registrar.get().getClientId());
-    } else {
+
+    // Use the clientId if it exists
+    if (clientId != null) {
       if (!hasAccessToRegistrar(clientId, user.getUserId())) {
-        logger.infofmt("Registrar Console access revoked: %s for %s (%s)",
-            clientId, user.getEmail(), user.getUserId());
+        logger.infofmt("Registrar Console access revoked: %s", clientId);
         session.invalidate();
         return false;
       }
+      logger.infofmt("Associating user %s with given registrar %s.", user.getUserId(), clientId);
+      return true;
     }
-    return true;
+
+    // The clientId was null, so let's try and find a registrar this user is associated with
+    Optional<Registrar> registrar = findRegistrarForUser(user.getUserId());
+    if (registrar.isPresent()) {
+      verify(hasAccessToRegistrar(registrar.get(), user.getUserId()));
+      logger.infofmt(
+          "Associating user %s with found registrar %s.",
+          user.getUserId(), registrar.get().getClientId());
+      session.setAttribute(CLIENT_ID_ATTRIBUTE, registrar.get().getClientId());
+      return true;
+    }
+
+    // We couldn't guess the registrar, but maybe the user is an admin and we can use the
+    // registryAdminClientId
+    if (userAuthInfo.isUserAdmin()) {
+      if (Strings.isNullOrEmpty(registryAdminClientId)) {
+        logger.infofmt(
+            "Cannot associate admin user %s with configured client Id."
+                + " ClientId is null or empty.",
+            user.getUserId());
+        return false;
+      }
+      if (!Registrar.loadByClientIdCached(registryAdminClientId).isPresent()) {
+        logger.infofmt(
+            "Cannot associate admin user %s with configured client Id %s."
+                + " Registrar does not exist.",
+            user.getUserId(), registryAdminClientId);
+        return false;
+      }
+      logger.infofmt(
+          "User %s is an admin with no associated registrar."
+              + " Automatically associating the user with configured client Id %s.",
+          user.getUserId(), registryAdminClientId);
+      session.setAttribute(CLIENT_ID_ATTRIBUTE, registryAdminClientId);
+      return true;
+    }
+
+    // We couldn't find any relevant clientId
+    logger.infofmt("User not associated with any Registrar: %s", user.getUserId());
+    return false;
   }
 
   /**
@@ -107,41 +160,39 @@ public class SessionUtils {
     return clientId;
   }
 
-  /** @see UserService#isUserLoggedIn() */
-  public boolean isLoggedIn() {
-    return userService.isUserLoggedIn();
-  }
-
   /** Returns first {@link Registrar} that {@code gaeUserId} is authorized to administer. */
-  private static Optional<Registrar> guessRegistrar(String gaeUserId) {
+  private static Optional<Registrar> findRegistrarForUser(String gaeUserId) {
     RegistrarContact contact = ofy().load()
         .type(RegistrarContact.class)
         .filter("gaeUserId", gaeUserId)
         .first().now();
     if (contact == null) {
-      return Optional.absent();
+      return Optional.empty();
     }
-    return Optional.of(ofy().load().key(contact.getParent()).safe());
+    String registrarClientId = contact.getParent().getName();
+    Optional<Registrar> result = Registrar.loadByClientIdCached(registrarClientId);
+    if (!result.isPresent()) {
+      logger.severefmt(
+          "A contact record exists for non-existent registrar: %s.", Key.create(contact));
+    }
+    return result;
   }
 
   /** @see #hasAccessToRegistrar(Registrar, String) */
-  private static boolean hasAccessToRegistrar(String clientId, final String gaeUserId) {
-    Registrar registrar = Registrar.loadByClientId(clientId);
-    if (registrar == null) {
-      logger.warningfmt("Registrar '%s' disappeared from the datastore!", clientId);
+  protected static boolean hasAccessToRegistrar(String clientId, final String gaeUserId) {
+    Optional<Registrar> registrar = Registrar.loadByClientIdCached(clientId);
+    if (!registrar.isPresent()) {
+      logger.warningfmt("Registrar '%s' disappeared from Datastore!", clientId);
       return false;
     }
-    return hasAccessToRegistrar(registrar, gaeUserId);
+    return hasAccessToRegistrar(registrar.get(), gaeUserId);
   }
 
   /** Returns {@code true} if {@code gaeUserId} is listed in contacts. */
   private static boolean hasAccessToRegistrar(Registrar registrar, final String gaeUserId) {
-    return FluentIterable
-        .from(registrar.getContacts())
-        .anyMatch(new Predicate<RegistrarContact>() {
-          @Override
-          public boolean apply(@Nonnull RegistrarContact contact) {
-            return gaeUserId.equals(contact.getGaeUserId());
-          }});
+    return registrar
+        .getContacts()
+        .stream()
+        .anyMatch(contact -> gaeUserId.equals(contact.getGaeUserId()));
   }
 }

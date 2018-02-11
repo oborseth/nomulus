@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,12 @@
 package google.registry.flows;
 
 import static com.google.appengine.api.users.UserServiceFactory.getUserService;
+import static google.registry.testing.DatastoreHelper.loadRegistrar;
 import static google.registry.testing.DatastoreHelper.persistResource;
 
 import com.google.appengine.api.users.User;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import google.registry.model.registrar.Registrar;
 import google.registry.model.registrar.RegistrarContact;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.UserInfo;
@@ -42,12 +43,13 @@ public class EppLoginUserTest extends EppTestCase {
   @Before
   public void initTest() throws Exception {
     User user = getUserService().getCurrentUser();
-    persistResource(new RegistrarContact.Builder()
-        .setParent(Registrar.loadByClientId("NewRegistrar"))
-        .setEmailAddress(user.getEmail())
-        .setGaeUserId(user.getUserId())
-        .setTypes(ImmutableSet.of(RegistrarContact.Type.ADMIN))
-        .build());
+    persistResource(
+        new RegistrarContact.Builder()
+            .setParent(loadRegistrar("NewRegistrar"))
+            .setEmailAddress(user.getEmail())
+            .setGaeUserId(user.getUserId())
+            .setTypes(ImmutableSet.of(RegistrarContact.Type.ADMIN))
+            .build());
     setTransportCredentials(GaeUserCredentials.forCurrentUser(getUserService()));
   }
 
@@ -59,7 +61,13 @@ public class EppLoginUserTest extends EppTestCase {
 
   @Test
   public void testNonAuthedLogin_fails() throws Exception {
-    assertCommandAndResponse("login2_valid.xml", "login_response_unauthorized_role.xml");
+    assertCommandAndResponse(
+        "login2_valid.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of(
+            "MSG", "User id is not allowed to login as requested registrar: person@example.com",
+            "CODE", "2200"));
   }
 
   @Test
@@ -68,7 +76,13 @@ public class EppLoginUserTest extends EppTestCase {
     assertCommandAndResponse("logout.xml", "logout_response.xml");
     assertCommandAndResponse("login_valid.xml", "login_response.xml");
     assertCommandAndResponse("logout.xml", "logout_response.xml");
-    assertCommandAndResponse("login2_valid.xml", "login_response_unauthorized_role.xml");
+    assertCommandAndResponse(
+        "login2_valid.xml",
+        ImmutableMap.of(),
+        "response_error.xml",
+        ImmutableMap.of(
+            "MSG", "User id is not allowed to login as requested registrar: person@example.com",
+            "CODE", "2200"));
   }
 
   @Test

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -62,14 +62,14 @@ public class DiffUtilsTest {
 
   @Test
   public void test_emptyToNullCollection_doesntDisplay() {
-    Map<String, Object> mapA = new HashMap<String, Object>();
+    Map<String, Object> mapA = new HashMap<>();
     mapA.put("a", "jim");
     mapA.put("b", null);
-    Map<String, Object> mapB = new HashMap<String, Object>();
+    Map<String, Object> mapB = new HashMap<>();
     mapB.put("a", "tim");
     mapB.put("b", ImmutableSet.of());
-    // This ensures that it is not outputting a diff of [b -> [null, []].
-    assertThat(prettyPrintEntityDeepDiff(mapA, mapB)).isEqualTo("a -> [jim, tim]\n");
+    // This ensures that it is not outputting a diff of b: null -> [].
+    assertThat(prettyPrintEntityDeepDiff(mapA, mapB)).isEqualTo("a: jim -> tim\n");
   }
 
   @Test

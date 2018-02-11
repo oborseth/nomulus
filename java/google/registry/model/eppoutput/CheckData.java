@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package google.registry.model.eppoutput;
 import com.google.common.collect.ImmutableList;
 import google.registry.model.ImmutableObject;
 import google.registry.model.eppoutput.EppResponse.ResponseData;
+import javax.annotation.Nullable;
 import javax.xml.bind.annotation.XmlAttribute;
 import javax.xml.bind.annotation.XmlElement;
 import javax.xml.bind.annotation.XmlElements;
@@ -88,6 +89,10 @@ public abstract class CheckData extends ImmutableObject implements ResponseData 
       return avail;
     }
 
+    public String getValue() {
+      return value;
+    }
+
     protected static <T extends CheckNameOrID> T init(T instance, boolean avail, String value) {
       instance.avail = avail;
       instance.value = value;
@@ -120,7 +125,7 @@ public abstract class CheckData extends ImmutableObject implements ResponseData 
   /** A version with domain namespacing. */
   @XmlType(namespace = "urn:ietf:params:xml:ns:domain-1.0")
   public static class DomainCheck extends Check {
-    public static DomainCheck create(boolean avail, String name, String reason) {
+    public static DomainCheck create(boolean avail, String name, @Nullable String reason) {
       return init(new DomainCheck(), CheckName.create(avail, name), reason);
     }
 

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,8 +15,6 @@
 package google.registry.tools;
 
 import static com.google.common.io.BaseEncoding.base16;
-import static com.google.common.io.Resources.getResource;
-import static com.google.common.io.Resources.toByteArray;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.flows.EppXmlTransformer.unmarshal;
 import static google.registry.flows.picker.FlowPicker.getFlowClass;
@@ -30,8 +28,8 @@ import static google.registry.testing.DatastoreHelper.newDomainApplication;
 import static google.registry.testing.DatastoreHelper.persistActiveContact;
 import static google.registry.testing.DatastoreHelper.persistActiveHost;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.assertThrows;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
-import static google.registry.util.ResourceUtils.readResourceBytes;
 
 import com.beust.jcommander.ParameterException;
 import com.google.common.collect.ImmutableSet;
@@ -44,25 +42,29 @@ import google.registry.model.domain.secdns.DelegationSignerData;
 import google.registry.model.eppcommon.Trid;
 import google.registry.model.eppinput.EppInput;
 import google.registry.model.reporting.HistoryEntry;
-import google.registry.tools.ServerSideCommand.Connection;
+import google.registry.tools.server.ToolsTestData;
 import java.io.IOException;
 import org.joda.time.DateTime;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
-import org.mockito.Mock;
 
 /** Unit tests for {@link AllocateDomainCommand}. */
 public class AllocateDomainCommandTest extends CommandTestCase<AllocateDomainCommand> {
 
-  @Mock
-  Connection connection;
+  private EppToolVerifier eppVerifier;
 
   @Before
   public void init() throws IOException {
-    command.setConnection(connection);
+    eppVerifier = EppToolVerifier.create(command).expectClientId("TheRegistrar").expectSuperuser();
     createTld("tld", QUIET_PERIOD);
-    createApplication("example-one.tld", "testdata/domain_create_sunrush.xml", "1-TLD");
-    createApplication("example-two.tld", "testdata/domain_create_sunrush2.xml", "2-TLD");
+    createApplication("example-one.tld", "domain_create_sunrush.xml", "1-TLD");
+    createApplication("example-two.tld", "domain_create_sunrush2.xml", "2-TLD");
+  }
+
+  @After
+  public void cleanup() throws Exception {
+    eppVerifier.verifyNoMoreSent();
   }
 
   private void createApplication(String name, String xmlFile, String repoId) throws IOException {
@@ -102,58 +104,54 @@ public class AllocateDomainCommandTest extends CommandTestCase<AllocateDomainCom
             .setParent(application)
             .setClientId("NewRegistrar")
             .setModificationTime(application.getCreationTime())
-            .setTrid(Trid.create("ABC-123"))
-            .setXmlBytes(toByteArray(getResource(AllocateDomainCommandTest.class, xmlFile)))
+            .setTrid(Trid.create("ABC-123", "server-trid"))
+            .setXmlBytes(ToolsTestData.loadBytes(xmlFile).read())
             .build());
-  }
-
-  private EppToolVerifier eppVerifier() {
-    return new EppToolVerifier()
-        .withConnection(connection)
-        .withClientId("TheRegistrar")
-        .asSuperuser();
   }
 
   @Test
   public void testSuccess() throws Exception {
     runCommand("--ids=1-TLD", "--force", "--superuser");
     // NB: These commands are sent as the sponsoring registrar, in this case "TheRegistrar".
-    eppVerifier().verifySent("allocate_domain.xml");
+    eppVerifier.verifySent("allocate_domain.xml");
   }
 
   @Test
   public void testSuccess_multiple() throws Exception {
     runCommand("--ids=1-TLD,2-TLD", "--force", "--superuser");
-    eppVerifier().verifySent("allocate_domain.xml", "allocate_domain2.xml");
+    eppVerifier
+        .verifySent("allocate_domain.xml")
+        .verifySent("allocate_domain2.xml");
   }
 
   @Test
   public void testSuccess_dryRun() throws Exception {
     runCommand("--ids=1-TLD", "--dry_run", "--superuser");
-    eppVerifier().asDryRun().verifySent("allocate_domain.xml");
+    eppVerifier.expectDryRun().verifySent("allocate_domain.xml");
   }
 
   @Test
   public void testFailure_notAsSuperuser() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand("--ids=1-TLD", "--force");
+    assertThrows(IllegalArgumentException.class, () -> runCommand("--ids=1-TLD", "--force"));
   }
 
   @Test
   public void testFailure_forceAndDryRunIncompatible() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommand("--ids=1-TLD", "--force", "--dry_run", "--superuser");
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> runCommand("--ids=1-TLD", "--force", "--dry_run", "--superuser"));
   }
 
   @Test
   public void testFailure_unknownFlag() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommand("--ids=1-TLD", "--force", "--unrecognized=foo", "--superuser");
+    assertThrows(
+        ParameterException.class,
+        () -> runCommand("--ids=1-TLD", "--force", "--unrecognized=foo", "--superuser"));
   }
 
   @Test
   public void testXmlInstantiatesFlow() throws Exception {
-    byte[] xmlBytes = readResourceBytes(getClass(), "testdata/allocate_domain.xml").read();
+    byte[] xmlBytes = ToolsTestData.loadBytes("allocate_domain.xml").read();
     assertThat(getFlowClass(unmarshal(EppInput.class, xmlBytes)))
         .isEqualTo(DomainAllocateFlow.class);
   }

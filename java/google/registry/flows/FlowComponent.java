@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@ package google.registry.flows;
 import dagger.Module;
 import dagger.Provides;
 import dagger.Subcomponent;
-import google.registry.config.ConfigModule;
 import google.registry.dns.DnsModule;
 import google.registry.flows.async.AsyncFlowsModule;
 import google.registry.flows.contact.ContactCheckFlow;
@@ -30,13 +29,14 @@ import google.registry.flows.contact.ContactTransferQueryFlow;
 import google.registry.flows.contact.ContactTransferRejectFlow;
 import google.registry.flows.contact.ContactTransferRequestFlow;
 import google.registry.flows.contact.ContactUpdateFlow;
-import google.registry.flows.domain.ClaimsCheckFlow;
+import google.registry.flows.custom.CustomLogicModule;
 import google.registry.flows.domain.DomainAllocateFlow;
 import google.registry.flows.domain.DomainApplicationCreateFlow;
 import google.registry.flows.domain.DomainApplicationDeleteFlow;
 import google.registry.flows.domain.DomainApplicationInfoFlow;
 import google.registry.flows.domain.DomainApplicationUpdateFlow;
 import google.registry.flows.domain.DomainCheckFlow;
+import google.registry.flows.domain.DomainClaimsCheckFlow;
 import google.registry.flows.domain.DomainCreateFlow;
 import google.registry.flows.domain.DomainDeleteFlow;
 import google.registry.flows.domain.DomainInfoFlow;
@@ -48,6 +48,7 @@ import google.registry.flows.domain.DomainTransferQueryFlow;
 import google.registry.flows.domain.DomainTransferRejectFlow;
 import google.registry.flows.domain.DomainTransferRequestFlow;
 import google.registry.flows.domain.DomainUpdateFlow;
+import google.registry.flows.domain.token.AllocationTokenModule;
 import google.registry.flows.host.HostCheckFlow;
 import google.registry.flows.host.HostCreateFlow;
 import google.registry.flows.host.HostDeleteFlow;
@@ -59,17 +60,16 @@ import google.registry.flows.session.HelloFlow;
 import google.registry.flows.session.LoginFlow;
 import google.registry.flows.session.LogoutFlow;
 import google.registry.model.eppcommon.Trid;
-import google.registry.util.SystemSleeper.SystemSleeperModule;
 
 /** Dagger component for flow classes. */
 @FlowScope
 @Subcomponent(modules = {
+    AllocationTokenModule.class,
     AsyncFlowsModule.class,
-    ConfigModule.class,
+    CustomLogicModule.class,
     DnsModule.class,
     FlowModule.class,
-    FlowComponent.FlowComponentModule.class,
-    SystemSleeperModule.class})
+    FlowComponent.FlowComponentModule.class})
 public interface FlowComponent {
 
   Trid trid();
@@ -86,13 +86,13 @@ public interface FlowComponent {
   ContactTransferRejectFlow contactTransferRejectFlow();
   ContactTransferRequestFlow contactTransferRequestFlow();
   ContactUpdateFlow contactUpdateFlow();
-  ClaimsCheckFlow claimsCheckFlow();
   DomainAllocateFlow domainAllocateFlow();
   DomainApplicationCreateFlow domainApplicationCreateFlow();
   DomainApplicationDeleteFlow domainApplicationDeleteFlow();
   DomainApplicationInfoFlow domainApplicationInfoFlow();
   DomainApplicationUpdateFlow domainApplicationUpdateFlow();
   DomainCheckFlow domainCheckFlow();
+  DomainClaimsCheckFlow domainClaimsCheckFlow();
   DomainCreateFlow domainCreateFlow();
   DomainDeleteFlow domainDeleteFlow();
   DomainInfoFlow domainInfoFlow();
@@ -124,7 +124,7 @@ public interface FlowComponent {
 
   /** Module to delegate injection of a desired {@link Flow}. */
   @Module
-  static class FlowComponentModule {
+  class FlowComponentModule {
     // WARNING: @FlowScope is intentionally omitted here so that we get a fresh Flow instance on
     // each call to Provider<Flow>.get(), to avoid Flow instance re-use upon transaction retries.
     // TODO(b/29874464): fix this in a cleaner way.
@@ -140,13 +140,13 @@ public interface FlowComponent {
           : clazz.equals(ContactTransferRejectFlow.class) ? flows.contactTransferRejectFlow()
           : clazz.equals(ContactTransferRequestFlow.class) ? flows.contactTransferRequestFlow()
           : clazz.equals(ContactUpdateFlow.class) ? flows.contactUpdateFlow()
-          : clazz.equals(ClaimsCheckFlow.class) ? flows.claimsCheckFlow()
           : clazz.equals(DomainAllocateFlow.class) ? flows.domainAllocateFlow()
           : clazz.equals(DomainApplicationCreateFlow.class) ? flows.domainApplicationCreateFlow()
           : clazz.equals(DomainApplicationDeleteFlow.class) ? flows.domainApplicationDeleteFlow()
           : clazz.equals(DomainApplicationInfoFlow.class) ? flows.domainApplicationInfoFlow()
           : clazz.equals(DomainApplicationUpdateFlow.class) ? flows.domainApplicationUpdateFlow()
           : clazz.equals(DomainCheckFlow.class) ? flows.domainCheckFlow()
+          : clazz.equals(DomainClaimsCheckFlow.class) ? flows.domainClaimsCheckFlow()
           : clazz.equals(DomainCreateFlow.class) ? flows.domainCreateFlow()
           : clazz.equals(DomainDeleteFlow.class) ? flows.domainDeleteFlow()
           : clazz.equals(DomainInfoFlow.class) ? flows.domainInfoFlow()

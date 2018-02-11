@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,11 +32,11 @@ import google.registry.gcs.GcsUtils;
 import google.registry.keyring.api.Keyring;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.BouncyCastleProviderRule;
+import google.registry.testing.FakeKeyringModule;
 import google.registry.testing.GcsTestingUtils;
 import google.registry.testing.GpgSystemCommandRule;
-import google.registry.testing.Providers;
+import google.registry.testing.ShardableTestCase;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -53,9 +53,9 @@ import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link BrdaCopyAction}. */
 @RunWith(JUnit4.class)
-public class BrdaCopyActionTest {
+public class BrdaCopyActionTest extends ShardableTestCase {
 
-  private static final ByteSource DEPOSIT_XML = RdeTestData.get("deposit_full.xml");  // 2010-10-17
+  private static final ByteSource DEPOSIT_XML = RdeTestData.loadBytes("deposit_full.xml");
 
   private static final GcsFilename STAGE_FILE =
       new GcsFilename("keg", "lol_2010-10-17_thin_S1_R0.xml.ghostryde");
@@ -76,8 +76,8 @@ public class BrdaCopyActionTest {
 
   @Rule
   public final GpgSystemCommandRule gpg = new GpgSystemCommandRule(
-      RdeTestData.get("pgp-public-keyring.asc"),
-      RdeTestData.get("pgp-private-keyring-escrow.asc"));
+      RdeTestData.loadBytes("pgp-public-keyring.asc"),
+      RdeTestData.loadBytes("pgp-private-keyring-escrow.asc"));
 
   private static PGPPublicKey encryptKey;
   private static PGPPrivateKey decryptKey;
@@ -86,7 +86,7 @@ public class BrdaCopyActionTest {
 
   @BeforeClass
   public static void beforeClass() {
-    try (Keyring keyring = new RdeKeyringModule().get()) {
+    try (Keyring keyring = new FakeKeyringModule().get()) {
       encryptKey = keyring.getRdeStagingEncryptionKey();
       decryptKey = keyring.getRdeStagingDecryptionKey();
       receiverKey = keyring.getRdeReceiverKey();
@@ -102,9 +102,9 @@ public class BrdaCopyActionTest {
   public void before() throws Exception {
     action.gcsUtils = gcsUtils;
     action.ghostryde = new Ghostryde(23);
-    action.pgpCompressionFactory = new RydePgpCompressionOutputStreamFactory(Providers.of(1024));
-    action.pgpEncryptionFactory = new RydePgpEncryptionOutputStreamFactory(Providers.of(1024));
-    action.pgpFileFactory = new RydePgpFileOutputStreamFactory(Providers.of(1024));
+    action.pgpCompressionFactory = new RydePgpCompressionOutputStreamFactory(() -> 1024);
+    action.pgpEncryptionFactory = new RydePgpEncryptionOutputStreamFactory(() -> 1024);
+    action.pgpFileFactory = new RydePgpFileOutputStreamFactory(() -> 1024);
     action.pgpSigningFactory = new RydePgpSigningOutputStreamFactory();
     action.tarFactory = new RydeTarOutputStreamFactory();
     action.tld = "lol";
@@ -137,8 +137,14 @@ public class BrdaCopyActionTest {
 
     File rydeTmp = new File(gpg.getCwd(), "ryde");
     Files.write(readGcsFile(gcsService, RYDE_FILE), rydeTmp);
-
-    Process pid = gpg.exec("gpg", "--list-packets", rydeTmp.toString());
+    Process pid =
+        gpg.exec(
+            "gpg",
+            "--list-packets",
+            "--ignore-mdc-error",
+            "--keyid-format",
+            "long",
+            rydeTmp.toString());
     String stdout = slurp(pid.getInputStream());
     String stderr = slurp(pid.getErrorStream());
     assertWithMessage(stderr).that(pid.waitFor()).isEqualTo(0);
@@ -166,7 +172,9 @@ public class BrdaCopyActionTest {
     assertWithMessage("Unexpected asymmetric encryption algorithm")
         .that(stderr)
         .contains("encrypted with 2048-bit RSA key");
-    assertWithMessage("Unexpected receiver public key").that(stderr).contains("ID 54E1EB0F");
+    assertWithMessage("Unexpected receiver public key")
+        .that(stderr)
+        .contains("ID 7F9084EE54E1EB0F");
   }
 
   @Test
@@ -186,7 +194,7 @@ public class BrdaCopyActionTest {
     assertThat(stderr).contains("rde-unittest@registry.test");
   }
 
-  private String slurp(InputStream is) throws FileNotFoundException, IOException {
+  private String slurp(InputStream is) throws IOException {
     return CharStreams.toString(new InputStreamReader(is, UTF_8));
   }
 }

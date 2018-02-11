@@ -36,21 +36,22 @@
   "nameservers": [
     {
       "status": [
-        "active"
+        "active",
+        "associated"
       ],
-      "handle": "8-ROID",
+      "handle": "%NAMESERVER1ROID%",
       "links": [
         {
-          "href": "https://example.com/rdap/nameserver/ns1.cat.lol",
+          "href": "https://example.com/rdap/nameserver/%NAMESERVER1NAME%",
           "type": "application/rdap+json",
           "rel": "self",
-          "value": "https://example.com/rdap/nameserver/ns1.cat.lol"
+          "value": "https://example.com/rdap/nameserver/%NAMESERVER1NAME%"
         }
       ],
-      "ldhName": "ns1.cat.lol",
+      "ldhName": "%NAMESERVER1NAME%",
       "ipAddresses": {
         "v4": [
-          "1.2.3.4"
+          "%NAMESERVER1ADDRESS%"
         ]
       },
       "events": [
@@ -68,21 +69,22 @@
     },
     {
       "status": [
-        "active"
+        "active",
+        "associated"
       ],
-      "handle": "A-ROID",
+      "handle": "%NAMESERVER2ROID%",
       "links": [
         {
-          "href": "https://example.com/rdap/nameserver/ns2.cat.lol",
+          "href": "https://example.com/rdap/nameserver/%NAMESERVER2NAME%",
           "type": "application/rdap+json",
           "rel": "self",
-          "value": "https://example.com/rdap/nameserver/ns2.cat.lol"
+          "value": "https://example.com/rdap/nameserver/%NAMESERVER2NAME%"
         }
       ],
-      "ldhName": "ns2.cat.lol",
+      "ldhName": "%NAMESERVER2NAME%",
       "ipAddresses": {
         "v6": [
-          "bad:f00d:cafe::15:beef"
+          "%NAMESERVER2ADDRESS%"
         ]
       },
       "events": [
@@ -103,18 +105,19 @@
   "entities": [
     {
       "status": [
-        "active"
+        "active",
+        "associated"
       ],
-      "handle": "4-ROID",
+      "handle": "%CONTACT1ROID%",
       "roles": [
         "administrative"
       ],
       "links": [
         {
-          "href": "https://example.com/rdap/entity/4-ROID",
+          "href": "https://example.com/rdap/entity/%CONTACT1ROID%",
           "type": "application/rdap+json",
           "rel": "self",
-          "value": "https://example.com/rdap/entity/4-ROID"
+          "value": "https://example.com/rdap/entity/%CONTACT1ROID%"
         }
       ],
       "events": [
@@ -195,18 +198,19 @@
     },
     {
       "status": [
-        "active"
+        "active",
+        "associated"
       ],
-      "handle": "6-ROID",
+      "handle": "%CONTACT2ROID%",
       "roles": [
         "technical"
       ],
       "links": [
         {
-          "href": "https://example.com/rdap/entity/6-ROID",
+          "href": "https://example.com/rdap/entity/%CONTACT2ROID%",
           "type": "application/rdap+json",
           "rel": "self",
-          "value": "https://example.com/rdap/entity/6-ROID"
+          "value": "https://example.com/rdap/entity/%CONTACT2ROID%"
         }
       ],
       "events": [
@@ -287,18 +291,19 @@
     },
     {
       "status": [
-        "active"
+        "active",
+        "associated"
       ],
-      "handle": "2-ROID",
+      "handle": "%CONTACT3ROID%",
       "roles": [
         "registrant"
       ],
       "links": [
         {
-          "href": "https://example.com/rdap/entity/2-ROID",
+          "href": "https://example.com/rdap/entity/%CONTACT3ROID%",
           "type": "application/rdap+json",
           "rel": "self",
-          "value": "https://example.com/rdap/entity/2-ROID"
+          "value": "https://example.com/rdap/entity/%CONTACT3ROID%"
         }
       ],
       "events": [

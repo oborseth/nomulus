@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@ package google.registry.dns.writer.dnsupdate;
 
 import dagger.Module;
 import dagger.Provides;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import org.joda.time.Duration;
 
 /** Dagger module that provides DNS configuration settings. */
@@ -40,14 +40,5 @@ public class DnsUpdateConfigModule {
   @Config("dnsUpdateTimeout")
   public static Duration provideDnsUpdateTimeout() {
     return Duration.standardSeconds(30);
-  }
-
-  /**
-   * The DNS time-to-live (TTL) for resource records created by the registry.
-   */
-  @Provides
-  @Config("dnsUpdateTimeToLive")
-  public static Duration provideDnsUpdateTimeToLive() {
-    return Duration.standardHours(2);
   }
 }

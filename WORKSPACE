@@ -1,23 +1,26 @@
 workspace(name = "domain_registry")
 
-load("//java/google/registry:repositories.bzl", "domain_registry_repositories")
-
-domain_registry_repositories()
-
+# https://github.com/bazelbuild/rules_closure/releases/tag/0.4.2
 http_archive(
     name = "io_bazel_rules_closure",
-    sha256 = "7d75688c63ac09a55ca092a76c12f8d1e9ee8e7a890f3be6594a4e7d714f0e8a",
-    strip_prefix = "rules_closure-b8841276e73ca677c139802f1168aaad9791dec0",
-    url = "http://bazel-mirror.storage.googleapis.com/github.com/bazelbuild/rules_closure/archive/b8841276e73ca677c139802f1168aaad9791dec0.tar.gz",  # 2016-10-02
+    strip_prefix = "rules_closure-08039ba8ca59f64248bb3b6ae016460fe9c9914f",
+    sha256 = "6691c58a2cd30a86776dd9bb34898b041e37136f2dc7e24cadaeaf599c95c657",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_closure/archive/08039ba8ca59f64248bb3b6ae016460fe9c9914f.tar.gz",
+        "https://github.com/bazelbuild/rules_closure/archive/08039ba8ca59f64248bb3b6ae016460fe9c9914f.tar.gz",  # 2018-01-16
+    ],
 )
 
 load("@io_bazel_rules_closure//closure:defs.bzl", "closure_repositories")
 
 closure_repositories(
-    omit_gson = True,
-    omit_guava = True,
-    omit_icu4j = True,
-    omit_json = True,
-    omit_jsr305 = True,
-    omit_jsr330_inject = True,
+    omit_com_google_code_findbugs_jsr305 = True,
+    omit_com_google_guava = True,
+    omit_com_ibm_icu_icu4j = True,
+    omit_javax_inject = True,
+    omit_org_json = True,
 )
+
+load("//java/google/registry:repositories.bzl", "domain_registry_repositories")
+
+domain_registry_repositories()

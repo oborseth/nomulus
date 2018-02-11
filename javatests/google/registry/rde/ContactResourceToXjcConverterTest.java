@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,10 @@
 package google.registry.rde;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
-import com.google.common.base.Function;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import google.registry.model.contact.ContactAddress;
@@ -88,14 +87,7 @@ public class ContactResourceToXjcConverterTest {
 
     // o  One or more <status> elements that describe the status of the
     //    contact object.
-    assertThat(
-            FluentIterable
-                .from(bean.getStatuses())
-                .transform(new Function<XjcContactStatusType, XjcContactStatusValueType>() {
-                  @Override
-                  public XjcContactStatusValueType apply(XjcContactStatusType status) {
-                    return status.getS();
-                  }}))
+    assertThat(bean.getStatuses().stream().map(XjcContactStatusType::getS))
         .containsExactly(
             XjcContactStatusValueType.CLIENT_DELETE_PROHIBITED,
             XjcContactStatusValueType.SERVER_UPDATE_PROHIBITED);
@@ -300,7 +292,7 @@ public class ContactResourceToXjcConverterTest {
         .setContactId("love-id")
         .setRepoId("2-ROID")
         .setCreationClientId("NewRegistrar")
-        .setCurrentSponsorClientId("TheRegistrar")
+        .setPersistedCurrentSponsorClientId("TheRegistrar")
         .setLastEppUpdateClientId("TheRegistrar")
         .setAuthInfo(ContactAuthInfo.create(PasswordAuth.create("2fooBAR")))
         .setCreationTimeForTest(DateTime.parse("1900-01-01TZ"))
@@ -332,13 +324,12 @@ public class ContactResourceToXjcConverterTest {
                 .setPhoneNumber("+1.2126660001")
                 .build())
         .setTransferData(new TransferData.Builder()
-            .setExtendedRegistrationYears(1)
             .setGainingClientId("TheRegistrar")
             .setLosingClientId("NewRegistrar")
             .setTransferRequestTime(DateTime.parse("1925-04-19TZ"))
             .setPendingTransferExpirationTime(DateTime.parse("1925-04-21TZ"))
             .setTransferStatus(TransferStatus.SERVER_APPROVED)
-            .setTransferRequestTrid(Trid.create("client trid"))
+            .setTransferRequestTrid(Trid.create("client-trid", "server-trid"))
             .build())
         .setDisclose(new Disclose.Builder()
             .setFlag(true)

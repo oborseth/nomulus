@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,23 +14,32 @@
 
 package google.registry.rdap;
 
+import static google.registry.flows.domain.DomainFlowUtils.validateDomainName;
 import static google.registry.model.EppResourceUtils.loadByForeignKey;
 import static google.registry.request.Action.Method.GET;
 import static google.registry.request.Action.Method.HEAD;
+import static google.registry.util.DateTimeUtils.START_OF_TIME;
 
 import com.google.common.collect.ImmutableMap;
+import google.registry.flows.EppException;
 import google.registry.model.domain.DomainResource;
 import google.registry.rdap.RdapJsonFormatter.OutputDataType;
+import google.registry.rdap.RdapMetrics.EndpointType;
 import google.registry.request.Action;
+import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.NotFoundException;
+import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
 import javax.inject.Inject;
 import org.joda.time.DateTime;
 
-/**
- * RDAP (new WHOIS) action for domain requests.
- */
-@Action(path = RdapDomainAction.PATH, method = {GET, HEAD}, isPrefix = true)
+/** RDAP (new WHOIS) action for domain requests. */
+@Action(
+  path = RdapDomainAction.PATH,
+  method = {GET, HEAD},
+  isPrefix = true,
+  auth = Auth.AUTH_PUBLIC
+)
 public class RdapDomainAction extends RdapActionBase {
 
   public static final String PATH = "/rdap/domain/";
@@ -49,17 +58,37 @@ public class RdapDomainAction extends RdapActionBase {
   }
 
   @Override
+  public EndpointType getEndpointType() {
+    return EndpointType.DOMAIN;
+  }
+
+  @Override
   public ImmutableMap<String, Object> getJsonObjectForResource(
-      String pathSearchString, boolean isHeadRequest, String linkBase) {
+      String pathSearchString, boolean isHeadRequest) {
     DateTime now = clock.nowUtc();
     pathSearchString = canonicalizeName(pathSearchString);
-    validateDomainName(pathSearchString);
+    try {
+      validateDomainName(pathSearchString);
+    } catch (EppException e) {
+      throw new BadRequestException(
+          String.format(
+              "%s is not a valid %s: %s",
+              pathSearchString, getHumanReadableObjectTypeName(), e.getMessage()));
+    }
     // The query string is not used; the RDAP syntax is /rdap/domain/mydomain.com.
-    DomainResource domainResource = loadByForeignKey(DomainResource.class, pathSearchString, now);
-    if (domainResource == null) {
+    DomainResource domainResource =
+        loadByForeignKey(
+            DomainResource.class, pathSearchString, shouldIncludeDeleted() ? START_OF_TIME : now);
+    if ((domainResource == null) || !shouldBeVisible(domainResource, now)) {
       throw new NotFoundException(pathSearchString + " not found");
     }
-    return RdapJsonFormatter.makeRdapJsonForDomain(
-        domainResource, true, rdapLinkBase, rdapWhoisServer, now, OutputDataType.FULL);
+    return rdapJsonFormatter.makeRdapJsonForDomain(
+        domainResource,
+        true,
+        fullServletPath,
+        rdapWhoisServer,
+        now,
+        OutputDataType.FULL,
+        getAuthorization());
   }
 }

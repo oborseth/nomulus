@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +14,19 @@
 
 package google.registry.tools;
 
-import static com.google.common.collect.Iterables.transform;
 import static com.google.common.truth.Truth.assertThat;
-import static google.registry.model.registry.label.ReservedListTest.GET_NAME_FUNCTION;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
 import static google.registry.testing.DatastoreHelper.persistPremiumList;
 import static google.registry.testing.DatastoreHelper.persistReservedList;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static org.joda.money.CurrencyUnit.JPY;
 import static org.joda.money.CurrencyUnit.USD;
 import static org.joda.time.DateTimeZone.UTC;
+import static org.joda.time.Duration.standardDays;
 import static org.joda.time.Duration.standardMinutes;
 
 import com.beust.jcommander.ParameterException;
@@ -59,6 +60,7 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
     persistReservedList("xn--q9jyb4c_r1", "foo,FULLY_BLOCKED");
     persistReservedList("xn--q9jyb4c_r2", "moop,FULLY_BLOCKED");
     createTld("xn--q9jyb4c");
+    command.validDnsWriterNames = ImmutableSet.of("VoidDnsWriter", "FooDnsWriter");
   }
 
   @Test
@@ -146,19 +148,22 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
   public void testSuccess_addGracePeriodFlag() throws Exception {
     assertThat(Registry.get("xn--q9jyb4c").getAddGracePeriodLength())
         .isNotEqualTo(standardMinutes(5));
-
     runCommandForced("--add_grace_period=PT300S", "xn--q9jyb4c");
-
     assertThat(Registry.get("xn--q9jyb4c").getAddGracePeriodLength()).isEqualTo(standardMinutes(5));
+  }
+
+  @Test
+  public void testSuccess_sunrushAddGracePeriodFlag() throws Exception {
+    runCommandForced("--sunrush_add_grace_period=P13D", "xn--q9jyb4c");
+    assertThat(Registry.get("xn--q9jyb4c").getSunrushAddGracePeriodLength())
+        .isEqualTo(standardDays(13));
   }
 
   @Test
   public void testSuccess_redemptionGracePeriodFlag() throws Exception {
     assertThat(Registry.get("xn--q9jyb4c").getRedemptionGracePeriodLength())
         .isNotEqualTo(standardMinutes(5));
-
     runCommandForced("--redemption_grace_period=PT300S", "xn--q9jyb4c");
-
     assertThat(Registry.get("xn--q9jyb4c").getRedemptionGracePeriodLength())
         .isEqualTo(standardMinutes(5));
   }
@@ -167,10 +172,24 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
   public void testSuccess_pendingDeleteLengthFlag() throws Exception {
     assertThat(Registry.get("xn--q9jyb4c").getPendingDeleteLength())
         .isNotEqualTo(standardMinutes(5));
-
     runCommandForced("--pending_delete_length=PT300S", "xn--q9jyb4c");
-
     assertThat(Registry.get("xn--q9jyb4c").getPendingDeleteLength()).isEqualTo(standardMinutes(5));
+  }
+
+  @Test
+  public void testSuccess_dnsWriter() throws Exception {
+    assertThat(Registry.get("xn--q9jyb4c").getDnsWriters()).containsExactly("VoidDnsWriter");
+    runCommandForced("--dns_writers=FooDnsWriter", "xn--q9jyb4c");
+    assertThat(Registry.get("xn--q9jyb4c").getDnsWriters()).containsExactly("FooDnsWriter");
+  }
+
+  @Test
+  public void testSuccess_multipleDnsWriters() throws Exception {
+    assertThat(Registry.get("xn--q9jyb4c").getDnsWriters()).containsExactly("VoidDnsWriter");
+
+    runCommandForced("--dns_writers=FooDnsWriter,VoidDnsWriter", "xn--q9jyb4c");
+    assertThat(Registry.get("xn--q9jyb4c").getDnsWriters())
+        .containsExactly("FooDnsWriter", "VoidDnsWriter");
   }
 
   @Test
@@ -262,7 +281,7 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
   public void testSuccess_setReservedLists() throws Exception {
     runCommandForced("--reserved_lists=xn--q9jyb4c_r1,xn--q9jyb4c_r2", "xn--q9jyb4c");
 
-    assertThat(transform(Registry.get("xn--q9jyb4c").getReservedLists(), GET_NAME_FUNCTION))
+    assertThat(Registry.get("xn--q9jyb4c").getReservedLists().stream().map(Key::getName))
         .containsExactly("xn--q9jyb4c_r1", "xn--q9jyb4c_r2");
   }
 
@@ -272,7 +291,7 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
         .setReservedListsByName(ImmutableSet.of("xn--q9jyb4c_r1", "xn--q9jyb4c_r2"))
         .build());
     runCommandForced("--reserved_lists=xn--q9jyb4c_r2", "xn--q9jyb4c");
-    assertThat(transform(Registry.get("xn--q9jyb4c").getReservedLists(), GET_NAME_FUNCTION))
+    assertThat(Registry.get("xn--q9jyb4c").getReservedLists().stream().map(Key::getName))
         .containsExactly("xn--q9jyb4c_r2");
   }
 
@@ -282,7 +301,7 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
         .setReservedListsByName(ImmutableSet.of("xn--q9jyb4c_r1"))
         .build());
     runCommandForced("--add_reserved_lists=xn--q9jyb4c_r2", "xn--q9jyb4c");
-    assertThat(transform(Registry.get("xn--q9jyb4c").getReservedLists(), GET_NAME_FUNCTION))
+    assertThat(Registry.get("xn--q9jyb4c").getReservedLists().stream().map(Key::getName))
         .containsExactly("xn--q9jyb4c_r1", "xn--q9jyb4c_r2");
   }
 
@@ -301,7 +320,7 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
         .setReservedListsByName(ImmutableSet.of("xn--q9jyb4c_r1", "xn--q9jyb4c_r2"))
         .build());
     runCommandForced("--remove_reserved_lists=xn--q9jyb4c_r1", "xn--q9jyb4c");
-    assertThat(transform(Registry.get("xn--q9jyb4c").getReservedLists(), GET_NAME_FUNCTION))
+    assertThat(Registry.get("xn--q9jyb4c").getReservedLists().stream().map(Key::getName))
         .containsExactly("xn--q9jyb4c_r2");
   }
 
@@ -408,6 +427,30 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
   }
 
   @Test
+  public void testSuccess_setTldToDomainCreateRestricted() throws Exception {
+    persistResource(
+        Registry.get("xn--q9jyb4c").asBuilder().setDomainCreateRestricted(false).build());
+    runCommandForced("--domain_create_restricted=true", "xn--q9jyb4c");
+    assertThat(Registry.get("xn--q9jyb4c").getDomainCreateRestricted()).isTrue();
+  }
+
+  @Test
+  public void testSuccess_unsetTldToDomainCreateRestricted() throws Exception {
+    persistResource(
+        Registry.get("xn--q9jyb4c").asBuilder().setDomainCreateRestricted(true).build());
+    runCommandForced("--domain_create_restricted=false", "xn--q9jyb4c");
+    assertThat(Registry.get("xn--q9jyb4c").getDomainCreateRestricted()).isFalse();
+  }
+
+  @Test
+  public void testSuccess_leaveDomainCreateRestrictedStatusUnchanged() throws Exception {
+    persistResource(
+        Registry.get("xn--q9jyb4c").asBuilder().setDomainCreateRestricted(true).build());
+    runCommandForced("xn--q9jyb4c");
+    assertThat(Registry.get("xn--q9jyb4c").getDomainCreateRestricted()).isTrue();
+  }
+
+  @Test
   public void testSuccess_removeLrpPeriod() throws Exception {
     persistResource(
         Registry.get("xn--q9jyb4c").asBuilder()
@@ -421,76 +464,128 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
 
   @Test
   public void testFailure_invalidAddGracePeriod() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced("--add_grace_period=5m", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--add_grace_period=5m", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("Invalid format: \"5m\"");
   }
 
   @Test
   public void testFailure_invalidRedemptionGracePeriod() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced("--redemption_grace_period=5m", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--redemption_grace_period=5m", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("Invalid format: \"5m\"");
   }
 
   @Test
   public void testFailure_invalidPendingDeleteLength() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced("--pending_delete_length=5m", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--pending_delete_length=5m", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("Invalid format: \"5m\"");
   }
 
   @Test
   public void testFailure_invalidTldState() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--tld_state_transitions=" + START_OF_TIME + "=INVALID_STATE", "xn--q9jyb4c");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    "--tld_state_transitions=" + START_OF_TIME + "=INVALID_STATE", "xn--q9jyb4c"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("INVALID_STATE not formatted correctly or has transition times out of order");
   }
 
   @Test
   public void testFailure_invalidTldStateTransitionTime() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--tld_state_transitions=tomorrow=INVALID_STATE", "xn--q9jyb4c");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced("--tld_state_transitions=tomorrow=INVALID_STATE", "xn--q9jyb4c"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("INVALID_STATE not formatted correctly or has transition times out of order");
   }
 
   @Test
   public void testFailure_tldStatesOutOfOrder() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced(
-        String.format(
-            "--tld_state_transitions=%s=SUNRISE,%s=PREDELEGATION", now, now.plusMonths(1)),
-        "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    String.format(
+                        "--tld_state_transitions=%s=SUNRISE,%s=PREDELEGATION",
+                        now, now.plusMonths(1)),
+                    "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("The TLD states are chronologically out of order");
   }
 
   @Test
   public void testFailure_duplicateTldStateTransitions() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced(
-        String.format("--tld_state_transitions=%s=SUNRISE,%s=SUNRISE", now, now.plusMonths(1)),
-        "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    String.format(
+                        "--tld_state_transitions=%s=SUNRISE,%s=SUNRISE", now, now.plusMonths(1)),
+                    "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("The TLD states are chronologically out of order");
   }
 
   @Test
   public void testFailure_duplicateTldStateTransitionTimes() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced(
-        String.format("--tld_state_transitions=%s=PREDELEGATION,%s=SUNRISE", now, now),
-        "xn--q9jyb4c");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    String.format("--tld_state_transitions=%s=PREDELEGATION,%s=SUNRISE", now, now),
+                    "xn--q9jyb4c"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("not formatted correctly or has transition times out of order");
   }
 
   @Test
   public void testFailure_outOfOrderTldStateTransitionTimes() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced(
-        String.format("--tld_state_transitions=%s=PREDELEGATION,%s=SUNRISE", now, now.minus(1)),
-        "xn--q9jyb4c");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    String.format(
+                        "--tld_state_transitions=%s=PREDELEGATION,%s=SUNRISE",
+                        now, now.minus(Duration.millis(1))),
+                    "xn--q9jyb4c"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("not formatted correctly or has transition times out of order");
   }
 
   @Test
   public void testFailure_bothTldStateFlags() throws Exception {
-    thrown.expect(
-        IllegalArgumentException.class,
-        "Don't pass both --set_current_tld_state and --tld_state_transitions");
-    runCommandForced(
-        String.format("--tld_state_transitions=%s=PREDELEGATION,%s=SUNRISE", now, now.plusDays(1)),
-        "--set_current_tld_state=GENERAL_AVAILABILITY",
-        "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    String.format(
+                        "--tld_state_transitions=%s=PREDELEGATION,%s=SUNRISE",
+                        now, now.plusDays(1)),
+                    "--set_current_tld_state=GENERAL_AVAILABILITY",
+                    "xn--q9jyb4c"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Don't pass both --set_current_tld_state and --tld_state_transitions");
     }
 
   @Test
@@ -502,9 +597,11 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
                     START_OF_TIME, TldState.PREDELEGATION,
                     now.minusMonths(1), TldState.GENERAL_AVAILABILITY))
             .build());
-    thrown.expect(
-        IllegalArgumentException.class, "The TLD states are chronologically out of order");
-    runCommandForced("--set_current_tld_state=SUNRISE", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--set_current_tld_state=SUNRISE", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("The TLD states are chronologically out of order");
   }
 
   @Test
@@ -516,10 +613,13 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
                     START_OF_TIME, TldState.PREDELEGATION,
                     now.plusMonths(1), TldState.GENERAL_AVAILABILITY))
             .build());
-    thrown.expect(
-        IllegalArgumentException.class,
-        " when there is a later transition already scheduled");
-    runCommandForced("--set_current_tld_state=SUNRISE", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--set_current_tld_state=SUNRISE", "xn--q9jyb4c"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains(" when there is a later transition already scheduled");
   }
 
   @Test
@@ -531,84 +631,139 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
                     START_OF_TIME, TldState.PREDELEGATION,
                     now.minusMonths(1), TldState.GENERAL_AVAILABILITY))
             .build());
-    thrown.expect(
-        IllegalArgumentException.class,
-        "--set_current_tld_state is not safe to use in production.");
-    runCommandInEnvironment(
-        RegistryToolEnvironment.PRODUCTION,
-        "--set_current_tld_state=SUNRISE",
-        "xn--q9jyb4c",
-        "--force");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandInEnvironment(
+                    RegistryToolEnvironment.PRODUCTION,
+                    "--set_current_tld_state=SUNRISE",
+                    "xn--q9jyb4c",
+                    "--force"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("--set_current_tld_state is not safe to use in production.");
   }
 
   @Test
   public void testFailure_invalidRenewBillingCost() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced(
-        String.format("--renew_billing_cost_transitions=%s=US42", START_OF_TIME),
-        "xn--q9jyb4c");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    String.format("--renew_billing_cost_transitions=%s=US42", START_OF_TIME),
+                    "xn--q9jyb4c"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("not formatted correctly or has transition times out of order");
   }
 
   @Test
   public void testFailure_negativeRenewBillingCost() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced(
-        String.format("--renew_billing_cost_transitions=%s=USD-42", START_OF_TIME),
-        "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    String.format("--renew_billing_cost_transitions=%s=USD-42", START_OF_TIME),
+                    "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("Renew billing cost cannot be negative");
   }
 
   @Test
   public void testFailure_invalidRenewCostTransitionTime() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced("--renew_billing_cost_transitions=tomorrow=USD 1", "xn--q9jyb4c");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced("--renew_billing_cost_transitions=tomorrow=USD 1", "xn--q9jyb4c"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("not formatted correctly or has transition times out of order");
   }
 
   @Test
   public void testFailure_duplicateRenewCostTransitionTimes() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced(
-        String.format("--renew_billing_cost_transitions=\"%s=USD 1,%s=USD 2\"", now, now),
-        "xn--q9jyb4c");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    String.format(
+                        "--renew_billing_cost_transitions=\"%s=USD 1,%s=USD 2\"", now, now),
+                    "xn--q9jyb4c"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("not formatted correctly or has transition times out of order");
   }
 
   @Test
   public void testFailure_outOfOrderRenewCostTransitionTimes() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced(
-        String.format("--renew_billing_cost_transitions=\"%s=USD 1,%s=USD 2\"", now, now.minus(1)),
-        "xn--q9jyb4c");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    String.format(
+                        "--renew_billing_cost_transitions=\"%s=USD 1,%s=USD 2\"",
+                        now, now.minus(Duration.millis(1))),
+                    "xn--q9jyb4c"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("not formatted correctly or has transition times out of order");
   }
 
   @Test
   public void testFailure_noTldName() throws Exception {
-    thrown.expect(ParameterException.class);
-    runCommandForced();
+    ParameterException thrown = expectThrows(ParameterException.class, this::runCommandForced);
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Main parameters are required (\"Names of the TLDs\")");
   }
 
   @Test
-  public void testFailure_oneArgumentDoesNotExist() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced("foo", "xn--q9jyb4c");
+  public void testFailure_oneTldDoesNotExist() throws Exception {
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> runCommandForced("foo", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("TLD foo does not exist");
   }
 
   @Test
   public void testFailure_duplicateArguments() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced("xn--q9jyb4c", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class, () -> runCommandForced("xn--q9jyb4c", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("Duplicate arguments found: 'xn--q9jyb4c'");
   }
 
   @Test
   public void testFailure_tldDoesNotExist() throws Exception {
-    thrown.expect(IllegalArgumentException.class);
-    runCommandForced("foobarbaz");
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> runCommandForced("foobarbaz"));
+    assertThat(thrown).hasMessageThat().contains("TLD foobarbaz does not exist");
+  }
+
+  @Test
+  public void testFailure_specifiedDnsWriter_doesntExist() throws Exception {
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("xn--q9jyb4c", "--dns_writers=InvalidDnsWriter"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Invalid DNS writer name(s) specified: [InvalidDnsWriter]");
   }
 
   @Test
   public void testFailure_setNonExistentReservedLists() throws Exception {
-    thrown.expect(
-        IllegalStateException.class,
-        "Could not find reserved list xn--q9jyb4c_ZZZ to add to the tld");
-    runCommandForced("--reserved_lists", "xn--q9jyb4c_ZZZ", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--reserved_lists", "xn--q9jyb4c_ZZZ", "xn--q9jyb4c"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Could not find reserved list xn--q9jyb4c_ZZZ to add to the tld");
   }
 
   @Test
@@ -616,8 +771,11 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
     persistResource(Registry.get("xn--q9jyb4c").asBuilder()
         .setReservedListsByName(ImmutableSet.of("xn--q9jyb4c_r1", "xn--q9jyb4c_r2"))
         .build());
-    thrown.expect(IllegalArgumentException.class, "xn--q9jyb4c_r1");
-    runCommandForced("--add_reserved_lists=xn--q9jyb4c_r1", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--add_reserved_lists=xn--q9jyb4c_r1", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("xn--q9jyb4c_r1");
   }
 
   @Test
@@ -625,17 +783,24 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
     persistResource(Registry.get("xn--q9jyb4c").asBuilder()
         .setReservedListsByName(ImmutableSet.of("xn--q9jyb4c_r1", "xn--q9jyb4c_r2"))
         .build());
-    thrown.expect(IllegalArgumentException.class, "xn--q9jyb4c_Z");
-    runCommandForced("--remove_reserved_lists=xn--q9jyb4c_Z", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--remove_reserved_lists=xn--q9jyb4c_Z", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("xn--q9jyb4c_Z");
   }
 
   @Test
   public void testFailure_cantAddAndRemoveSameReservedListSimultaneously() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "xn--q9jyb4c_r1");
-    runCommandForced(
-        "--add_reserved_lists=xn--q9jyb4c_r1",
-        "--remove_reserved_lists=xn--q9jyb4c_r1",
-        "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--add_reserved_lists=xn--q9jyb4c_r1",
+                    "--remove_reserved_lists=xn--q9jyb4c_r1",
+                    "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("xn--q9jyb4c_r1");
   }
 
   @Test
@@ -644,8 +809,11 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
         Registry.get("xn--q9jyb4c").asBuilder()
         .setAllowedRegistrantContactIds(ImmutableSet.of("alice", "bob"))
         .build());
-    thrown.expect(IllegalArgumentException.class, "alice");
-    runCommandForced("--add_allowed_registrants=alice", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--add_allowed_registrants=alice", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("alice");
   }
 
   @Test
@@ -654,17 +822,24 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
         Registry.get("xn--q9jyb4c").asBuilder()
         .setAllowedRegistrantContactIds(ImmutableSet.of("alice"))
         .build());
-    thrown.expect(IllegalArgumentException.class, "bob");
-    runCommandForced("--remove_allowed_registrants=bob", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--remove_allowed_registrants=bob", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("bob");
   }
 
   @Test
   public void testFailure_cantAddAndRemoveSameAllowedRegistrantsSimultaneously() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "alice");
-    runCommandForced(
-        "--add_allowed_registrants=alice",
-        "--remove_allowed_registrants=alice",
-        "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--add_allowed_registrants=alice",
+                    "--remove_allowed_registrants=alice",
+                    "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("alice");
   }
 
   @Test
@@ -674,8 +849,11 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
             .setAllowedFullyQualifiedHostNames(
                 ImmutableSet.of("ns1.example.com", "ns2.example.com"))
             .build());
-    thrown.expect(IllegalArgumentException.class, "ns1.example.com");
-    runCommandForced("--add_allowed_nameservers=ns1.example.com", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--add_allowed_nameservers=ns1.example.com", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("ns1.example.com");
   }
 
   @Test
@@ -685,25 +863,24 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
             .setAllowedFullyQualifiedHostNames(
                 ImmutableSet.of("ns1.example.com"))
             .build());
-    thrown.expect(IllegalArgumentException.class, "ns2.example.com");
-    runCommandForced("--remove_allowed_nameservers=ns2.example.com", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--remove_allowed_nameservers=ns2.example.com", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("ns2.example.com");
   }
 
   @Test
   public void testFailure_cantAddAndRemoveSameAllowedNameserversSimultaneously() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "ns1.example.com");
-    runCommandForced(
-        "--add_allowed_nameservers=ns1.example.com",
-        "--remove_allowed_nameservers=ns1.example.com",
-        "xn--q9jyb4c");
-  }
-
-  @Test
-  public void testFailure_roidSuffixAlreadyInUse() throws Exception {
-    createTld("foo", "BLAH");
-    createTld("bar", "BAR");
-    thrown.expect(IllegalArgumentException.class, "The roid suffix BLAH is already in use");
-    runCommandForced("--roid_suffix=BLAH", "bar");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () ->
+                runCommandForced(
+                    "--add_allowed_nameservers=ns1.example.com",
+                    "--remove_allowed_nameservers=ns1.example.com",
+                    "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("ns1.example.com");
   }
 
   @Test
@@ -824,8 +1001,11 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
 
   @Test
   public void testFailure_setPremiumListThatDoesntExist() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "The premium list 'phonies' doesn't exist");
-    runCommandForced("--premium_list=phonies", "xn--q9jyb4c");
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--premium_list=phonies", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("The premium list 'phonies' doesn't exist");
   }
 
   @Test
@@ -838,16 +1018,24 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
 
   @Test
   public void testFailure_updateLrpPeriod_backwardsInterval() throws Exception {
-    thrown.expect(
-        ParameterException.class,
-        "--lrp_period=2005-06-09T12:30:00Z/2004-07-10T13:30:00Z not an ISO-8601 interval");
-    runCommandForced("--lrp_period=2005-06-09T12:30:00Z/2004-07-10T13:30:00Z", "xn--q9jyb4c");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class,
+            () ->
+                runCommandForced(
+                    "--lrp_period=2005-06-09T12:30:00Z/2004-07-10T13:30:00Z", "xn--q9jyb4c"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains(
+            "--lrp_period=2005-06-09T12:30:00Z/2004-07-10T13:30:00Z not an ISO-8601 interval");
   }
 
   @Test
   public void testFailure_updateLrpPeriod_badInterval() throws Exception {
-    thrown.expect(ParameterException.class, "--lrp_period=foobar not an ISO-8601 interval");
-    runCommandForced("--lrp_period=foobar", "xn--q9jyb4c");
+    ParameterException thrown =
+        expectThrows(
+            ParameterException.class, () -> runCommandForced("--lrp_period=foobar", "xn--q9jyb4c"));
+    assertThat(thrown).hasMessageThat().contains("--lrp_period=foobar not an ISO-8601 interval");
   }
 
   private void runSuccessfulReservedListsTest(String reservedLists) throws Exception {
@@ -862,10 +1050,11 @@ public class UpdateTldCommandTest extends CommandTestCase<UpdateTldCommand> {
   }
 
   private void runFailureReservedListsTest(
-      String reservedLists,
-      Class<? extends Exception> errorClass,
-      String errorMsg) throws Exception {
-    thrown.expect(errorClass, errorMsg);
-    runCommandForced("--reserved_lists", reservedLists, "xn--q9jyb4c");
+      String reservedLists, Class<? extends Exception> errorClass, String errorMsg)
+      throws Exception {
+    Exception e =
+        expectThrows(
+            errorClass, () -> runCommandForced("--reserved_lists", reservedLists, "xn--q9jyb4c"));
+    assertThat(e).hasMessageThat().isEqualTo(errorMsg);
   }
 }

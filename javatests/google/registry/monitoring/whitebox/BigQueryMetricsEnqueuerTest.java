@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,11 @@
 
 package google.registry.monitoring.whitebox;
 
+import static com.google.appengine.api.taskqueue.QueueFactory.getQueue;
 import static google.registry.bigquery.BigqueryUtils.toBigqueryTimestamp;
+import static google.registry.monitoring.whitebox.BigQueryMetricsEnqueuer.QUEUE_BIGQUERY_STREAMING_METRICS;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.google.api.services.bigquery.model.TableFieldSchema;
@@ -32,12 +35,11 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 import org.mockito.Matchers;
-import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
 
 /** Unit tests for {@link BigQueryMetricsEnqueuer}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class BigQueryMetricsEnqueuerTest {
 
   @Rule
@@ -50,7 +52,7 @@ public class BigQueryMetricsEnqueuerTest {
       .withTaskQueue()
       .build();
 
-  @Mock ModulesService modulesService;
+  private final ModulesService modulesService = mock(ModulesService.class);
 
   private BigQueryMetricsEnqueuer enqueuer;
 
@@ -59,6 +61,7 @@ public class BigQueryMetricsEnqueuerTest {
     enqueuer = new BigQueryMetricsEnqueuer();
     enqueuer.idGenerator = Suppliers.ofInstance("laffo");
     enqueuer.modulesService = modulesService;
+    enqueuer.queue = getQueue(QUEUE_BIGQUERY_STREAMING_METRICS);
     when(modulesService.getVersionHostname(Matchers.anyString(), Matchers.anyString()))
         .thenReturn("1.backend.test.localhost");
   }

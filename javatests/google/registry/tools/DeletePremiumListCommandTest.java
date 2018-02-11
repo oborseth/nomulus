@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,13 @@
 package google.registry.tools;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.DatastoreHelper.loadPremiumListEntries;
 import static google.registry.testing.DatastoreHelper.persistPremiumList;
 import static google.registry.testing.DatastoreHelper.persistResource;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
 import google.registry.model.registry.Registry;
 import google.registry.model.registry.label.PremiumList;
@@ -32,9 +34,9 @@ public class DeletePremiumListCommandTest extends CommandTestCase<DeletePremiumL
   @Test
   public void testSuccess() throws Exception {
     PremiumList premiumList = persistPremiumList("xn--q9jyb4c", "blah,USD 100");
-    assertThat(premiumList.getPremiumListEntries()).hasSize(1);
+    assertThat(loadPremiumListEntries(premiumList)).hasSize(1);
     runCommand("--force", "--name=xn--q9jyb4c");
-    assertThat(PremiumList.get("xn--q9jyb4c")).isAbsent();
+    assertThat(PremiumList.get("xn--q9jyb4c")).isEmpty();
 
     // Ensure that the Datastore premium list entry entities were deleted correctly.
     assertThat(ofy().load()
@@ -46,9 +48,11 @@ public class DeletePremiumListCommandTest extends CommandTestCase<DeletePremiumL
 
   @Test
   public void testFailure_whenPremiumListDoesNotExist() throws Exception {
-    thrown.expect(IllegalArgumentException.class,
-        "Cannot delete the premium list foo because it doesn't exist.");
-    runCommandForced("--name=foo");
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> runCommandForced("--name=foo"));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Cannot delete the premium list foo because it doesn't exist.");
   }
 
   @Test
@@ -56,13 +60,13 @@ public class DeletePremiumListCommandTest extends CommandTestCase<DeletePremiumL
     PremiumList premiumList = persistPremiumList("xn--q9jyb4c", "blah,USD 100");
     createTld("xn--q9jyb4c");
     persistResource(Registry.get("xn--q9jyb4c").asBuilder().setPremiumList(premiumList).build());
-    try {
-      runCommandForced("--name=" + premiumList.getName());
-      assertWithMessage("Expected IllegalArgumentException to be thrown").fail();
-    } catch (IllegalArgumentException e) {
-      assertThat(PremiumList.get(premiumList.getName())).isPresent();
-      assertThat(e)
-          .hasMessage("Cannot delete premium list because it is used on these tld(s): xn--q9jyb4c");
-    }
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class,
+            () -> runCommandForced("--name=" + premiumList.getName()));
+    assertThat(PremiumList.get(premiumList.getName())).isPresent();
+    assertThat(thrown)
+        .hasMessageThat()
+        .isEqualTo("Cannot delete premium list because it is used on these tld(s): xn--q9jyb4c");
   }
 }

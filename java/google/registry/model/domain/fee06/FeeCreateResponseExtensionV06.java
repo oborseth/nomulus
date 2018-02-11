@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,9 @@
 
 package google.registry.model.domain.fee06;
 
-import google.registry.model.domain.fee.FeeTransformResponseExtensionImplNoCredits;
+import com.google.common.collect.ImmutableList;
+import google.registry.model.domain.fee.Credit;
+import google.registry.model.domain.fee.FeeTransformResponseExtension;
 import javax.xml.bind.annotation.XmlRootElement;
 import javax.xml.bind.annotation.XmlType;
 
@@ -24,8 +26,11 @@ import javax.xml.bind.annotation.XmlType;
  */
 @XmlRootElement(name = "creData")
 @XmlType(propOrder = {"currency", "fees"})
-public class FeeCreateResponseExtensionV06 extends FeeTransformResponseExtensionImplNoCredits {
-  /** A builder for {@link FeeCreateResponseExtensionV06}. */
-  public static class Builder extends
-      FeeTransformResponseExtensionImplNoCredits.Builder<FeeCreateResponseExtensionV06, Builder> {}
+public class FeeCreateResponseExtensionV06 extends FeeTransformResponseExtension {
+
+  /** This version of the extension doesn't support the "credit" field. */
+  @Override
+  public ImmutableList<Credit> getCredits() {
+    return ImmutableList.of();
+  }
 }

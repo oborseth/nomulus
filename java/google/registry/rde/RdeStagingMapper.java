@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,27 +15,28 @@
 package google.registry.rde;
 
 import static com.google.common.base.Strings.nullToEmpty;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
+import static google.registry.model.EppResourceUtils.loadAtPointInTime;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 
 import com.google.appengine.tools.mapreduce.Mapper;
 import com.google.auto.value.AutoValue;
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.Maps;
+import com.google.common.collect.Streams;
 import com.googlecode.objectify.Result;
 import google.registry.model.EppResource;
-import google.registry.model.EppResourceUtils;
 import google.registry.model.contact.ContactResource;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.host.HostResource;
 import google.registry.model.rde.RdeMode;
 import google.registry.model.registrar.Registrar;
+import google.registry.xml.ValidationMode;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import org.joda.time.DateTime;
 
 /** Mapper for {@link RdeStagingAction}. */
@@ -43,10 +44,12 @@ public final class RdeStagingMapper extends Mapper<EppResource, PendingDeposit, 
 
   private static final long serialVersionUID = -1518185703789372524L;
 
+  private final RdeMarshaller marshaller;
   private final ImmutableSetMultimap<String, PendingDeposit> pendings;
-  private final RdeMarshaller marshaller = new RdeMarshaller();
 
-  RdeStagingMapper(ImmutableSetMultimap<String, PendingDeposit> pendings) {
+  RdeStagingMapper(
+      ValidationMode validationMode, ImmutableSetMultimap<String, PendingDeposit> pendings) {
+    this.marshaller = new RdeMarshaller(validationMode);
     this.pendings = pendings;
   }
 
@@ -59,7 +62,7 @@ public final class RdeStagingMapper extends Mapper<EppResource, PendingDeposit, 
     // emitted from the mapper. Without this, a cursor might never advance because no EppResource
     // entity exists at the watermark.
     if (resource == null) {
-      for (Registrar registrar : Registrar.loadAll()) {
+      for (Registrar registrar : Registrar.loadAllCached()) {
         DepositFragment fragment = marshaller.marshalRegistrar(registrar);
         for (PendingDeposit pending : pendings.values()) {
           emit(pending, fragment);
@@ -68,7 +71,7 @@ public final class RdeStagingMapper extends Mapper<EppResource, PendingDeposit, 
       return;
     }
 
-    // Skip polymorphic entities that share datastore kind.
+    // Skip polymorphic entities that share Datastore kind.
     if (!(resource instanceof ContactResource
         || resource instanceof DomainResource
         || resource instanceof HostResource)) {
@@ -77,7 +80,7 @@ public final class RdeStagingMapper extends Mapper<EppResource, PendingDeposit, 
 
     // Skip prober data.
     if (nullToEmpty(resource.getCreationClientId()).startsWith("prober-")
-        || nullToEmpty(resource.getCurrentSponsorClientId()).startsWith("prober-")
+        || nullToEmpty(resource.getPersistedCurrentSponsorClientId()).startsWith("prober-")
         || nullToEmpty(resource.getLastEppUpdateClientId()).startsWith("prober-")) {
       return;
     }
@@ -93,25 +96,16 @@ public final class RdeStagingMapper extends Mapper<EppResource, PendingDeposit, 
 
     // Get the set of all point-in-time watermarks we need, to minimize rewinding.
     ImmutableSet<DateTime> dates =
-        FluentIterable
-            .from(shouldEmitOnAllTlds
-                ? pendings.values()
-                : pendings.get(((DomainResource) resource).getTld()))
-            .transform(new Function<PendingDeposit, DateTime>() {
-              @Override
-              public DateTime apply(PendingDeposit pending) {
-                return pending.watermark();
-              }})
-            .toSet();
+        Streams.stream(
+                shouldEmitOnAllTlds
+                    ? pendings.values()
+                    : pendings.get(((DomainResource) resource).getTld()))
+            .map(PendingDeposit::watermark)
+            .collect(toImmutableSet());
 
     // Launch asynchronous fetches of point-in-time representations of resource.
     ImmutableMap<DateTime, Result<EppResource>> resourceAtTimes =
-        ImmutableMap.copyOf(Maps.asMap(dates,
-            new Function<DateTime, Result<EppResource>>() {
-              @Override
-              public Result<EppResource> apply(DateTime input) {
-                return EppResourceUtils.loadAtPointInTime(resource, input);
-              }}));
+        ImmutableMap.copyOf(Maps.asMap(dates, input -> loadAtPointInTime(resource, input)));
 
     // Convert resource to an XML fragment for each watermark/mode pair lazily and cache the result.
     Fragmenter fragmenter = new Fragmenter(resourceAtTimes);
@@ -125,10 +119,9 @@ public final class RdeStagingMapper extends Mapper<EppResource, PendingDeposit, 
                 || resource instanceof HostResource)) {
           continue;
         }
-        for (DepositFragment fragment
-            : fragmenter.marshal(pending.watermark(), pending.mode()).asSet()) {
-          emit(pending, fragment);
-        }
+        fragmenter
+            .marshal(pending.watermark(), pending.mode())
+            .ifPresent(fragment -> emit(pending, fragment));
       }
     }
 
@@ -152,7 +145,7 @@ public final class RdeStagingMapper extends Mapper<EppResource, PendingDeposit, 
       }
       EppResource resource = resourceAtTimes.get(watermark).now();
       if (resource == null) {
-        result = Optional.absent();
+        result = Optional.empty();
         cache.put(WatermarkModePair.create(watermark, RdeMode.FULL), result);
         cache.put(WatermarkModePair.create(watermark, RdeMode.THIN), result);
         return result;
@@ -167,7 +160,14 @@ public final class RdeStagingMapper extends Mapper<EppResource, PendingDeposit, 
         cache.put(WatermarkModePair.create(watermark, RdeMode.THIN), result);
         return result;
       } else if (resource instanceof HostResource) {
-        result = Optional.of(marshaller.marshalHost((HostResource) resource));
+        HostResource host = (HostResource) resource;
+        result = Optional.of(host.isSubordinate()
+            ? marshaller.marshalSubordinateHost(
+                host,
+                // Note that loadAtPointInTime() does cloneProjectedAtTime(watermark) for us.
+                loadAtPointInTime(
+                    ofy().load().key(host.getSuperordinateDomain()).now(), watermark).now())
+            : marshaller.marshalExternalHost(host));
         cache.put(WatermarkModePair.create(watermark, RdeMode.FULL), result);
         cache.put(WatermarkModePair.create(watermark, RdeMode.THIN), result);
         return result;

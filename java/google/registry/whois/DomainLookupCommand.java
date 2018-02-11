@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,24 +14,25 @@
 
 package google.registry.whois;
 
+import static google.registry.model.EppResourceUtils.loadByForeignKey;
+
 import com.google.common.net.InternetDomainName;
 import google.registry.model.domain.DomainResource;
-import javax.annotation.Nullable;
+import java.util.Optional;
 import org.joda.time.DateTime;
 
 /** Represents a WHOIS lookup on a domain name (i.e. SLD). */
-class DomainLookupCommand extends DomainOrHostLookupCommand<DomainResource> {
+public class DomainLookupCommand extends DomainOrHostLookupCommand {
 
-  DomainLookupCommand(InternetDomainName domainName) {
-    this(domainName, null);
-  }
-
-  public DomainLookupCommand(InternetDomainName domainName, @Nullable InternetDomainName tld) {
-    super(domainName, tld, "Domain");
+  public DomainLookupCommand(InternetDomainName domainName) {
+    super(domainName, "Domain");
   }
 
   @Override
-  WhoisResponse getSuccessResponse(DomainResource domain, DateTime now) {
-    return new DomainWhoisResponse(domain, now);
+  protected Optional<WhoisResponse> getResponse(InternetDomainName domainName, DateTime now) {
+    final DomainResource domainResource =
+        loadByForeignKey(DomainResource.class, domainName.toString(), now);
+    return Optional.ofNullable(
+        domainResource == null ? null : new DomainWhoisResponse(domainResource, now));
   }
 }

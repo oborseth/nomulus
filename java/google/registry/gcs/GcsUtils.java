@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,10 +21,13 @@ import com.google.appengine.tools.cloudstorage.GcsFileOptions;
 import com.google.appengine.tools.cloudstorage.GcsFileOptions.Builder;
 import com.google.appengine.tools.cloudstorage.GcsFilename;
 import com.google.appengine.tools.cloudstorage.GcsService;
+import com.google.appengine.tools.cloudstorage.ListOptions;
+import com.google.appengine.tools.cloudstorage.ListResult;
 import com.google.common.base.Splitter;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.net.MediaType;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.util.FormattingLogger;
 import java.io.IOException;
 import java.io.InputStream;
@@ -72,6 +75,30 @@ public class GcsUtils {
     gcsService.createOrReplace(filename, getOptions(filename), ByteBuffer.wrap(bytes));
   }
 
+  /**
+   * Returns a list of all object names within a bucket for a given prefix.
+   *
+   * <p>Note this also strips the provided prefix from the object, leaving only the object name
+   * (i.e. if the bucket hello contains gs://hello/world/myobj.txt and gs://hello/world/a/b.csv,
+   * then listFolderObjects("hello", "world/") would return {"myobj.txt", "a/b.csv"}.
+   *
+   * @param bucketName the name of the bucket, with no gs:// namespace or trailing slashes
+   * @param prefix the string prefix all objects in the bucket should start with
+   */
+  public ImmutableList<String> listFolderObjects(String bucketName, String prefix)
+      throws IOException {
+    ListResult result =
+        gcsService.list(bucketName, new ListOptions.Builder().setPrefix(prefix).build());
+    final ImmutableList.Builder<String> builder = new ImmutableList.Builder<>();
+    result.forEachRemaining(
+        listItem -> {
+          if (!listItem.isDirectory()) {
+            builder.add(listItem.getName().replaceFirst(prefix, ""));
+          }
+        });
+    return builder.build();
+  }
+
   /** Returns {@code true} if a file exists and is non-empty on Google Cloud Storage. */
   public boolean existsAndNotEmpty(GcsFilename file) {
     GcsFileMetadata metadata;
@@ -81,10 +108,7 @@ public class GcsUtils {
       logger.warning(e, "Failed to check if GCS file exists");
       return false;
     }
-    if (metadata == null) {
-      return false;
-    }
-    return metadata.getLength() > 0;
+    return metadata != null && metadata.getLength() > 0;
   }
 
   /** Determines most appropriate {@link GcsFileOptions} based on filename extension. */

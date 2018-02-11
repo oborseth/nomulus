@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ public class PublishDetailReportCommandTest extends CommandTestCase<PublishDetai
   public void init() throws Exception {
     command.setConnection(connection);
     when(connection.sendJson(anyString(), anyMapOf(String.class, Object.class)))
-        .thenReturn(ImmutableMap.<String, Object>of("driveId", "some123id"));
+        .thenReturn(ImmutableMap.of("driveId", "some123id"));
   }
 
   @Test

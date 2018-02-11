@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,10 +17,10 @@ package google.registry.util;
 import static com.google.common.io.BaseEncoding.base64;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.testing.EqualsTester;
-import google.registry.testing.ExceptionRule;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -28,7 +28,6 @@ import java.util.Arrays;
 import java.util.zip.GZIPInputStream;
 import org.joda.time.DateTime;
 import org.joda.time.format.ISODateTimeFormat;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -36,10 +35,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link PosixTarHeader}. */
 @RunWith(JUnit4.class)
 public class PosixTarHeaderTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   @Test
   public void testGnuTarBlob() throws Exception {
     // This data was generated as follows:
@@ -206,8 +201,9 @@ public class PosixTarHeaderTest {
     byte[] bytes = header.getBytes();
     bytes[150] = '0';
     bytes[151] = '0';
-    thrown.expect(IllegalArgumentException.class, "chksum invalid");
-    PosixTarHeader.from(bytes);
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> PosixTarHeader.from(bytes));
+    assertThat(thrown).hasMessageThat().contains("chksum invalid");
   }
 
   @Test
@@ -272,7 +268,7 @@ public class PosixTarHeaderTest {
     assertThat(header.getMtime().toString(ISODateTimeFormat.date())).isEqualTo("2013-08-16");
 
     assertThat(input.read(block)).isEqualTo(512);
-    assertThat(new String(block, 0, likeTears.length())).isEqualTo(likeTears);
+    assertThat(new String(block, 0, likeTears.length(), UTF_8)).isEqualTo(likeTears);
 
     assertThat(input.read(block)).isEqualTo(512);
     header = PosixTarHeader.from(block);
@@ -286,7 +282,7 @@ public class PosixTarHeaderTest {
     assertThat(header.getMtime().toString(ISODateTimeFormat.date())).isEqualTo("2013-08-16");
 
     assertThat(input.read(block)).isEqualTo(512);
-    assertThat(new String(block, 0, inRain.length())).isEqualTo(inRain);
+    assertThat(new String(block, 0, inRain.length(), UTF_8)).isEqualTo(inRain);
 
     assertThat(input.read(block)).isEqualTo(512);
     assertWithMessage("End of archive marker corrupt").that(block).isEqualTo(new byte[512]);
@@ -326,7 +322,7 @@ public class PosixTarHeaderTest {
     assertThat(header.getMtime().toString(ISODateTimeFormat.date())).isEqualTo("2013-08-16");
 
     assertThat(input.read(block)).isEqualTo(512);
-    assertThat(new String(block, 0, likeTears.length())).isEqualTo(likeTears);
+    assertThat(new String(block, 0, likeTears.length(), UTF_8)).isEqualTo(likeTears);
 
     assertThat(input.read(block)).isEqualTo(512);
     header = PosixTarHeader.from(block);
@@ -340,7 +336,7 @@ public class PosixTarHeaderTest {
     assertThat(header.getMtime().toString(ISODateTimeFormat.date())).isEqualTo("2013-08-16");
 
     assertThat(input.read(block)).isEqualTo(512);
-    assertThat(new String(block, 0, inRain.length())).isEqualTo(inRain);
+    assertThat(new String(block, 0, inRain.length(), UTF_8)).isEqualTo(inRain);
 
     assertThat(input.read(block)).isEqualTo(512);
     assertWithMessage("End of archive marker corrupt").that(block).isEqualTo(new byte[512]);
@@ -380,7 +376,7 @@ public class PosixTarHeaderTest {
     assertThat(header.getMtime().toString(ISODateTimeFormat.date())).isEqualTo("2013-08-16");
 
     assertThat(input.read(block)).isEqualTo(512);
-    assertThat(new String(block, 0, likeTears.length())).isEqualTo(likeTears);
+    assertThat(new String(block, 0, likeTears.length(), UTF_8)).isEqualTo(likeTears);
 
     assertThat(input.read(block)).isEqualTo(512);
     header = PosixTarHeader.from(block);
@@ -394,7 +390,7 @@ public class PosixTarHeaderTest {
     assertThat(header.getMtime().toString(ISODateTimeFormat.date())).isEqualTo("2013-08-16");
 
     assertThat(input.read(block)).isEqualTo(512);
-    assertThat(new String(block, 0, inRain.length())).isEqualTo(inRain);
+    assertThat(new String(block, 0, inRain.length(), UTF_8)).isEqualTo(inRain);
 
     assertThat(input.read(block)).isEqualTo(512);
     assertWithMessage("End of archive marker corrupt").that(block).isEqualTo(new byte[512]);
@@ -435,7 +431,7 @@ public class PosixTarHeaderTest {
     assertThat(header.getMtime().toString(ISODateTimeFormat.date())).isEqualTo("2013-08-16");
 
     assertThat(input.read(block)).isEqualTo(512);
-    assertThat(new String(block, 0, likeTears.length())).isEqualTo(likeTears);
+    assertThat(new String(block, 0, likeTears.length(), UTF_8)).isEqualTo(likeTears);
 
     assertThat(input.read(block)).isEqualTo(512);
     header = PosixTarHeader.from(block);
@@ -450,7 +446,7 @@ public class PosixTarHeaderTest {
     assertThat(header.getMtime().toString(ISODateTimeFormat.date())).isEqualTo("2013-08-16");
 
     assertThat(input.read(block)).isEqualTo(512);
-    assertThat(new String(block, 0, inRain.length())).isEqualTo(inRain);
+    assertThat(new String(block, 0, inRain.length(), UTF_8)).isEqualTo(inRain);
 
     assertThat(input.read(block)).isEqualTo(512);
     assertWithMessage("End of archive marker corrupt").that(block).isEqualTo(new byte[512]);

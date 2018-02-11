@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,85 +14,39 @@
 
 package google.registry.export;
 
-import static com.google.common.base.Predicates.not;
-import static google.registry.model.EntityClasses.CLASS_TO_KIND_FUNCTION;
+import static com.google.common.collect.ImmutableSortedSet.toImmutableSortedSet;
 import static google.registry.util.TypeUtils.hasAnnotation;
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Ordering;
+import com.googlecode.objectify.Key;
 import google.registry.model.EntityClasses;
-import google.registry.model.ImmutableObject;
 import google.registry.model.annotations.NotBackedUp;
+import google.registry.model.annotations.ReportedOn;
 import google.registry.model.annotations.VirtualEntity;
-import google.registry.model.billing.BillingEvent.Cancellation;
-import google.registry.model.billing.BillingEvent.Modification;
-import google.registry.model.billing.BillingEvent.OneTime;
-import google.registry.model.billing.BillingEvent.Recurring;
-import google.registry.model.billing.RegistrarCredit;
-import google.registry.model.billing.RegistrarCreditBalance;
-import google.registry.model.contact.ContactResource;
-import google.registry.model.domain.DomainBase;
-import google.registry.model.domain.LrpTokenEntity;
-import google.registry.model.host.HostResource;
-import google.registry.model.index.DomainApplicationIndex;
-import google.registry.model.index.EppResourceIndex;
-import google.registry.model.index.ForeignKeyIndex.ForeignKeyContactIndex;
-import google.registry.model.index.ForeignKeyIndex.ForeignKeyDomainIndex;
-import google.registry.model.index.ForeignKeyIndex.ForeignKeyHostIndex;
-import google.registry.model.registrar.Registrar;
-import google.registry.model.registrar.RegistrarContact;
-import google.registry.model.registry.Registry;
-import google.registry.model.registry.label.PremiumList;
-import google.registry.model.registry.label.PremiumList.PremiumListEntry;
-import google.registry.model.reporting.HistoryEntry;
 
 /** Constants related to export code. */
 public final class ExportConstants {
 
-  /** Set of entity classes to export into BigQuery for reporting purposes. */
-  @VisibleForTesting
-  @SuppressWarnings("unchecked") // varargs
-  static final ImmutableSet<Class<? extends ImmutableObject>> REPORTING_ENTITY_CLASSES =
-      ImmutableSet.of(
-          Cancellation.class,
-          ContactResource.class,
-          DomainApplicationIndex.class,
-          DomainBase.class,
-          EppResourceIndex.class,
-          ForeignKeyContactIndex.class,
-          ForeignKeyDomainIndex.class,
-          ForeignKeyHostIndex.class,
-          HistoryEntry.class,
-          HostResource.class,
-          LrpTokenEntity.class,
-          Modification.class,
-          OneTime.class,
-          PremiumList.class,
-          PremiumListEntry.class,
-          Recurring.class,
-          Registrar.class,
-          RegistrarContact.class,
-          RegistrarCredit.class,
-          RegistrarCreditBalance.class,
-          Registry.class);
-
-  /** Returns the names of kinds to include in datastore backups. */
+  /** Returns the names of kinds to include in Datastore backups. */
   public static ImmutableSet<String> getBackupKinds() {
     // Back up all entity classes that aren't annotated with @VirtualEntity (never even persisted
-    // to datastore, so they can't be backed up) or @NotBackedUp (intentionally omitted).
-    return FluentIterable.from(EntityClasses.ALL_CLASSES)
-        .filter(not(hasAnnotation(VirtualEntity.class)))
-        .filter(not(hasAnnotation(NotBackedUp.class)))
-        .transform(CLASS_TO_KIND_FUNCTION)
-        .toSortedSet(Ordering.natural());
+    // to Datastore, so they can't be backed up) or @NotBackedUp (intentionally omitted).
+    return EntityClasses.ALL_CLASSES
+        .stream()
+        .filter(hasAnnotation(VirtualEntity.class).negate())
+        .filter(hasAnnotation(NotBackedUp.class).negate())
+        .map(Key::getKind)
+        .collect(toImmutableSortedSet(Ordering.natural()));
   }
 
   /** Returns the names of kinds to import into reporting tools (e.g. BigQuery). */
   public static ImmutableSet<String> getReportingKinds() {
-    return FluentIterable.from(REPORTING_ENTITY_CLASSES)
-        .transform(CLASS_TO_KIND_FUNCTION)
-        .toSortedSet(Ordering.natural());
+    return EntityClasses.ALL_CLASSES
+        .stream()
+        .filter(hasAnnotation(ReportedOn.class))
+        .filter(hasAnnotation(VirtualEntity.class).negate())
+        .map(Key::getKind)
+        .collect(toImmutableSortedSet(Ordering.natural()));
   }
 }

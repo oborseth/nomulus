@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 package google.registry.dns.writer.clouddns;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.io.BaseEncoding.base16;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.DatastoreHelper.createTld;
@@ -21,6 +22,8 @@ import static google.registry.testing.DatastoreHelper.newDomainResource;
 import static google.registry.testing.DatastoreHelper.newHostResource;
 import static google.registry.testing.DatastoreHelper.persistResource;
 import static org.mockito.Matchers.anyString;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -30,10 +33,7 @@ import com.google.api.services.dns.Dns;
 import com.google.api.services.dns.model.Change;
 import com.google.api.services.dns.model.ResourceRecordSet;
 import com.google.api.services.dns.model.ResourceRecordSetsListResponse;
-import com.google.common.base.Predicate;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.common.net.InetAddresses;
@@ -45,7 +45,6 @@ import google.registry.model.domain.secdns.DelegationSignerData;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.host.HostResource;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.util.Retrier;
 import google.registry.util.SystemClock;
 import google.registry.util.SystemSleeper;
@@ -53,8 +52,6 @@ import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
-import java.util.concurrent.Callable;
-import javax.annotation.Nullable;
 import org.joda.time.Duration;
 import org.junit.Before;
 import org.junit.Rule;
@@ -64,9 +61,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Matchers;
 import org.mockito.Mock;
-import org.mockito.invocation.InvocationOnMock;
 import org.mockito.runners.MockitoJUnitRunner;
-import org.mockito.stubbing.Answer;
 
 /** Test case for {@link CloudDnsWriter}. */
 @RunWith(MockitoJUnitRunner.class)
@@ -76,22 +71,47 @@ public class CloudDnsWriterTest {
   private static final Inet6Address IPv6 = (Inet6Address) InetAddresses.forString("::1");
   private static final DelegationSignerData DS_DATA =
       DelegationSignerData.create(12345, 3, 1, base16().decode("1234567890ABCDEF"));
-  private static final Duration DEFAULT_TTL = Duration.standardSeconds(180);
+  private static final Duration DEFAULT_A_TTL = Duration.standardSeconds(11);
+  private static final Duration DEFAULT_NS_TTL = Duration.standardSeconds(222);
+  private static final Duration DEFAULT_DS_TTL = Duration.standardSeconds(3333);
 
   @Mock private Dns dnsConnection;
   @Mock private Dns.ResourceRecordSets resourceRecordSets;
-  @Mock private Dns.ResourceRecordSets.List listResourceRecordSetsRequest;
   @Mock private Dns.Changes changes;
   @Mock private Dns.Changes.Create createChangeRequest;
-  @Mock private Callable<Void> mutateZoneCallable;
-  @Captor ArgumentCaptor<String> recordNameCaptor;
+  @Captor ArgumentCaptor<String> zoneNameCaptor;
   @Captor ArgumentCaptor<Change> changeCaptor;
   private CloudDnsWriter writer;
   private ImmutableSet<ResourceRecordSet> stubZone;
 
-  @Rule public final ExceptionRule thrown = new ExceptionRule();
-
   @Rule public final AppEngineRule appEngine = AppEngineRule.builder().withDatastore().build();
+
+  /*
+   * Because of multi-threading in the CloudDnsWriter, we need to return a different instance of
+   * List for every request, with its own ArgumentCaptor. Otherwise, we can't separate the arguments
+   * of the various Lists
+   */
+  private Dns.ResourceRecordSets.List newListResourceRecordSetsRequestMock() throws Exception {
+    Dns.ResourceRecordSets.List listResourceRecordSetsRequest =
+        mock(Dns.ResourceRecordSets.List.class);
+    ArgumentCaptor<String> recordNameCaptor = ArgumentCaptor.forClass(String.class);
+    when(listResourceRecordSetsRequest.setName(recordNameCaptor.capture()))
+        .thenReturn(listResourceRecordSetsRequest);
+    // Return records from our stub zone when a request to list the records is executed
+    when(listResourceRecordSetsRequest.execute())
+        .thenAnswer(
+            invocationOnMock ->
+                new ResourceRecordSetsListResponse()
+                    .setRrsets(
+                        stubZone
+                            .stream()
+                            .filter(
+                                rs ->
+                                    rs != null && rs.getName().equals(recordNameCaptor.getValue()))
+                            .collect(toImmutableList())));
+    return listResourceRecordSetsRequest;
+  }
+
 
   @Before
   public void setUp() throws Exception {
@@ -100,9 +120,12 @@ public class CloudDnsWriterTest {
         new CloudDnsWriter(
             dnsConnection,
             "projectId",
-            "zoneName",
-            DEFAULT_TTL,
+            "triple.secret.tld", // used by testInvalidZoneNames()
+            DEFAULT_A_TTL,
+            DEFAULT_NS_TTL,
+            DEFAULT_DS_TTL,
             RateLimiter.create(20),
+            10, // max num threads
             new SystemClock(),
             new Retrier(new SystemSleeper(), 5));
 
@@ -112,65 +135,34 @@ public class CloudDnsWriterTest {
     when(dnsConnection.changes()).thenReturn(changes);
     when(dnsConnection.resourceRecordSets()).thenReturn(resourceRecordSets);
     when(resourceRecordSets.list(anyString(), anyString()))
-        .thenReturn(listResourceRecordSetsRequest);
-    when(listResourceRecordSetsRequest.setName(recordNameCaptor.capture()))
-        .thenReturn(listResourceRecordSetsRequest);
-    // Return records from our stub zone when a request to list the records is executed
-    when(listResourceRecordSetsRequest.execute())
         .thenAnswer(
-            new Answer<ResourceRecordSetsListResponse>() {
-              @Override
-              public ResourceRecordSetsListResponse answer(InvocationOnMock invocationOnMock)
-                  throws Throwable {
-                return new ResourceRecordSetsListResponse()
-                    .setRrsets(
-                        FluentIterable.from(stubZone)
-                            .filter(
-                                new Predicate<ResourceRecordSet>() {
-                                  @Override
-                                  public boolean apply(
-                                      @Nullable ResourceRecordSet resourceRecordSet) {
-                                    if (resourceRecordSet == null) {
-                                      return false;
-                                    }
-                                    return resourceRecordSet
-                                        .getName()
-                                        .equals(recordNameCaptor.getValue());
-                                  }
-                                })
-                            .toList());
-              }
-            });
-
-    when(changes.create(anyString(), anyString(), changeCaptor.capture()))
+            invocationOnMock -> newListResourceRecordSetsRequestMock());
+    when(changes.create(anyString(), zoneNameCaptor.capture(), changeCaptor.capture()))
         .thenReturn(createChangeRequest);
     // Change our stub zone when a request to change the records is executed
     when(createChangeRequest.execute())
         .thenAnswer(
-            new Answer<Change>() {
-              @Override
-              public Change answer(InvocationOnMock invocationOnMock) throws IOException {
-                Change requestedChange = changeCaptor.getValue();
-                ImmutableSet<ResourceRecordSet> toDelete =
-                    ImmutableSet.copyOf(requestedChange.getDeletions());
-                ImmutableSet<ResourceRecordSet> toAdd =
-                    ImmutableSet.copyOf(requestedChange.getAdditions());
-                // Fail if the records to delete has records that aren't in the stub zone.
-                // This matches documented Google Cloud DNS behavior.
-                if (!Sets.difference(toDelete, stubZone).isEmpty()) {
-                  throw new IOException();
-                }
-                stubZone =
-                    Sets.union(Sets.difference(stubZone, toDelete).immutableCopy(), toAdd)
-                        .immutableCopy();
-                return requestedChange;
+            invocationOnMock -> {
+              Change requestedChange = changeCaptor.getValue();
+              ImmutableSet<ResourceRecordSet> toDelete =
+                  ImmutableSet.copyOf(requestedChange.getDeletions());
+              ImmutableSet<ResourceRecordSet> toAdd =
+                  ImmutableSet.copyOf(requestedChange.getAdditions());
+              // Fail if the records to delete has records that aren't in the stub zone.
+              // This matches documented Google Cloud DNS behavior.
+              if (!Sets.difference(toDelete, stubZone).isEmpty()) {
+                throw new IOException();
               }
+              stubZone =
+                  Sets.union(Sets.difference(stubZone, toDelete).immutableCopy(), toAdd)
+                      .immutableCopy();
+              return requestedChange;
             });
   }
 
   private void verifyZone(ImmutableSet<ResourceRecordSet> expectedRecords) throws Exception {
     // Trigger zone changes
-    writer.close();
+    writer.commit();
 
     assertThat(stubZone).containsExactlyElementsIn(expectedRecords);
   }
@@ -196,7 +188,7 @@ public class CloudDnsWriterTest {
               .setKind("dns#resourceRecordSet")
               .setType("NS")
               .setName(domainName + ".")
-              .setTtl((int) DEFAULT_TTL.getStandardSeconds())
+              .setTtl((int) DEFAULT_NS_TTL.getStandardSeconds())
               .setRrdatas(nameserverHostnames.build()));
 
       // Add glue for IPv4 in-bailiwick nameservers
@@ -206,7 +198,7 @@ public class CloudDnsWriterTest {
                 .setKind("dns#resourceRecordSet")
                 .setType("A")
                 .setName(i + ".ip4." + domainName + ".")
-                .setTtl((int) DEFAULT_TTL.getStandardSeconds())
+                .setTtl((int) DEFAULT_A_TTL.getStandardSeconds())
                 .setRrdatas(ImmutableList.of(IPv4.toString())));
       }
     }
@@ -223,7 +215,7 @@ public class CloudDnsWriterTest {
               .setKind("dns#resourceRecordSet")
               .setType("NS")
               .setName(domainName + ".")
-              .setTtl((int) DEFAULT_TTL.getStandardSeconds())
+              .setTtl((int) DEFAULT_NS_TTL.getStandardSeconds())
               .setRrdatas(nameserverHostnames.build()));
 
       // Add glue for IPv6 in-bailiwick nameservers
@@ -233,7 +225,7 @@ public class CloudDnsWriterTest {
                 .setKind("dns#resourceRecordSet")
                 .setType("AAAA")
                 .setName(i + ".ip6." + domainName + ".")
-                .setTtl((int) DEFAULT_TTL.getStandardSeconds())
+                .setTtl((int) DEFAULT_A_TTL.getStandardSeconds())
                 .setRrdatas(ImmutableList.of(IPv6.toString())));
       }
     }
@@ -250,7 +242,7 @@ public class CloudDnsWriterTest {
               .setKind("dns#resourceRecordSet")
               .setType("NS")
               .setName(domainName + ".")
-              .setTtl((int) DEFAULT_TTL.getStandardSeconds())
+              .setTtl((int) DEFAULT_NS_TTL.getStandardSeconds())
               .setRrdatas(nameserverHostnames.build()));
     }
 
@@ -269,14 +261,14 @@ public class CloudDnsWriterTest {
               .setKind("dns#resourceRecordSet")
               .setType("DS")
               .setName(domainName + ".")
-              .setTtl((int) DEFAULT_TTL.getStandardSeconds())
+              .setTtl((int) DEFAULT_DS_TTL.getStandardSeconds())
               .setRrdatas(dsRecordData.build()));
     }
 
     return recordSetBuilder.build();
   }
 
-  /** Returns a domain to be persisted in the datastore. */
+  /** Returns a domain to be persisted in Datastore. */
   private static DomainResource fakeDomain(
       String domainName, ImmutableSet<HostResource> nameservers, int numDsRecords) {
     ImmutableSet.Builder<DelegationSignerData> dsDataBuilder = new ImmutableSet.Builder<>();
@@ -311,12 +303,12 @@ public class CloudDnsWriterTest {
   public void testLoadDomain_nonExistentDomain() throws Exception {
     writer.publishDomain("example.tld");
 
-    verifyZone(ImmutableSet.<ResourceRecordSet>of());
+    verifyZone(ImmutableSet.of());
   }
 
   @Test
   public void testLoadDomain_noDsDataOrNameservers() throws Exception {
-    persistResource(fakeDomain("example.tld", ImmutableSet.<HostResource>of(), 0));
+    persistResource(fakeDomain("example.tld", ImmutableSet.of(), 0));
     writer.publishDomain("example.tld");
 
     verifyZone(fakeDomainRecords("example.tld", 0, 0, 0, 0));
@@ -325,7 +317,7 @@ public class CloudDnsWriterTest {
   @Test
   public void testLoadDomain_deleteOldData() throws Exception {
     stubZone = fakeDomainRecords("example.tld", 2, 2, 2, 2);
-    persistResource(fakeDomain("example.tld", ImmutableSet.<HostResource>of(), 0));
+    persistResource(fakeDomain("example.tld", ImmutableSet.of(), 0));
     writer.publishDomain("example.tld");
 
     verifyZone(fakeDomainRecords("example.tld", 0, 0, 0, 0));
@@ -384,7 +376,7 @@ public class CloudDnsWriterTest {
     writer.publishHost("ns1.example.com");
 
     // external hosts should not be published in our zone
-    verifyZone(ImmutableSet.<ResourceRecordSet>of());
+    verifyZone(ImmutableSet.of());
   }
 
   @Test
@@ -412,14 +404,12 @@ public class CloudDnsWriterTest {
   @Test
   @SuppressWarnings("unchecked")
   public void retryMutateZoneOnError() throws Exception {
-    try (CloudDnsWriter spyWriter = spy(writer)) {
-      when(mutateZoneCallable.call()).thenThrow(ZoneStateException.class).thenReturn(null);
-      when(spyWriter.getMutateZoneCallback(
-              Matchers.<ImmutableMap<String, ImmutableSet<ResourceRecordSet>>>any()))
-          .thenReturn(mutateZoneCallable);
-    }
+    CloudDnsWriter spyWriter = spy(writer);
+    // First call - throw. Second call - do nothing.
+    doThrow(ZoneStateException.class).doNothing().when(spyWriter).mutateZone(Matchers.any());
+    spyWriter.commit();
 
-    verify(mutateZoneCallable, times(2)).call();
+    verify(spyWriter, times(2)).mutateZone(Matchers.any());
   }
 
   @Test
@@ -434,7 +424,7 @@ public class CloudDnsWriterTest {
             .build());
     writer.publishDomain("example.tld");
 
-    verifyZone(ImmutableSet.<ResourceRecordSet>of());
+    verifyZone(ImmutableSet.of());
   }
 
   @Test
@@ -450,7 +440,7 @@ public class CloudDnsWriterTest {
 
     writer.publishDomain("example.tld");
 
-    verifyZone(ImmutableSet.<ResourceRecordSet>of());
+    verifyZone(ImmutableSet.of());
   }
 
   @Test
@@ -465,6 +455,45 @@ public class CloudDnsWriterTest {
             .build());
     writer.publishDomain("example.tld");
 
-    verifyZone(ImmutableSet.<ResourceRecordSet>of());
+    verifyZone(ImmutableSet.of());
+  }
+
+  @Test
+  public void testDuplicateRecords() throws Exception {
+    // In publishing DNS records, we can end up publishing information on the same host twice
+    // (through a domain change and a host change), so this scenario needs to work.
+    persistResource(
+            fakeDomain(
+                "example.tld",
+                ImmutableSet.of(persistResource(fakeHost("0.ip4.example.tld", IPv4))),
+                0))
+        .asBuilder()
+        .addSubordinateHost("ns1.example.tld")
+        .build();
+    writer.publishDomain("example.tld");
+    writer.publishHost("0.ip4.example.tld");
+
+    verifyZone(fakeDomainRecords("example.tld", 1, 0, 0, 0));
+  }
+
+  @Test
+  public void testInvalidZoneNames() {
+    createTld("triple.secret.tld");
+    persistResource(
+        fakeDomain(
+                "example.triple.secret.tld",
+                ImmutableSet.of(persistResource(fakeHost("0.ip4.example.tld", IPv4))),
+                0)
+            .asBuilder()
+            .build());
+    writer.publishDomain("example.triple.secret.tld");
+    writer.commit();
+    assertThat(zoneNameCaptor.getValue()).isEqualTo("triple-secret-tld");
+  }
+
+  @Test
+  public void testEmptyCommit() {
+    writer.commit();
+    verify(dnsConnection, times(0)).changes();
   }
 }

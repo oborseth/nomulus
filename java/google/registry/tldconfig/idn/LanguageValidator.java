@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +14,18 @@
 
 package google.registry.tldconfig.idn;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableMap;
+import java.util.Optional;
 
 abstract class LanguageValidator {
 
   /** A registry of all known language validators keyed by their language code. */
   private static final ImmutableMap<String, LanguageValidator> LANGUAGE_VALIDATORS =
-      ImmutableMap.<String, LanguageValidator>of("ja", new JapaneseLanguageValidator());
+      ImmutableMap.of("ja", new JapaneseLanguageValidator());
 
   /** Return the language validator for the given language code (if one exists). */
   static Optional<LanguageValidator> get(String language) {
-    return Optional.fromNullable(LANGUAGE_VALIDATORS.get(language));
+    return Optional.ofNullable(LANGUAGE_VALIDATORS.get(language));
   }
 
   /** Returns true if the label meets the context rules for this language. */

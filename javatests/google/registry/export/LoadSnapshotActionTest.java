@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,10 +22,12 @@ import static google.registry.export.LoadSnapshotAction.LOAD_SNAPSHOT_KINDS_PARA
 import static google.registry.export.LoadSnapshotAction.PATH;
 import static google.registry.export.LoadSnapshotAction.QUEUE;
 import static google.registry.export.LoadSnapshotAction.enqueueLoadSnapshotTask;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.testing.TaskQueueHelper.assertTasksEnqueued;
 import static org.joda.time.DateTimeZone.UTC;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -36,7 +38,6 @@ import com.google.api.services.bigquery.model.Job;
 import com.google.api.services.bigquery.model.JobConfigurationLoad;
 import com.google.api.services.bigquery.model.JobReference;
 import com.google.appengine.api.taskqueue.QueueFactory;
-import com.google.common.base.Function;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import google.registry.bigquery.BigqueryFactory;
@@ -44,7 +45,6 @@ import google.registry.export.BigqueryPollJobAction.BigqueryPollJobEnqueuer;
 import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.InternalServerErrorException;
 import google.registry.testing.AppEngineRule;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.TaskQueueHelper.TaskMatcher;
 import java.io.IOException;
@@ -54,42 +54,25 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
 
 /** Unit tests for {@link LoadSnapshotAction}. */
-@RunWith(MockitoJUnitRunner.class)
+@RunWith(JUnit4.class)
 public class LoadSnapshotActionTest {
 
   @Rule
   public final AppEngineRule appEngine = AppEngineRule.builder()
       .withTaskQueue()
       .build();
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Mock
-  private BigqueryFactory bigqueryFactory;
-
-  @Mock
-  private Bigquery bigquery;
-
-  @Mock
-  private Bigquery.Jobs bigqueryJobs;
-
-  @Mock
-  private Bigquery.Jobs.Insert bigqueryJobsInsert;
-
-  @Mock
-  private Bigquery.Datasets bigqueryDatasets;
-
-  @Mock
-  private Bigquery.Datasets.Insert bigqueryDatasetsInsert;
-
-  @Mock
-  private BigqueryPollJobEnqueuer bigqueryPollEnqueuer;
+  private final BigqueryFactory bigqueryFactory = mock(BigqueryFactory.class);
+  private final Bigquery bigquery = mock(Bigquery.class);
+  private final Bigquery.Jobs bigqueryJobs = mock(Bigquery.Jobs.class);
+  private final Bigquery.Jobs.Insert bigqueryJobsInsert = mock(Bigquery.Jobs.Insert.class);
+  private final Bigquery.Datasets bigqueryDatasets = mock(Bigquery.Datasets.class);
+  private final Bigquery.Datasets.Insert bigqueryDatasetsInsert =
+      mock(Bigquery.Datasets.Insert.class);
+  private final BigqueryPollJobEnqueuer bigqueryPollEnqueuer = mock(BigqueryPollJobEnqueuer.class);
 
   private FakeClock clock = new FakeClock(new DateTime(1391096117045L, UTC));
   private LoadSnapshotAction action;
@@ -150,31 +133,27 @@ public class LoadSnapshotActionTest {
     }
 
     // Check the job IDs for each load job.
-    assertThat(transform(jobs, new Function<Job, String>() {
-        @Override
-        public String apply(Job job) {
-          return job.getJobReference().getJobId();
-        }})).containsExactly(
+    assertThat(transform(jobs, job -> job.getJobReference().getJobId()))
+        .containsExactly(
             "load-snapshot-id12345-one-1391096117045",
             "load-snapshot-id12345-two-1391096117045",
             "load-snapshot-id12345-three-1391096117045");
 
     // Check the source URI for each load job.
-    assertThat(transform(jobs, new Function<Job, String>() {
-        @Override
-        public String apply(Job job) {
-          return Iterables.getOnlyElement(job.getConfiguration().getLoad().getSourceUris());
-        }})).containsExactly(
+    assertThat(
+            transform(
+                jobs,
+                job -> Iterables.getOnlyElement(job.getConfiguration().getLoad().getSourceUris())))
+        .containsExactly(
             "gs://bucket/snapshot.one.backup_info",
             "gs://bucket/snapshot.two.backup_info",
             "gs://bucket/snapshot.three.backup_info");
 
     // Check the destination table ID for each load job.
-    assertThat(transform(jobs, new Function<Job, String>() {
-        @Override
-        public String apply(Job job) {
-          return job.getConfiguration().getLoad().getDestinationTable().getTableId();
-        }})).containsExactly("id12345_one", "id12345_two", "id12345_three");
+    assertThat(
+            transform(
+                jobs, job -> job.getConfiguration().getLoad().getDestinationTable().getTableId()))
+        .containsExactly("id12345_one", "id12345_two", "id12345_three");
 
     // Check that we executed the inserted jobs.
     verify(bigqueryJobsInsert, times(3)).execute();
@@ -203,18 +182,19 @@ public class LoadSnapshotActionTest {
   @Test
   public void testFailure_doPost_badGcsFilename() throws Exception {
     action.snapshotFile = "gs://bucket/snapshot";
-    thrown.expect(
-        BadRequestException.class,
-        "Error calling load snapshot: backup info file extension missing");
-    action.run();
+    BadRequestException thrown = expectThrows(BadRequestException.class, action::run);
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Error calling load snapshot: backup info file extension missing");
   }
 
   @Test
   public void testFailure_doPost_bigqueryThrowsException() throws Exception {
     when(bigqueryJobsInsert.execute()).thenThrow(new IOException("The Internet has gone missing"));
-    thrown.expect(
-        InternalServerErrorException.class,
-        "Error loading snapshot: The Internet has gone missing");
-    action.run();
+    InternalServerErrorException thrown =
+        expectThrows(InternalServerErrorException.class, action::run);
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("Error loading snapshot: The Internet has gone missing");
   }
 }

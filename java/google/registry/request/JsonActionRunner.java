@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,9 +35,13 @@ public final class JsonActionRunner {
     Map<String, ?> handleJsonRequest(Map<String, ?> json);
   }
 
-  @Inject @JsonPayload Map<String, Object> payload;
-  @Inject JsonResponse response;
-  @Inject JsonActionRunner() {}
+  @JsonPayload Map<String, Object> payload;
+  JsonResponse response;
+
+  @Inject public JsonActionRunner(@JsonPayload Map<String, Object> payload, JsonResponse response) {
+    this.payload = payload;
+    this.response = response;
+  }
 
   /** Delegates request to {@code action}. */
   public void run(JsonAction action) {

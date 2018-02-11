@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,9 +15,12 @@
 package google.registry.flows.session;
 
 import static google.registry.testing.DatastoreHelper.createTld;
+import static google.registry.testing.EppExceptionSubject.assertAboutEppExceptions;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
+import google.registry.flows.EppException;
 import google.registry.flows.FlowTestCase;
-import google.registry.flows.LoggedInFlow.NotLoggedInException;
+import google.registry.flows.FlowUtils.NotLoggedInException;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -37,13 +40,13 @@ public class LogoutFlowTest extends FlowTestCase<LogoutFlow> {
   public void testSuccess() throws Exception {
     assertTransactionalFlow(false);
     // All flow tests are implicitly logged in, so logout should work.
-    runFlowAssertResponse(readFile("logout_response.xml"));
+    runFlowAssertResponse(loadFile("logout_response.xml"));
   }
 
   @Test
   public void testFailure() throws Exception {
     sessionMetadata.setClientId(null);  // Turn off the implicit login
-    thrown.expect(NotLoggedInException.class);
-    runFlow();
+    EppException thrown = expectThrows(NotLoggedInException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 }

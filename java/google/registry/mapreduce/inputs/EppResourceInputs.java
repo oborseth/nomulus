@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,8 +15,6 @@
 package google.registry.mapreduce.inputs;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Predicates.not;
-import static com.google.common.collect.Iterables.all;
 import static com.google.common.collect.Lists.asList;
 import static google.registry.util.TypeUtils.hasAnnotation;
 
@@ -55,10 +53,9 @@ public final class EppResourceInputs {
   public static <R extends EppResource> Input<R> createEntityInput(
       Class<? extends R> resourceClass,
       Class<? extends R>... moreResourceClasses) {
-    return new EppResourceEntityInput<R>(
+    return new EppResourceEntityInput<>(
         ImmutableSet.copyOf(asList(resourceClass, moreResourceClasses)));
   }
-
 
   /**
    * Returns a MapReduce {@link Input} that loads all {@link ImmutableObject} objects of a given
@@ -92,7 +89,7 @@ public final class EppResourceInputs {
     ImmutableSet<Class<? extends R>> resourceClasses =
         ImmutableSet.copyOf(asList(resourceClass, moreResourceClasses));
     checkArgument(
-        all(resourceClasses, not(hasAnnotation(EntitySubclass.class))),
+        resourceClasses.stream().noneMatch(hasAnnotation(EntitySubclass.class)),
         "Mapping over keys requires a non-polymorphic Entity");
     return new EppResourceKeyInput<>(resourceClasses);
   }

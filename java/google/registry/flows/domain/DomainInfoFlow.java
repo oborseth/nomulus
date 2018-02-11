@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,36 +14,47 @@
 
 package google.registry.flows.domain;
 
-import static google.registry.flows.ResourceFlowUtils.loadAndVerifyExistence;
-import static google.registry.flows.ResourceFlowUtils.verifyOptionalAuthInfoForResource;
+import static com.google.common.collect.Sets.union;
+import static google.registry.flows.FlowUtils.validateClientIsLoggedIn;
+import static google.registry.flows.ResourceFlowUtils.verifyExistence;
+import static google.registry.flows.ResourceFlowUtils.verifyOptionalAuthInfo;
 import static google.registry.flows.domain.DomainFlowUtils.addSecDnsExtensionIfPresent;
 import static google.registry.flows.domain.DomainFlowUtils.handleFeeRequest;
-import static google.registry.model.eppoutput.Result.Code.SUCCESS;
-import static google.registry.util.CollectionUtils.forceEmptyToNull;
+import static google.registry.flows.domain.DomainFlowUtils.loadForeignKeyedDesignatedContacts;
+import static google.registry.model.EppResourceUtils.loadByForeignKey;
+import static google.registry.model.ofy.ObjectifyService.ofy;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.net.InternetDomainName;
 import google.registry.flows.EppException;
+import google.registry.flows.ExtensionManager;
+import google.registry.flows.Flow;
 import google.registry.flows.FlowModule.ClientId;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.LoggedInFlow;
+import google.registry.flows.annotations.ReportingSpec;
+import google.registry.flows.custom.DomainInfoFlowCustomLogic;
+import google.registry.flows.custom.DomainInfoFlowCustomLogic.AfterValidationParameters;
+import google.registry.flows.custom.DomainInfoFlowCustomLogic.BeforeResponseParameters;
+import google.registry.flows.custom.DomainInfoFlowCustomLogic.BeforeResponseReturnData;
 import google.registry.model.domain.DomainCommand.Info;
 import google.registry.model.domain.DomainCommand.Info.HostsRequest;
+import google.registry.model.domain.DomainInfoData;
 import google.registry.model.domain.DomainResource;
-import google.registry.model.domain.DomainResource.Builder;
 import google.registry.model.domain.fee06.FeeInfoCommandExtensionV06;
 import google.registry.model.domain.fee06.FeeInfoResponseExtensionV06;
-import google.registry.model.domain.flags.FlagsInfoResponseExtension;
 import google.registry.model.domain.rgp.GracePeriodStatus;
 import google.registry.model.domain.rgp.RgpInfoExtension;
 import google.registry.model.eppcommon.AuthInfo;
+import google.registry.model.eppinput.EppInput;
 import google.registry.model.eppinput.ResourceCommand;
-import google.registry.model.eppoutput.EppOutput;
+import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.eppoutput.EppResponse.ResponseExtension;
-import java.util.Set;
+import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
+import google.registry.util.Clock;
+import java.util.Optional;
 import javax.inject.Inject;
+import org.joda.time.DateTime;
 
 /**
  * An EPP flow that returns information about a domain.
@@ -58,90 +69,102 @@ import javax.inject.Inject;
  * @error {@link DomainFlowUtils.CurrencyUnitMismatchException}
  * @error {@link DomainFlowUtils.FeeChecksDontSupportPhasesException}
  * @error {@link DomainFlowUtils.RestoresAreAlwaysForOneYearException}
+ * @error {@link DomainFlowUtils.TransfersAreAlwaysForOneYearException}
  */
-public final class DomainInfoFlow extends LoggedInFlow {
+@ReportingSpec(ActivityReportField.DOMAIN_INFO)
+public final class DomainInfoFlow implements Flow {
 
+  @Inject ExtensionManager extensionManager;
+  @Inject ResourceCommand resourceCommand;
+  @Inject EppInput eppInput;
   @Inject Optional<AuthInfo> authInfo;
   @Inject @ClientId String clientId;
   @Inject @TargetId String targetId;
-  @Inject ResourceCommand resourceCommand;
-  @Inject DomainInfoFlow() {}
+  @Inject Clock clock;
+  @Inject EppResponse.Builder responseBuilder;
+  @Inject DomainInfoFlowCustomLogic flowCustomLogic;
+  @Inject DomainPricingLogic pricingLogic;
+
+  @Inject
+  DomainInfoFlow() {}
 
   @Override
-  protected void initLoggedInFlow() throws EppException {
-    registerExtensions(FeeInfoCommandExtensionV06.class);
-  }
-
-  @Override
-  public final EppOutput run() throws EppException {
-    DomainResource domain = loadAndVerifyExistence(DomainResource.class, targetId, now);
-    verifyOptionalAuthInfoForResource(authInfo, domain);
-    return createOutput(
-        SUCCESS,
-        getResourceInfo(domain),
-        getDomainResponseExtensions(domain));
-  }
-
-  private DomainResource getResourceInfo(DomainResource domain) {
+  public final EppResponse run() throws EppException {
+    extensionManager.register(FeeInfoCommandExtensionV06.class);
+    flowCustomLogic.beforeValidation();
+    extensionManager.validate();
+    validateClientIsLoggedIn(clientId);
+    DateTime now = clock.nowUtc();
+    DomainResource domain = verifyExistence(
+        DomainResource.class, targetId, loadByForeignKey(DomainResource.class, targetId, now));
+    verifyOptionalAuthInfo(authInfo, domain);
+    flowCustomLogic.afterValidation(
+        AfterValidationParameters.newBuilder().setDomain(domain).build());
+    // Prefetch all referenced resources. Calling values() blocks until loading is done.
+    ofy().load()
+        .values(union(domain.getNameservers(), domain.getReferencedContacts())).values();
+    // Registrars can only see a few fields on unauthorized domains.
+    // This is a policy decision that is left up to us by the rfcs.
+    DomainInfoData.Builder infoBuilder = DomainInfoData.newBuilder()
+        .setFullyQualifiedDomainName(domain.getFullyQualifiedDomainName())
+        .setRepoId(domain.getRepoId())
+        .setCurrentSponsorClientId(domain.getCurrentSponsorClientId())
+        .setRegistrant(ofy().load().key(domain.getRegistrant()).now().getContactId());
     // If authInfo is non-null, then the caller is authorized to see the full information since we
     // will have already verified the authInfo is valid.
-    if (!(clientId.equals(domain.getCurrentSponsorClientId()) || authInfo.isPresent())) {
-      // Registrars can only see a few fields on unauthorized domains.
-      // This is a policy decision that is left up to us by the rfcs.
-      return new DomainResource.Builder()
-          .setFullyQualifiedDomainName(domain.getFullyQualifiedDomainName())
-          .setRepoId(domain.getRepoId())
-          .setCurrentSponsorClientId(domain.getCurrentSponsorClientId())
-          .setRegistrant(domain.getRegistrant())
-          // If we didn't do this, we'd get implicit status values.
-          .buildWithoutImplicitStatusValues();
+    if (clientId.equals(domain.getCurrentSponsorClientId()) || authInfo.isPresent()) {
+      HostsRequest hostsRequest = ((Info) resourceCommand).getHostsRequest();
+      infoBuilder
+          .setStatusValues(domain.getStatusValues())
+          .setContacts(loadForeignKeyedDesignatedContacts(domain.getContacts()))
+          .setNameservers(hostsRequest.requestDelegated()
+              ? domain.loadNameserverFullyQualifiedHostNames()
+              : null)
+          .setSubordinateHosts(hostsRequest.requestSubordinate()
+              ? domain.getSubordinateHosts()
+              : null)
+          .setCreationClientId(domain.getCreationClientId())
+          .setCreationTime(domain.getCreationTime())
+          .setLastEppUpdateClientId(domain.getLastEppUpdateClientId())
+          .setLastEppUpdateTime(domain.getLastEppUpdateTime())
+          .setRegistrationExpirationTime(domain.getRegistrationExpirationTime())
+          .setLastTransferTime(domain.getLastTransferTime())
+          .setAuthInfo(domain.getAuthInfo());
     }
-    HostsRequest hostsRequest = ((Info) resourceCommand).getHostsRequest();
-    Builder info = domain.asBuilder();
-    if (!hostsRequest.requestSubordinate()) {
-      info.setSubordinateHosts(null);
-    }
-    if (!hostsRequest.requestDelegated()) {
-      // Delegated hosts are present by default, so clear them out if they aren't wanted.
-      // This requires overriding the implicit status values so that we don't get INACTIVE added due
-      // to the missing nameservers.
-      return info.setNameservers(null).buildWithoutImplicitStatusValues();
-    }
-    return info.build();
+    BeforeResponseReturnData responseData =
+        flowCustomLogic.beforeResponse(
+            BeforeResponseParameters.newBuilder()
+                .setDomain(domain)
+                .setResData(infoBuilder.build())
+                .setResponseExtensions(getDomainResponseExtensions(domain, now))
+                .build());
+    return responseBuilder
+        .setResData(responseData.resData())
+        .setExtensions(responseData.responseExtensions())
+        .build();
   }
 
-  private ImmutableList<ResponseExtension> getDomainResponseExtensions(DomainResource domain)
-      throws EppException {
+  private ImmutableList<ResponseExtension> getDomainResponseExtensions(
+      DomainResource domain, DateTime now) throws EppException {
     ImmutableList.Builder<ResponseExtension> extensions = new ImmutableList.Builder<>();
     addSecDnsExtensionIfPresent(extensions, domain.getDsData());
     ImmutableSet<GracePeriodStatus> gracePeriodStatuses = domain.getGracePeriodStatuses();
     if (!gracePeriodStatuses.isEmpty()) {
       extensions.add(RgpInfoExtension.create(gracePeriodStatuses));
     }
-    FeeInfoCommandExtensionV06 feeInfo =
+    Optional<FeeInfoCommandExtensionV06> feeInfo =
         eppInput.getSingleExtension(FeeInfoCommandExtensionV06.class);
-    if (feeInfo != null) {  // Fee check was requested.
+    if (feeInfo.isPresent()) { // Fee check was requested.
       FeeInfoResponseExtensionV06.Builder builder = new FeeInfoResponseExtensionV06.Builder();
       handleFeeRequest(
-          feeInfo,
+          feeInfo.get(),
           builder,
           InternetDomainName.from(targetId),
-          clientId,
           null,
           now,
-          eppInput);
+          pricingLogic);
       extensions.add(builder.build());
     }
-    // If the TLD uses the flags extension, add it to the info response.
-    Optional<RegistryExtraFlowLogic> extraLogicManager =
-        RegistryExtraFlowLogicProxy.newInstanceForDomain(domain);
-    if (extraLogicManager.isPresent()) {
-      Set<String> flags = extraLogicManager.get().getExtensionFlags(
-          domain, clientId, now); // As-of date is always now for info commands.
-      if (!flags.isEmpty()) {
-        extensions.add(FlagsInfoResponseExtension.create(ImmutableList.copyOf(flags)));
-      }
-    }
-    return forceEmptyToNull(extensions.build());
+    return extensions.build();
   }
 }

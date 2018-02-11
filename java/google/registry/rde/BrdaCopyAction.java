@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,13 +20,14 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.appengine.tools.cloudstorage.GcsFilename;
 import com.google.common.io.ByteStreams;
-import google.registry.config.ConfigModule.Config;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.gcs.GcsUtils;
 import google.registry.keyring.api.KeyModule.Key;
 import google.registry.model.rde.RdeNamingUtils;
 import google.registry.request.Action;
 import google.registry.request.Parameter;
 import google.registry.request.RequestParameters;
+import google.registry.request.auth.Auth;
 import google.registry.util.FormattingLogger;
 import java.io.BufferedInputStream;
 import java.io.IOException;
@@ -50,9 +51,14 @@ import org.joda.time.DateTime;
  * This bucket is special because a separate script will rsync it to the third party escrow provider
  * SFTP server. This is why the internal staging files are stored in the separate RDE bucket.
  *
- * @see "http://newgtlds.icann.org/en/applicants/agb/agreement-approved-09jan14-en.htm"
+ * @see <a href="http://newgtlds.icann.org/en/applicants/agb/agreement-approved-09jan14-en.htm">Registry Agreement</a>
  */
-@Action(path = BrdaCopyAction.PATH, method = POST, automaticallyPrintOk = true)
+@Action(
+  path = BrdaCopyAction.PATH,
+  method = POST,
+  automaticallyPrintOk = true,
+  auth = Auth.AUTH_INTERNAL_ONLY
+)
 public final class BrdaCopyAction implements Runnable {
 
   static final String PATH = "/_dr/task/brdaCopy";

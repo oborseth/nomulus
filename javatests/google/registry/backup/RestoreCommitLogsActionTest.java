@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 package google.registry.backup;
 
 import static com.google.appengine.tools.cloudstorage.GcsServiceFactory.createGcsService;
-import static com.google.common.base.Functions.constant;
 import static com.google.common.collect.Iterables.transform;
 import static com.google.common.collect.Maps.toMap;
 import static com.google.common.truth.Truth.assertThat;
@@ -33,14 +32,11 @@ import com.google.appengine.api.datastore.DatastoreServiceFactory;
 import com.google.appengine.tools.cloudstorage.GcsFileOptions;
 import com.google.appengine.tools.cloudstorage.GcsFilename;
 import com.google.appengine.tools.cloudstorage.GcsService;
-import com.google.common.base.Function;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.primitives.Longs;
 import com.googlecode.objectify.Key;
-import com.googlecode.objectify.ObjectifyService;
-import google.registry.config.TestRegistryConfig;
 import google.registry.model.ImmutableObject;
 import google.registry.model.ofy.CommitLogBucket;
 import google.registry.model.ofy.CommitLogCheckpoint;
@@ -50,7 +46,6 @@ import google.registry.model.ofy.CommitLogMutation;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.FakeSleeper;
-import google.registry.testing.RegistryConfigRule;
 import google.registry.testing.TestObject;
 import google.registry.util.Retrier;
 import java.io.ByteArrayOutputStream;
@@ -81,12 +76,8 @@ public class RestoreCommitLogsActionTest {
       .withDatastore()
       .build();
 
-  @Rule
-  public final RegistryConfigRule configRule = new RegistryConfigRule();
-
   @Before
   public void init() {
-    ObjectifyService.register(TestObject.class);
     action.gcsService = gcsService;
     action.dryRun = false;
     action.datastoreService = DatastoreServiceFactory.getDatastoreService();
@@ -96,11 +87,6 @@ public class RestoreCommitLogsActionTest {
     action.diffLister.gcsService = gcsService;
     action.diffLister.gcsBucket = GCS_BUCKET;
     action.diffLister.executor = newDirectExecutorService();
-    configRule.override(new TestRegistryConfig() {
-      @Override
-      public int getCommitLogBucketCount() {
-        return 3;
-      }});
   }
 
   @Test
@@ -126,13 +112,13 @@ public class RestoreCommitLogsActionTest {
         CommitLogManifest.create(
             getBucketKey(1),
             now.minusMinutes(3),
-            ImmutableSet.<Key<?>>of(Key.create(TestObject.create("previous to delete")))),
+            ImmutableSet.of(Key.create(TestObject.create("previous to delete")))),
         CommitLogMutation.create(manifest1aKey, TestObject.create("a")),
         CommitLogMutation.create(manifest1aKey, TestObject.create("b")),
         CommitLogManifest.create(
             getBucketKey(2),
             now.minusMinutes(2),
-            ImmutableSet.<Key<?>>of(Key.create(TestObject.create("a")))),
+            ImmutableSet.of(Key.create(TestObject.create("a")))),
         CommitLogMutation.create(manifest1bKey, TestObject.create("c")),
         CommitLogMutation.create(manifest1bKey, TestObject.create("d")));
     Iterable<ImmutableObject> file2CommitLogs = saveDiffFile(
@@ -140,7 +126,7 @@ public class RestoreCommitLogsActionTest {
         CommitLogManifest.create(
             getBucketKey(1),
             now.minusMinutes(1),
-            ImmutableSet.<Key<?>>of(Key.create(TestObject.create("c")))),
+            ImmutableSet.of(Key.create(TestObject.create("c")))),
         CommitLogMutation.create(manifest2Key, TestObject.create("e")),
         CommitLogMutation.create(manifest2Key, TestObject.create("f")));
     action.fromTime = now.minusMinutes(1).minusMillis(1);
@@ -164,7 +150,7 @@ public class RestoreCommitLogsActionTest {
     assertExpectedIds("previous to keep");
     assertInDatastore(commitLogs);
     assertInDatastore(asList(CommitLogCheckpointRoot.create(now)));
-    assertCommitLogBuckets(ImmutableMap.<Integer, DateTime>of());
+    assertCommitLogBuckets(ImmutableMap.of());
   }
 
   @Test
@@ -197,7 +183,7 @@ public class RestoreCommitLogsActionTest {
         CommitLogManifest.create(
             getBucketKey(1),
             now,
-            ImmutableSet.<Key<?>>of(Key.create(TestObject.create("previous to delete")))));
+            ImmutableSet.of(Key.create(TestObject.create("previous to delete")))));
     action.run();
     ofy().clearSessionCache();
     assertExpectedIds("previous to keep");
@@ -250,7 +236,7 @@ public class RestoreCommitLogsActionTest {
         CommitLogManifest.create(
             getBucketKey(1),
             now,
-            ImmutableSet.<Key<?>>of(Key.create(TestObject.create("previous to delete")))));
+            ImmutableSet.of(Key.create(TestObject.create("previous to delete")))));
     action.run();
     ofy().clearSessionCache();
     assertExpectedIds("previous to keep");
@@ -260,13 +246,13 @@ public class RestoreCommitLogsActionTest {
   }
 
   private CommitLogCheckpoint createCheckpoint(DateTime now) {
-    return CommitLogCheckpoint.create(now, toMap(getBucketIds(), constant(now)));
+    return CommitLogCheckpoint.create(now, toMap(getBucketIds(), x -> now));
   }
 
   private Iterable<ImmutableObject> saveDiffFile(
       CommitLogCheckpoint checkpoint, ImmutableObject... entities) throws IOException {
     DateTime now = checkpoint.getCheckpointTime();
-    List<ImmutableObject> allEntities = Lists.<ImmutableObject>asList(checkpoint, entities);
+    List<ImmutableObject> allEntities = Lists.asList(checkpoint, entities);
     ByteArrayOutputStream output = new ByteArrayOutputStream();
     for (ImmutableObject entity : allEntities) {
       serializeEntity(entity, output);
@@ -290,13 +276,8 @@ public class RestoreCommitLogsActionTest {
   }
 
   private void assertExpectedIds(String... ids) {
-    assertThat(transform(
-        ofy().load().type(TestObject.class),
-        new Function<TestObject, String>() {
-          @Override
-          public String apply(TestObject test) {
-            return test.getId();
-          }})).containsExactly((Object[]) ids);
+    assertThat(transform(ofy().load().type(TestObject.class), TestObject::getId))
+        .containsExactly((Object[]) ids);
   }
 
   private void assertInDatastore(Iterable<? extends ImmutableObject> entities) {

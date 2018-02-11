@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-{namespace domain.registry.tools autoescape="strict"}
+{namespace domain.registry.tools}
 
 /**
  * Domain check claims request
  */
-{template .domaincheckclaims}
+{template .domaincheckclaims stricthtml="false"}
 {@param domainNames: list<string>}
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <epp xmlns="urn:ietf:params:xml:ns:epp-1.0">
   <command>
     <check>
       <domain:check xmlns:domain="urn:ietf:params:xml:ns:domain-1.0">
-      {foreach $d in $domainNames}
+      {for $d in $domainNames}
         <domain:name>{$d}</domain:name>
-      {/foreach}
+      {/for}
       </domain:check>
     </check>
     <extension>

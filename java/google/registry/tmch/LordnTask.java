@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package google.registry.tmch;
 
 import static com.google.appengine.api.taskqueue.QueueFactory.getQueue;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static google.registry.model.ofy.ObjectifyService.ofy;
 
 import com.google.appengine.api.taskqueue.LeaseOptions;
@@ -33,6 +34,7 @@ import google.registry.model.domain.DomainResource;
 import google.registry.model.registrar.Registrar;
 import google.registry.util.NonFinalForTesting;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
@@ -150,11 +152,10 @@ public class LordnTask {
 
   /** Retrieves the IANA identifier for a registrar based on the client id. */
   private static String getIanaIdentifier(String clientId) {
-     Registrar registrar = checkNotNull(
-         Registrar.loadByClientId(clientId),
-         "No registrar found for client id: %s", clientId);
+    Optional<Registrar> registrar = Registrar.loadByClientIdCached(clientId);
+    checkState(registrar.isPresent(), "No registrar found for client id: %s", clientId);
     // Return the string "null" for null identifiers, since some Registrar.Types such as OTE will
     // have null iana ids.
-    return String.valueOf(registrar.getIanaIdentifier());
+    return String.valueOf(registrar.get().getIanaIdentifier());
   }
 }

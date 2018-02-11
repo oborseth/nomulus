@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,13 +15,13 @@
 package google.registry.request;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth8.assertThat;
+import static google.registry.request.auth.Auth.AUTH_INTERNAL_ONLY;
+import static google.registry.testing.JUnitBackports.expectThrows;
 
-import com.google.common.base.Function;
-import com.google.common.base.Optional;
-import com.google.common.collect.ImmutableList;
-import google.registry.testing.ExceptionRule;
+import java.util.Optional;
 import java.util.concurrent.Callable;
-import org.junit.Rule;
+import java.util.function.Function;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -30,27 +30,23 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public final class RouterTest {
 
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  private Router create(Class<?> clazz) {
-    return Router.create(ImmutableList.copyOf(clazz.getMethods()));
-  }
-
   ////////////////////////////////////////////////////////////////////////////////////////////////
 
   public interface Empty {}
 
   @Test
-  public void testRoute_noRoutes_returnsAbsent() throws Exception {
-    assertThat(create(Empty.class).route("")).isAbsent();
-    assertThat(create(Empty.class).route("/")).isAbsent();
+  public void testRoute_noRoutes_throws() throws Exception {
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> Router.create(Empty.class));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("No routes found for class: google.registry.request.RouterTest.Empty");
   }
 
   ////////////////////////////////////////////////////////////////////////////////////////////////
 
-  @Action(path = "/sloth")
-  public final class SlothTask implements Runnable {
+  @Action(path = "/sloth", auth = AUTH_INTERNAL_ONLY)
+  public static final class SlothTask implements Runnable {
     @Override
     public void run() {}
   }
@@ -61,7 +57,7 @@ public final class RouterTest {
 
   @Test
   public void testRoute_pathMatch_returnsRoute() throws Exception {
-    Optional<Route> route = create(SlothComponent.class).route("/sloth");
+    Optional<Route> route = Router.create(SlothComponent.class).route("/sloth");
     assertThat(route).isPresent();
     assertThat(route.get().action().path()).isEqualTo("/sloth");
     assertThat(route.get().instantiator()).isInstanceOf(Function.class);
@@ -69,18 +65,18 @@ public final class RouterTest {
 
   @Test
   public void testRoute_pathMismatch_returnsAbsent() throws Exception {
-    assertThat(create(SlothComponent.class).route("/doge")).isAbsent();
+    assertThat(Router.create(SlothComponent.class).route("/doge")).isEmpty();
   }
 
   @Test
   public void testRoute_pathIsAPrefix_notAllowedByDefault() throws Exception {
-    assertThat(create(SlothComponent.class).route("/sloth/extra")).isAbsent();
+    assertThat(Router.create(SlothComponent.class).route("/sloth/extra")).isEmpty();
   }
 
   ////////////////////////////////////////////////////////////////////////////////////////////////
 
-  @Action(path = "/prefix", isPrefix = true)
-  public final class PrefixTask implements Runnable {
+  @Action(path = "/prefix", isPrefix = true, auth = AUTH_INTERNAL_ONLY)
+  public static final class PrefixTask implements Runnable {
     @Override
     public void run() {}
   }
@@ -91,22 +87,22 @@ public final class RouterTest {
 
   @Test
   public void testRoute_prefixMatches_returnsRoute() throws Exception {
-    assertThat(create(PrefixComponent.class).route("/prefix")).isPresent();
-    assertThat(create(PrefixComponent.class).route("/prefix/extra")).isPresent();
+    assertThat(Router.create(PrefixComponent.class).route("/prefix")).isPresent();
+    assertThat(Router.create(PrefixComponent.class).route("/prefix/extra")).isPresent();
   }
 
   @Test
   public void testRoute_prefixDoesNotMatch_returnsAbsent() throws Exception {
-    assertThat(create(PrefixComponent.class).route("")).isAbsent();
-    assertThat(create(PrefixComponent.class).route("/")).isAbsent();
-    assertThat(create(PrefixComponent.class).route("/ulysses")).isAbsent();
-    assertThat(create(PrefixComponent.class).route("/man/of/sadness")).isAbsent();
+    assertThat(Router.create(PrefixComponent.class).route("")).isEmpty();
+    assertThat(Router.create(PrefixComponent.class).route("/")).isEmpty();
+    assertThat(Router.create(PrefixComponent.class).route("/ulysses")).isEmpty();
+    assertThat(Router.create(PrefixComponent.class).route("/man/of/sadness")).isEmpty();
   }
 
   ////////////////////////////////////////////////////////////////////////////////////////////////
 
-  @Action(path = "/prefix/long", isPrefix = true)
-  public final class LongTask implements Runnable {
+  @Action(path = "/prefix/long", isPrefix = true, auth = AUTH_INTERNAL_ONLY)
+  public static final class LongTask implements Runnable {
     @Override
     public void run() {}
   }
@@ -118,21 +114,21 @@ public final class RouterTest {
 
   @Test
   public void testRoute_prefixAndLongPathMatch_returnsLongerPath() throws Exception {
-    Optional<Route> route = create(LongPathComponent.class).route("/prefix/long");
+    Optional<Route> route = Router.create(LongPathComponent.class).route("/prefix/long");
     assertThat(route).isPresent();
     assertThat(route.get().action().path()).isEqualTo("/prefix/long");
   }
 
   @Test
   public void testRoute_prefixAndLongerPrefixMatch_returnsLongerPrefix() throws Exception {
-    Optional<Route> route = create(LongPathComponent.class).route("/prefix/longer");
+    Optional<Route> route = Router.create(LongPathComponent.class).route("/prefix/longer");
     assertThat(route).isPresent();
     assertThat(route.get().action().path()).isEqualTo("/prefix/long");
   }
 
   @Test
   public void testRoute_onlyShortPrefixMatches_returnsShortPrefix() throws Exception {
-    Optional<Route> route = create(LongPathComponent.class).route("/prefix/cat");
+    Optional<Route> route = Router.create(LongPathComponent.class).route("/prefix/cat");
     assertThat(route).isPresent();
     assertThat(route.get().action().path()).isEqualTo("/prefix");
   }
@@ -145,20 +141,26 @@ public final class RouterTest {
   }
 
   @Test
-  public void testRoute_methodsInComponentAreIgnored_noRoutes() throws Exception {
-    assertThat(create(WeirdMethodsComponent.class).route("/sloth")).isAbsent();
+  public void testRoute_methodsInComponentAreIgnored_throws() throws Exception {
+    IllegalArgumentException thrown =
+        expectThrows(
+            IllegalArgumentException.class, () -> Router.create(WeirdMethodsComponent.class));
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains(
+            "No routes found for class: google.registry.request.RouterTest.WeirdMethodsComponent");
   }
 
   ////////////////////////////////////////////////////////////////////////////////////////////////
 
-  @Action(path = "/samePathAsOtherTask")
-  public final class DuplicateTask1 implements Runnable {
+  @Action(path = "/samePathAsOtherTask", auth = AUTH_INTERNAL_ONLY)
+  public static final class DuplicateTask1 implements Runnable {
     @Override
     public void run() {}
   }
 
-  @Action(path = "/samePathAsOtherTask")
-  public final class DuplicateTask2 implements Runnable {
+  @Action(path = "/samePathAsOtherTask", auth = AUTH_INTERNAL_ONLY)
+  public static final class DuplicateTask2 implements Runnable {
     @Override
     public void run() {}
   }
@@ -170,7 +172,8 @@ public final class RouterTest {
 
   @Test
   public void testCreate_twoTasksWithSameMethodAndPath_resultsInError() throws Exception {
-    thrown.expect(IllegalArgumentException.class, "Multiple entries with same key");
-    create(DuplicateComponent.class);
+    IllegalArgumentException thrown =
+        expectThrows(IllegalArgumentException.class, () -> Router.create(DuplicateComponent.class));
+    assertThat(thrown).hasMessageThat().contains("Multiple entries with same key");
   }
 }

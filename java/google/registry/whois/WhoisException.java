@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -60,11 +60,19 @@ public final class WhoisException extends Exception implements WhoisResponse {
   }
 
   @Override
-  public String getPlainTextOutput(boolean preferUnicode, String disclaimer) {
-    return new WhoisResponseImpl.BasicEmitter()
+  public WhoisResponseResults getResponse(boolean preferUnicode, String disclaimer) {
+    String plaintext = new WhoisResponseImpl.BasicEmitter()
         .emitRawLine(getMessage())
         .emitLastUpdated(getTimestamp())
         .emitFooter(disclaimer)
         .toString();
+    return WhoisResponseResults.create(plaintext, 0);
+  }
+
+  /** Exception that wraps WhoisExceptions returned from Retrier. */
+  public static final class UncheckedWhoisException extends RuntimeException {
+    UncheckedWhoisException(WhoisException whoisException) {
+      super(whoisException);
+    }
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,12 +17,10 @@ package google.registry.testing;
 import static com.google.common.truth.Truth.assertAbout;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.flows.EppXmlTransformer.marshal;
-import static google.registry.util.DateTimeUtils.START_OF_TIME;
 
-import com.google.common.truth.AbstractVerb.DelegatedVerb;
-import com.google.common.truth.FailureStrategy;
+import com.google.common.truth.FailureMetadata;
+import com.google.common.truth.SimpleSubjectBuilder;
 import com.google.common.truth.Subject;
-import com.google.common.truth.SubjectFactory;
 import google.registry.flows.EppException;
 import google.registry.model.eppcommon.Trid;
 import google.registry.model.eppoutput.EppOutput;
@@ -34,12 +32,17 @@ import google.registry.xml.XmlException;
 /** Utility methods for asserting things about {@link EppException} instances. */
 public class EppExceptionSubject extends Subject<EppExceptionSubject, EppException> {
 
-  public EppExceptionSubject(FailureStrategy strategy, EppException subject) {
-    super(strategy, subject);
+  public EppExceptionSubject(FailureMetadata failureMetadata, EppException subject) {
+    super(failureMetadata, subject);
   }
 
   public And<EppExceptionSubject> hasMessage(String expected) {
-    assertThat(actual()).hasMessage(expected);
+    assertThat(actual()).hasMessageThat().isEqualTo(expected);
+    return new And<>(this);
+  }
+
+  public And<EppExceptionSubject> hasMessageThatContains(String expected) {
+    assertThat(actual()).hasMessageThat().contains(expected);
     return new And<>(this);
   }
 
@@ -48,9 +51,8 @@ public class EppExceptionSubject extends Subject<EppExceptionSubject, EppExcepti
     try {
       marshal(
           EppOutput.create(new EppResponse.Builder()
-              .setTrid(Trid.create(null))
+              .setTrid(Trid.create(null, "server-trid"))
               .setResult(actual().getResult())
-              .setExecutionTime(START_OF_TIME)
               .build()),
           ValidationMode.STRICT);
     } catch (XmlException e) {
@@ -59,11 +61,7 @@ public class EppExceptionSubject extends Subject<EppExceptionSubject, EppExcepti
     return new And<>(this);
   }
 
-  public static DelegatedVerb<EppExceptionSubject, EppException> assertAboutEppExceptions() {
-    return assertAbout(new SubjectFactory<EppExceptionSubject, EppException>() {
-      @Override
-      public EppExceptionSubject getSubject(FailureStrategy strategy, EppException subject) {
-        return new EppExceptionSubject(strategy, subject);
-      }});
+  public static SimpleSubjectBuilder<EppExceptionSubject, EppException> assertAboutEppExceptions() {
+    return assertAbout(EppExceptionSubject::new);
   }
 }

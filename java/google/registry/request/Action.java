@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 package google.registry.request;
 
+import google.registry.request.auth.Auth;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -25,7 +26,7 @@ import java.lang.annotation.Target;
 public @interface Action {
 
   /** HTTP methods recognized by the request processor. */
-  public enum Method { GET, HEAD, POST }
+  enum Method { GET, HEAD, POST }
 
   /** HTTP path to serve the action from. The path components must be percent-escaped. */
   String path();
@@ -45,20 +46,6 @@ public @interface Action {
    */
   boolean automaticallyPrintOk() default false;
 
-  // TODO(b/26304887): Flip default to true.
-  /** Enables XSRF protection on all HTTP methods except GET and HEAD. */
-  boolean xsrfProtection() default false;
-
-  /** Arbitrary value included in the XSRF token hash. */
-  String xsrfScope() default "app";
-
-  /**
-   * Require user be logged-in or 302 redirect to the Google auth login page.
-   *
-   * <p><b>Warning:</b> DO NOT use this for cron and task queue endpoints.
-   *
-   * <p><b>Note:</b> Logged-in actions should also be guarded by a {@code <security-constraint>} in
-   * {@code web.xml} with {@code <role-name>*</role-name>}.
-   */
-  boolean requireLogin() default false;
+  /** Authentication settings. */
+  Auth auth();
 }

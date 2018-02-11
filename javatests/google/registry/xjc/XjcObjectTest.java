@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,19 +16,18 @@ package google.registry.xjc;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static google.registry.testing.JUnitBackports.expectThrows;
 import static google.registry.util.ResourceUtils.readResourceUtf8;
 import static google.registry.xjc.XjcXmlTransformer.unmarshal;
 import static java.nio.charset.StandardCharsets.UTF_16;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.re2j.Pattern;
-import google.registry.testing.ExceptionRule;
 import google.registry.xjc.rde.XjcRdeDeposit;
 import google.registry.xjc.rde.XjcRdeDepositTypeType;
 import google.registry.xjc.rdecontact.XjcRdeContact;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -36,10 +35,6 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@code XjcObject}. */
 @RunWith(JUnit4.class)
 public class XjcObjectTest {
-
-  @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
   private static final String RDE_DEPOSIT_FULL =
       readResourceUtf8(XjcObjectTest.class, "testdata/rde_deposit_full.xml");
 
@@ -69,8 +64,9 @@ public class XjcObjectTest {
   public void testMarshalValidation() throws Exception {
     XjcRdeDeposit deposit = unmarshalFullDeposit();
     deposit.setId("");
-    thrown.expect(Throwable.class, "pattern '\\w{1,13}' for type 'depositIdType'");
-    deposit.marshal(new ByteArrayOutputStream(), UTF_8);
+    Throwable thrown =
+        expectThrows(Throwable.class, () -> deposit.marshal(new ByteArrayOutputStream(), UTF_8));
+    assertThat(thrown).hasMessageThat().contains("pattern '\\w{1,13}' for type 'depositIdType'");
   }
 
   @Test
@@ -92,9 +88,17 @@ public class XjcObjectTest {
 
   @Test
   public void testUnmarshalValidation() throws Exception {
-    thrown.expect(Throwable.class, "pattern '\\w{1,13}' for type 'depositIdType'");
-    unmarshal(XjcRdeDeposit.class, new ByteArrayInputStream(
-        RDE_DEPOSIT_FULL.replaceFirst("id=\"[^\"]+\"", "id=\"\"").getBytes(UTF_8)));
+    Throwable thrown =
+        expectThrows(
+            Throwable.class,
+            () ->
+                unmarshal(
+                    XjcRdeDeposit.class,
+                    new ByteArrayInputStream(
+                        RDE_DEPOSIT_FULL
+                            .replaceFirst("id=\"[^\"]+\"", "id=\"\"")
+                            .getBytes(UTF_8))));
+    assertThat(thrown).hasMessageThat().contains("pattern '\\w{1,13}' for type 'depositIdType'");
   }
 
   @Test

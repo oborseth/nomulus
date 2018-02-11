@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,13 +24,14 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.joda.time.DateTimeZone.UTC;
 import static org.joda.time.Duration.standardDays;
 
+import com.google.common.collect.ImmutableMap;
 import com.googlecode.objectify.Key;
 import google.registry.flows.EppTestComponent.FakesAndMocksModule;
 import google.registry.model.domain.DomainResource;
 import google.registry.model.ofy.Ofy;
+import google.registry.monitoring.whitebox.EppMetric;
 import google.registry.testing.AppEngineRule;
 import google.registry.testing.EppLoader;
-import google.registry.testing.ExceptionRule;
 import google.registry.testing.FakeClock;
 import google.registry.testing.FakeHttpSession;
 import google.registry.testing.InjectRule;
@@ -53,9 +54,6 @@ public class EppCommitLogsTest extends ShardableTestCase {
       .build();
 
   @Rule
-  public final ExceptionRule thrown = new ExceptionRule();
-
-  @Rule
   public final InjectRule inject = new InjectRule();
 
   private final FakeClock clock = new FakeClock(DateTime.now(UTC));
@@ -71,22 +69,24 @@ public class EppCommitLogsTest extends ShardableTestCase {
     SessionMetadata sessionMetadata = new HttpSessionMetadata(new FakeHttpSession());
     sessionMetadata.setClientId("TheRegistrar");
     DaggerEppTestComponent.builder()
-        .fakesAndMocksModule(new FakesAndMocksModule(clock))
+        .fakesAndMocksModule(
+            FakesAndMocksModule.create(clock, EppMetric.builderForRequest("request-id-1", clock)))
         .build()
         .startRequest()
         .flowComponentBuilder()
-        .flowModule(new FlowModule.Builder()
-            .setSessionMetadata(sessionMetadata)
-            .setCredentials(new PasswordOnlyTransportCredentials())
-            .setEppRequestSource(EppRequestSource.UNIT_TEST)
-            .setIsDryRun(false)
-            .setIsSuperuser(false)
-            .setInputXmlBytes(eppLoader.getEppXml().getBytes(UTF_8))
-            .setEppInput(eppLoader.getEpp())
-            .build())
+        .flowModule(
+            new FlowModule.Builder()
+                .setSessionMetadata(sessionMetadata)
+                .setCredentials(new PasswordOnlyTransportCredentials())
+                .setEppRequestSource(EppRequestSource.UNIT_TEST)
+                .setIsDryRun(false)
+                .setIsSuperuser(false)
+                .setInputXmlBytes(eppLoader.getEppXml().getBytes(UTF_8))
+                .setEppInput(eppLoader.getEpp())
+                .build())
         .build()
         .flowRunner()
-        .run();
+        .run(EppMetric.builder());
   }
 
   @Test
@@ -126,7 +126,7 @@ public class EppCommitLogsTest extends ShardableTestCase {
 
     clock.advanceBy(standardDays(2));
     DateTime timeAtDelete = clock.nowUtc();  // before 'add' grace period ends
-    eppLoader = new EppLoader(this, "domain_delete.xml");
+    eppLoader = new EppLoader(this, "domain_delete.xml", ImmutableMap.of("NAME", "example.tld"));
     runFlow();
     ofy().clearSessionCache();
 

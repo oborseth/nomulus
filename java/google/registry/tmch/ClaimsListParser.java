@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,14 +28,15 @@ import org.joda.time.DateTime;
  * <p>This is a quick and dirty CSV parser made specifically for the DNL CSV format defined in the
  * TMCH specification. It doesn't support any fancy CSV features like quotes.
  *
- * @see "http://tools.ietf.org/html/draft-lozano-tmch-func-spec-08#section-6.1"
+ * @see <a href="http://tools.ietf.org/html/draft-lozano-tmch-func-spec-08#section-6.1">
+ *     TMCH functional specifications - DNL List file</a>
  */
 public class ClaimsListParser {
 
   /**
    * Converts the lines from the DNL CSV file into a {@link ClaimsListShard} object.
    *
-   * <p>Please note that this does <b>not</b> insert the object into the datastore.
+   * <p>Please note that this does <b>not</b> insert the object into Datastore.
    */
   public static ClaimsListShard parse(List<String> lines) {
     ImmutableMap.Builder<String, String> builder = new ImmutableMap.Builder<>();

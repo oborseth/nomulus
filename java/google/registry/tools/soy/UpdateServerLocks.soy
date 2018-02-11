@@ -1,4 +1,4 @@
-// Copyright 2016 The Nomulus Authors. All Rights Reserved.
+// Copyright 2017 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-{namespace domain.registry.tools autoescape="strict"}
+{namespace domain.registry.tools}
 
 /**
  * Update server locks
  */
-{template .updateserverlocks}
+{template .updateserverlocks stricthtml="false"}
 {@param domainName: string}
 {@param locksToApply: list<string>}
 {@param locksToRemove: list<string>}
@@ -31,14 +31,14 @@
        xmlns:domain="urn:ietf:params:xml:ns:domain-1.0">
         <domain:name>{$domainName}</domain:name>
         <domain:add>
-        {foreach $a in $locksToApply}
+        {for $a in $locksToApply}
           <domain:status s="{$a}" lang="en"></domain:status>
-        {/foreach}
+        {/for}
         </domain:add>
         <domain:rem>
-        {foreach $r in $locksToRemove}
+        {for $r in $locksToRemove}
           <domain:status s="{$r}" lang="en"></domain:status>
-        {/foreach}
+        {/for}
         </domain:rem>
       </domain:update>
     </update>
